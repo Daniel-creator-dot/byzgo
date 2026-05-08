@@ -501,32 +501,7 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
               </div>
             </div>
 
-            {!isLogin && !forcedRole && (
-              <div className="space-y-4">
-                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-4">Select Your Role</label>
-                <div className="grid grid-cols-2 gap-3">
-                  {[
-                    { id: 'customer', icon: <ShoppingBag size={14} />, label: 'Customer' },
-                    { id: 'vendor', icon: <Store size={14} />, label: 'Vendor' },
-                    { id: 'rider', icon: <MotorIcon size={16} />, label: 'Motor' },
-                    { id: 'admin', icon: <Shield size={14} />, label: 'Admin' }
-                  ].map((r) => (
-                    <button
-                      key={r.id}
-                      type="button"
-                      onClick={() => setRole(r.id as Role)}
-                      className={cn(
-                        "flex items-center justify-center gap-2 p-3 rounded-xl border text-[10px] font-black uppercase tracking-widest transition-all",
-                        role === r.id ? "bg-brand-blue text-white border-brand-blue shadow-lg shadow-brand-blue/20" : "bg-slate-50 text-slate-500 border-slate-100 hover:border-slate-200"
-                      )}
-                    >
-                      {r.icon}
-                      {r.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
+
 
             <Modal 
               isOpen={!!error} 
