@@ -1,0 +1,12 @@
+{
+  "name": "BytzGo",
+  "description": "Multi-role delivery platform for vendors, riders, and customers featuring real-time tracking, order management, and Paystack integration.",
+  "requestFramePermissions": [
+    "geolocation"
+  ],
+  "majorCapabilities": [
+    "real-time tracking",
+    "multi-role dashboards",
+    "payment integration"
+  ]
+}
