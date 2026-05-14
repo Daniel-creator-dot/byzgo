@@ -693,24 +693,33 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
 
   const handlePay = () => {
     if (cart.length === 0) return;
+    if (!paystackKey) {
+      console.warn('Paystack key not loaded yet');
+      addNotification('Payment system is initializing...', 'info');
+      return;
+    }
 
-    const handler = window.PaystackPop.setup({
-      key: paystackKey, // Key fetched from database
-      email: user.email,
-      amount: total * 100,
-      currency: 'GHS',
-      callback: (response: any) => {
-        onPlaceOrder(cart.map(item => ({ id: item.id, name: item.name, quantity: item.quantity, price: item.price })), total, selectedVendor?.id, { payment_reference: response.reference, payment_method: 'paystack' });
-        setCart([]);
-        setIsCartOpen(false);
-        setActiveTab('tracking');
-      },
-      onClose: () => {
-        // Only close the modal, do not place the order
-        setIsCartOpen(false);
-      }
-    });
-    handler.openIframe();
+    try {
+      const handler = (window as any).PaystackPop.setup({
+        key: paystackKey,
+        email: user.email,
+        amount: Math.round(total * 100),
+        currency: 'GHS',
+        callback: (response: any) => {
+          onPlaceOrder(cart.map(item => ({ id: item.id, name: item.name, quantity: item.quantity, price: item.price })), total, selectedVendor?.id, { payment_reference: response.reference, payment_method: 'paystack' });
+          setCart([]);
+          setIsCartOpen(false);
+          setActiveTab('tracking');
+        },
+        onClose: () => {
+          setIsCartOpen(false);
+        }
+      });
+      handler.openIframe();
+    } catch (err) {
+      console.error('Paystack initialization error:', err);
+      addNotification('Could not open payment window', 'warning');
+    }
   };
 
   return (
