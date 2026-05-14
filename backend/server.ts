@@ -416,7 +416,9 @@ app.post('/api/wallet/withdraw', authenticateToken, async (req: any, res) => {
       [req.user.id, amount, 'withdrawal', `Withdrawal to ${phone} (${network})`]
     );
 
-    res.json({ balance: parseFloat(result.rows[0].balance), message: 'Withdrawal successful' });
+    const newBalance = parseFloat(result.rows[0].balance);
+    res.json({ balance: newBalance, message: 'Withdrawal successful' });
+    io.to(req.user.id).emit('wallet:updated', { balance: newBalance });
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
   }
@@ -588,14 +590,16 @@ app.post('/api/orders', authenticateToken, async (req: any, res) => {
       }
       
       // Deduct balance
-      await pool.query('UPDATE users SET balance = balance - $1 WHERE id = $2', [total, req.user.id]);
+      const balanceRes = await pool.query('UPDATE users SET balance = balance - $1 WHERE id = $2 RETURNING balance', [total, req.user.id]);
       paymentStatus = 'paid';
+      const newBalance = parseFloat(balanceRes.rows[0].balance);
       
       // Log transaction
       await pool.query(
         'INSERT INTO wallet_transactions (user_id, amount, type, reference) VALUES ($1, $2, $3, $4)',
         [req.user.id, total, 'payment', 'Wallet payment for order']
       );
+      io.to(req.user.id).emit('wallet:updated', { balance: newBalance });
     } catch (err) {
       console.error('Wallet payment error:', err);
       return res.status(500).json({ message: 'Wallet payment failed' });
@@ -665,31 +669,66 @@ app.patch('/api/orders/:id', authenticateToken, async (req: any, res) => {
       
       // Handle payment logic when delivered
       if (status === 'delivered') {
-        // Mock commission logic: 80% to vendor, 10% to rider, 10% to admin
         const total = parseFloat(order.total);
-        if (order.vendor_id) {
-          const vendorAmount = total * 0.8;
-          await pool.query('UPDATE users SET balance = balance + $1 WHERE id = $2', [vendorAmount, order.vendor_id]);
+        const isPaidOnline = order.payment_status === 'paid';
+
+        if (isPaidOnline) {
+          // ONLINE PAYMENT: Distribute shares to wallets
+          if (order.vendor_id) {
+            const vendorAmount = total * 0.8;
+            const vRes = await pool.query('UPDATE users SET balance = balance + $1 WHERE id = $2 RETURNING balance', [vendorAmount, order.vendor_id]);
+            await pool.query(
+              'INSERT INTO wallet_transactions (user_id, amount, type, reference) VALUES ($1, $2, $3, $4)',
+              [order.vendor_id, vendorAmount, 'payment', `Order #${order.id.slice(0, 8)} payment`]
+            );
+            io.to(order.vendor_id).emit('wallet:updated', { balance: parseFloat(vRes.rows[0].balance) });
+          }
+          if (order.rider_id) {
+            const riderAmount = total * 0.1;
+            const rRes = await pool.query('UPDATE users SET balance = balance + $1 WHERE id = $2 RETURNING balance', [riderAmount, order.rider_id]);
+            await pool.query(
+              'INSERT INTO wallet_transactions (user_id, amount, type, reference) VALUES ($1, $2, $3, $4)',
+              [order.rider_id, riderAmount, 'payment', `Order #${order.id.slice(0, 8)} delivery fee`]
+            );
+            io.to(order.rider_id).emit('wallet:updated', { balance: parseFloat(rRes.rows[0].balance) });
+          }
+          
+          // Log platform commission (remaining 10%)
+          const commissionAmount = total * 0.1;
           await pool.query(
             'INSERT INTO wallet_transactions (user_id, amount, type, reference) VALUES ($1, $2, $3, $4)',
-            [order.vendor_id, vendorAmount, 'payment', `Order #${order.id.slice(0, 8)} payment`]
+            [null, commissionAmount, 'commission', `Order #${order.id.slice(0, 8)} platform fee`]
           );
+        } else {
+          // CASH ON DELIVERY: Rider has the cash. Deduct what they owe others.
+          if (order.rider_id) {
+            const platformFee = total * 0.1;
+            const vendorShare = total * 0.8;
+            const totalToDeduct = platformFee + vendorShare;
+            
+            const rRes = await pool.query('UPDATE users SET balance = balance - $1 WHERE id = $2 RETURNING balance', [totalToDeduct, order.rider_id]);
+            await pool.query(
+              'INSERT INTO wallet_transactions (user_id, amount, type, reference) VALUES ($1, $2, $3, $4)',
+              [order.rider_id, -totalToDeduct, 'payment', `COD Order #${order.id.slice(0, 8)} (Vendor + Platform share)`]
+            );
+            io.to(order.rider_id).emit('wallet:updated', { balance: parseFloat(rRes.rows[0].balance) });
+
+            if (order.vendor_id) {
+              const vRes = await pool.query('UPDATE users SET balance = balance + $1 WHERE id = $2 RETURNING balance', [vendorShare, order.vendor_id]);
+              await pool.query(
+                'INSERT INTO wallet_transactions (user_id, amount, type, reference) VALUES ($1, $2, $3, $4)',
+                [order.vendor_id, vendorShare, 'payment', `COD Order #${order.id.slice(0, 8)} payment`]
+              );
+              io.to(order.vendor_id).emit('wallet:updated', { balance: parseFloat(vRes.rows[0].balance) });
+            }
+            
+            // Log platform commission
+            await pool.query(
+              'INSERT INTO wallet_transactions (user_id, amount, type, reference) VALUES ($1, $2, $3, $4)',
+              [null, platformFee, 'commission', `COD Order #${order.id.slice(0, 8)} platform fee`]
+            );
+          }
         }
-        if (order.rider_id) {
-          const riderAmount = total * 0.1;
-          await pool.query('UPDATE users SET balance = balance + $1 WHERE id = $2', [riderAmount, order.rider_id]);
-          await pool.query(
-            'INSERT INTO wallet_transactions (user_id, amount, type, reference) VALUES ($1, $2, $3, $4)',
-            [order.rider_id, riderAmount, 'payment', `Order #${order.id.slice(0, 8)} delivery fee`]
-          );
-        }
-        
-        // Log platform commission (remaining 10%)
-        const commissionAmount = total * 0.1;
-        await pool.query(
-          'INSERT INTO wallet_transactions (user_id, amount, type, reference) VALUES ($1, $2, $3, $4)',
-          [null, commissionAmount, 'commission', `Order #${order.id.slice(0, 8)} platform fee`]
-        );
       }
     } else {
       res.status(404).json({ message: 'Order not found' });
@@ -762,14 +801,19 @@ app.post('/api/orders/:id/cancel', authenticateToken, async (req: any, res) => {
     }
 
     await pool.query('UPDATE orders SET status = $1 WHERE id = $2', ['cancelled', orderId]);
-    await pool.query('UPDATE users SET balance = balance + $1 WHERE id = $2', [order.total, req.user.id]);
-    await pool.query(
-      'INSERT INTO wallet_transactions (user_id, amount, type, reference) VALUES ($1, $2, $3, $4)',
-      [req.user.id, order.total, 'topup', `Refund for cancelled order #${orderId.slice(-6)}`]
-    );
+    
+    // Only refund if the order was paid online
+    if (order.payment_status === 'paid') {
+      const bRes = await pool.query('UPDATE users SET balance = balance + $1 WHERE id = $2 RETURNING balance', [order.total, req.user.id]);
+      await pool.query(
+        'INSERT INTO wallet_transactions (user_id, amount, type, reference) VALUES ($1, $2, $3, $4)',
+        [req.user.id, order.total, 'topup', `Refund for cancelled order #${orderId.slice(-6)}`]
+      );
+      io.to(req.user.id).emit('wallet:updated', { balance: parseFloat(bRes.rows[0].balance) });
+    }
 
-    res.json({ message: 'Order cancelled and refunded successfully' });
-    io.emit('order:updated', { id: orderId, status: 'cancelled' });
+    res.json({ message: 'Order cancelled successfully' });
+    io.emit('order:updated', { ...order, status: 'cancelled' });
   } catch (err) {
     console.error('Cancel order error:', err);
     res.status(500).json({ message: 'Server error' });
