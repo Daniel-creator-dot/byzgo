@@ -100,6 +100,7 @@ function MainApp() {
   const [isLogoutModalOpen, setIsLogoutModalOpen] = useState(false);
   const [riderLocations, setRiderLocations] = useState<{ [key: string]: { lat: number, lng: number } }>({});
   const [notifications, setNotifications] = useState<{ id: string, message: string, type: 'info' | 'success' | 'warning' }[]>([]);
+  const [paystackKey, setPaystackKey] = useState<string>('');
 
   const addNotification = (message: string, type: 'info' | 'success' | 'warning' = 'info') => {
     const id = Math.random().toString(36).substr(2, 9);
@@ -141,12 +142,14 @@ function MainApp() {
     const init = async () => {
       try {
         const storedUser = JSON.parse(localStorage.getItem('user') || '{}');
-        const [profileRes, ordersRes, productsRes, vendorsRes] = await Promise.all([
+        const [profileRes, ordersRes, productsRes, vendorsRes, configRes] = await Promise.all([
           axios.get('/api/wallet'),
           axios.get('/api/orders'),
           axios.get('/api/products'),
-          axios.get('/api/vendors', { params: { region: storedUser.region } })
+          axios.get('/api/vendors', { params: { region: storedUser.region } }),
+          axios.get('/api/config/paystack').catch(() => ({ data: { publicKey: '' } }))
         ]);
+        setPaystackKey(configRes.data.publicKey);
         
         setUser({ ...storedUser, balance: profileRes.data.balance });
         setOrders(ordersRes.data);
@@ -347,7 +350,7 @@ function MainApp() {
           </AnimatePresence>
 
           <AnimatePresence mode="wait">
-            {user.role === 'customer' && <CustomerView user={user} orders={orders} products={products} vendors={vendors} riderLocations={riderLocations} addNotification={addNotification} onPlaceOrder={async (items, total, vendorId, extra = {}) => {
+            {user.role === 'customer' && <CustomerView user={user} orders={orders} products={products} vendors={vendors} riderLocations={riderLocations} paystackKey={paystackKey} addNotification={addNotification} onPlaceOrder={async (items, total, vendorId, extra = {}) => {
               await axios.post('/api/orders', { 
                 items, 
                 total, 
@@ -617,7 +620,7 @@ function LocationAutocompleteInput({ placeholder, icon: Icon, value, onChange, o
 
 // REST OF THE VIEW COMPONENTS (CustomerView, VendorView, etc.) 
 // UPDATED TO USE REAL DATA FROM PROPS AND API
-function CustomerView({ user, orders, products, vendors, riderLocations, onPlaceOrder, addNotification }: { user: AuthUser, orders: Order[], products: any[], vendors: any[], riderLocations: { [key: string]: { lat: number, lng: number } }, onPlaceOrder: (items: any[], total: number, vendorId?: string, extra?: any) => void, addNotification: (m: string, t?: 'info' | 'success' | 'warning') => void }) {
+function CustomerView({ user, orders, products, vendors, riderLocations, paystackKey, onPlaceOrder, addNotification }: { user: AuthUser, orders: Order[], products: any[], vendors: any[], riderLocations: { [key: string]: { lat: number, lng: number } }, paystackKey: string, onPlaceOrder: (items: any[], total: number, vendorId?: string, extra?: any) => void, addNotification: (m: string, t?: 'info' | 'success' | 'warning') => void }) {
   const [activeTab, setActiveTab] = useState<'menu' | 'courier' | 'tracking' | 'profile'>('menu');
   const [selectedVendor, setSelectedVendor] = useState<any | null>(null);
   const [isTopUpOpen, setIsTopUpOpen] = useState(false);
@@ -683,21 +686,19 @@ function CustomerView({ user, orders, products, vendors, riderLocations, onPlace
     if (cart.length === 0) return;
 
     const handler = window.PaystackPop.setup({
-      key: 'pk_test_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
+      key: paystackKey, // Key fetched from database
       email: user.email,
       amount: total * 100,
       currency: 'GHS',
       callback: (response: any) => {
-        onPlaceOrder(cart.map(item => ({ id: item.id, name: item.name, quantity: item.quantity, price: item.price })), total, selectedVendor?.id);
+        onPlaceOrder(cart.map(item => ({ id: item.id, name: item.name, quantity: item.quantity, price: item.price })), total, selectedVendor?.id, { payment_reference: response.reference, payment_method: 'paystack' });
         setCart([]);
         setIsCartOpen(false);
         setActiveTab('tracking');
       },
       onClose: () => {
-        onPlaceOrder(cart.map(item => ({ id: item.id, name: item.name, quantity: item.quantity, price: item.price })), total, selectedVendor?.id);
-        setCart([]);
+        // Only close the modal, do not place the order
         setIsCartOpen(false);
-        setActiveTab('tracking');
       }
     });
     handler.openIframe();
@@ -766,8 +767,8 @@ function CustomerView({ user, orders, products, vendors, riderLocations, onPlace
                </div>
                <button 
                  onClick={async () => {
-                   const handler = window.PaystackPop.setup({
-                     key: 'pk_live_a343edbe78f26b3eaf2fc9b5dd0a22fe1bfd59e', // Placeholder for live key, please update if different
+                    const handler = window.PaystackPop.setup({
+                      key: paystackKey, // Key fetched from database
                      email: user.email,
                      amount: Number(topUpAmount) * 100,
                      currency: 'GHS',

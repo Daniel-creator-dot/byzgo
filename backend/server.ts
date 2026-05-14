@@ -44,6 +44,17 @@ const pool = new Pool({
   ssl: process.env.DATABASE_URL?.includes('supabase.com') ? { rejectUnauthorized: false } : false
 });
 
+// Helper to get system settings from DB
+async function getSetting(key: string) {
+  try {
+    const result = await pool.query('SELECT value FROM system_settings WHERE key = $1', [key]);
+    return result.rows[0]?.value;
+  } catch (err) {
+    console.error(`Error fetching setting ${key}:`, err);
+    return null;
+  }
+}
+
 // Database Initialization
 const initDb = async () => {
   try {
@@ -158,6 +169,14 @@ const initDb = async () => {
         reference TEXT,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
+
+      CREATE TABLE IF NOT EXISTS system_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+
+      -- Paystack keys are now managed via DB directly or Admin UI
     `);
     // Fix existing courier orders that were mislabeled as food
     await pool.query(`
@@ -334,9 +353,10 @@ app.post('/api/upload', authenticateToken, upload.single('image'), (req: any, re
 app.post('/api/wallet/topup', authenticateToken, async (req: any, res) => {
   const { reference } = req.body;
   try {
+    const secretKey = await getSetting('paystack_secret_key');
     const response = await axios.get(`https://api.paystack.co/transaction/verify/${reference}`, {
       headers: {
-        Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`
+        Authorization: `Bearer ${secretKey}`
       }
     });
 
@@ -361,6 +381,15 @@ app.post('/api/wallet/topup', authenticateToken, async (req: any, res) => {
   } catch (err) {
     console.error('Paystack verification error:', err);
     res.status(500).json({ message: 'Server error during verification' });
+  }
+});
+
+app.get('/api/config/paystack', async (_req, res) => {
+  try {
+    const publicKey = await getSetting('paystack_public_key');
+    res.json({ publicKey });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch config' });
   }
 });
 
@@ -523,7 +552,29 @@ app.get('/api/orders', authenticateToken, async (req: any, res) => {
 });
 
 app.post('/api/orders', authenticateToken, async (req: any, res) => {
-  const { items, total, address, pickup, orderType, order_type, scheduledTime, vendorId, lat, lng, region: providedRegion } = req.body;
+  const { items, total, address, pickup, orderType, order_type, scheduledTime, vendorId, lat, lng, region: providedRegion, payment_reference } = req.body;
+  
+  // Verify Paystack payment if reference provided
+  if (payment_reference) {
+    try {
+      const secretKey = await getSetting('paystack_secret_key');
+      const response = await axios.get(`https://api.paystack.co/transaction/verify/${payment_reference}`, {
+        headers: { Authorization: `Bearer ${secretKey}` }
+      });
+      if (response.data.data.status !== 'success') {
+        return res.status(400).json({ message: 'Payment verification failed' });
+      }
+      // Log the payment as a transaction
+      await pool.query(
+        'INSERT INTO wallet_transactions (user_id, amount, type, reference) VALUES ($1, $2, $3, $4)',
+        [req.user.id, total, 'payment', `Order Payment (Ref: ${payment_reference})`]
+      );
+    } catch (err) {
+      console.error('Order payment verification error:', err);
+      return res.status(500).json({ message: 'Payment verification error' });
+    }
+  }
+
   const finalOrderType = orderType || order_type || 'food';
   try {
     let finalPickup = pickup;
