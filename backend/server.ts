@@ -11,6 +11,7 @@ import * as admin from 'firebase-admin';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
+import axios from 'axios';
 
 dotenv.config();
 
@@ -30,20 +31,17 @@ const io = new Server(httpServer, {
 app.use(cors());
 app.use(express.json());
 
-// Ensure uploads directory exists
-const uploadsDir = path.join(__dirname, 'uploads');
-if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
-app.use('/uploads', express.static(uploadsDir));
 
-// Multer config for file uploads
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, uploadsDir),
-  filename: (_req, file, cb) => cb(null, `${uuidv4()}${path.extname(file.originalname)}`)
+
+// Multer config for in-memory processing (images stored in DB as Base64)
+const upload = multer({ 
+  storage: multer.memoryStorage(), 
+  limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
 });
-const upload = multer({ storage, limits: { fileSize: 10 * 1024 * 1024 } });
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
+  ssl: process.env.DATABASE_URL?.includes('supabase.com') ? { rejectUnauthorized: false } : false
 });
 
 // Database Initialization
@@ -148,6 +146,16 @@ const initDb = async () => {
         min_price DECIMAL(10,2) NOT NULL DEFAULT 5.00,
         max_price DECIMAL(10,2) DEFAULT NULL,
         is_active BOOLEAN DEFAULT true,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS wallet_transactions (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID REFERENCES users(id),
+        amount DECIMAL(10,2) NOT NULL,
+        type TEXT NOT NULL CHECK (type IN ('topup', 'withdrawal', 'commission', 'payment')),
+        status TEXT DEFAULT 'success',
+        reference TEXT,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
     `);
@@ -316,25 +324,43 @@ app.get('/api/wallet', authenticateToken, async (req: any, res) => {
   }
 });
 
-// File Upload
+// File Upload (returns Base64 Data URL to be stored in DB)
 app.post('/api/upload', authenticateToken, upload.single('image'), (req: any, res) => {
   if (!req.file) return res.status(400).json({ message: 'No file uploaded' });
-  const url = `/uploads/${req.file.filename}`;
-  res.json({ url });
+  const base64 = `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`;
+  res.json({ url: base64 });
 });
 
 app.post('/api/wallet/topup', authenticateToken, async (req: any, res) => {
-  const { amount } = req.body;
+  const { reference } = req.body;
   try {
-    // In a real app, verify Paystack payment here
-    const result = await pool.query(
-      'UPDATE users SET balance = balance + $1 WHERE id = $2 RETURNING balance',
-      [amount, req.user.id]
-    );
-    res.json({ balance: parseFloat(result.rows[0].balance) });
-    io.to(req.user.id).emit('wallet:updated', { balance: parseFloat(result.rows[0].balance) });
+    const response = await axios.get(`https://api.paystack.co/transaction/verify/${reference}`, {
+      headers: {
+        Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`
+      }
+    });
+
+    if (response.data.data.status === 'success') {
+      const amount = response.data.data.amount / 100; // GHS
+      const result = await pool.query(
+        'UPDATE users SET balance = balance + $1 WHERE id = $2 RETURNING balance',
+        [amount, req.user.id]
+      );
+
+      // Log transaction
+      await pool.query(
+        'INSERT INTO wallet_transactions (user_id, amount, type, reference) VALUES ($1, $2, $3, $4)',
+        [req.user.id, amount, 'topup', reference]
+      );
+
+      res.json({ balance: parseFloat(result.rows[0].balance) });
+      io.to(req.user.id).emit('wallet:updated', { balance: parseFloat(result.rows[0].balance) });
+    } else {
+      res.status(400).json({ message: 'Payment verification failed' });
+    }
   } catch (err) {
-    res.status(500).json({ message: 'Server error' });
+    console.error('Paystack verification error:', err);
+    res.status(500).json({ message: 'Server error during verification' });
   }
 });
 
@@ -352,6 +378,13 @@ app.post('/api/wallet/withdraw', authenticateToken, async (req: any, res) => {
       'UPDATE users SET balance = balance - $1 WHERE id = $2 RETURNING balance',
       [amount, req.user.id]
     );
+
+    // Log transaction
+    await pool.query(
+      'INSERT INTO wallet_transactions (user_id, amount, type, reference) VALUES ($1, $2, $3, $4)',
+      [req.user.id, amount, 'withdrawal', `Withdrawal to ${phone} (${network})`]
+    );
+
     res.json({ balance: parseFloat(result.rows[0].balance), message: 'Withdrawal successful' });
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
@@ -555,11 +588,28 @@ app.patch('/api/orders/:id', authenticateToken, async (req: any, res) => {
         // Mock commission logic: 80% to vendor, 10% to rider, 10% to admin
         const total = parseFloat(order.total);
         if (order.vendor_id) {
-          await pool.query('UPDATE users SET balance = balance + $1 WHERE id = $2', [total * 0.8, order.vendor_id]);
+          const vendorAmount = total * 0.8;
+          await pool.query('UPDATE users SET balance = balance + $1 WHERE id = $2', [vendorAmount, order.vendor_id]);
+          await pool.query(
+            'INSERT INTO wallet_transactions (user_id, amount, type, reference) VALUES ($1, $2, $3, $4)',
+            [order.vendor_id, vendorAmount, 'payment', `Order #${order.id.slice(0, 8)} payment`]
+          );
         }
         if (order.rider_id) {
-          await pool.query('UPDATE users SET balance = balance + $1 WHERE id = $2', [total * 0.1, order.rider_id]);
+          const riderAmount = total * 0.1;
+          await pool.query('UPDATE users SET balance = balance + $1 WHERE id = $2', [riderAmount, order.rider_id]);
+          await pool.query(
+            'INSERT INTO wallet_transactions (user_id, amount, type, reference) VALUES ($1, $2, $3, $4)',
+            [order.rider_id, riderAmount, 'payment', `Order #${order.id.slice(0, 8)} delivery fee`]
+          );
         }
+        
+        // Log platform commission (remaining 10%)
+        const commissionAmount = total * 0.1;
+        await pool.query(
+          'INSERT INTO wallet_transactions (user_id, amount, type, reference) VALUES ($1, $2, $3, $4)',
+          [null, commissionAmount, 'commission', `Order #${order.id.slice(0, 8)} platform fee`]
+        );
       }
     } else {
       res.status(404).json({ message: 'Order not found' });
@@ -659,13 +709,11 @@ app.get('/api/admin/revenue', authenticateToken, async (req: any, res) => {
     `);
     
     const recentTransactions = await pool.query(`
-      SELECT o.id, o.total, o.order_type, o.created_at, 
-             u.name as customer_name, v.name as vendor_name
-      FROM orders o
-      JOIN users u ON o.customer_id = u.id
-      LEFT JOIN users v ON o.vendor_id = v.id
-      ORDER BY o.created_at DESC
-      LIMIT 20
+      SELECT t.*, u.name as user_name, u.email as user_email
+      FROM wallet_transactions t
+      LEFT JOIN users u ON t.user_id = u.id
+      ORDER BY t.created_at DESC
+      LIMIT 50
     `);
 
     res.json({

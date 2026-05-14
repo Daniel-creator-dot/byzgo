@@ -767,17 +767,13 @@ function CustomerView({ user, orders, products, vendors, riderLocations, onPlace
                <button 
                  onClick={async () => {
                    const handler = window.PaystackPop.setup({
-                     key: 'pk_test_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
+                     key: 'pk_live_a343edbe78f26b3eaf2fc9b5dd0a22fe1bfd59e', // Placeholder for live key, please update if different
                      email: user.email,
                      amount: Number(topUpAmount) * 100,
                      currency: 'GHS',
-                     callback: async () => {
-                       await axios.post('/api/wallet/topup', { amount: Number(topUpAmount) });
+                     callback: async (response: any) => {
+                       await axios.post('/api/wallet/topup', { reference: response.reference });
                        setIsTopUpOpen(false);
-                     },
-                     onClose: async () => {
-                        await axios.post('/api/wallet/topup', { amount: Number(topUpAmount) });
-                        setIsTopUpOpen(false);
                      }
                    });
                    handler.openIframe();
@@ -2729,9 +2725,9 @@ function AdminView({ user, orders, addNotification }: { user: AuthUser, orders: 
                       <table className="w-full text-left">
                          <thead className="bg-slate-50/50 border-b border-slate-100">
                             <tr>
-                               <th className="px-10 py-4 text-[10px] font-black uppercase tracking-widest text-slate-400">Order</th>
-                               <th className="px-10 py-4 text-[10px] font-black uppercase tracking-widest text-slate-400">Merchant</th>
-                               <th className="px-10 py-4 text-[10px] font-black uppercase tracking-widest text-slate-400">Flow</th>
+                               <th className="px-10 py-4 text-[10px] font-black uppercase tracking-widest text-slate-400">User / Reference</th>
+                               <th className="px-10 py-4 text-[10px] font-black uppercase tracking-widest text-slate-400">Activity</th>
+                               <th className="px-10 py-4 text-[10px] font-black uppercase tracking-widest text-slate-400">Amount</th>
                                <th className="px-10 py-4 text-[10px] font-black uppercase tracking-widest text-slate-400">Date</th>
                             </tr>
                          </thead>
@@ -2740,15 +2736,25 @@ function AdminView({ user, orders, addNotification }: { user: AuthUser, orders: 
                                <tr key={t.id} className="border-b border-slate-50 hover:bg-slate-50/50 transition-colors">
                                   <td className="px-10 py-6">
                                      <div className="flex flex-col">
-                                        <span className="font-mono font-black text-sm text-slate-800">#{t.id.slice(-6)}</span>
-                                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{t.order_type}</span>
+                                        <span className="font-bold text-sm text-slate-800">{t.user_name || 'Platform Account'}</span>
+                                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest truncate max-w-[200px]">{t.reference || 'No reference'}</span>
                                      </div>
                                   </td>
                                   <td className="px-10 py-6">
-                                     <span className="text-sm font-bold text-slate-600">{t.vendor_name || 'Direct Delivery'}</span>
+                                     <span className={cn(
+                                       "px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest",
+                                       t.type === 'topup' ? "bg-brand-green/10 text-brand-green" :
+                                       t.type === 'withdrawal' ? "bg-red-50 text-red-500" :
+                                       t.type === 'commission' ? "bg-brand-blue/10 text-brand-blue" :
+                                       "bg-slate-100 text-slate-600"
+                                     )}>
+                                       {t.type}
+                                     </span>
                                   </td>
                                   <td className="px-10 py-6">
-                                     <span className="font-mono font-black text-brand-green">₵{Number(t.total).toFixed(2)}</span>
+                                     <span className={cn("font-mono font-black", t.type === 'withdrawal' ? "text-red-500" : "text-brand-green")}>
+                                       {t.type === 'withdrawal' ? '-' : '+'}₵{Number(t.amount).toFixed(2)}
+                                     </span>
                                   </td>
                                   <td className="px-10 py-6">
                                      <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{new Date(t.created_at).toLocaleDateString()}</span>
