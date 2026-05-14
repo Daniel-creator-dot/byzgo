@@ -517,6 +517,7 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
                   <p className="text-slate-500 font-medium leading-relaxed">{error}</p>
                 </div>
                 <button
+                  type="button"
                   onClick={() => setError('')}
                   className="w-full py-4 bg-slate-900 text-white rounded-2xl font-black uppercase tracking-widest text-xs hover:scale-[1.02] active:scale-[0.98] transition-all"
                 >

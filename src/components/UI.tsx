@@ -39,7 +39,7 @@ export const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children, 
           >
             <div className="flex justify-between items-center mb-6">
               <h3 className="text-xl sm:text-2xl font-black italic tracking-tighter text-slate-800">{title}</h3>
-              <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-xl transition-colors">
+              <button type="button" onClick={onClose} className="p-2 hover:bg-slate-100 rounded-xl transition-colors">
                 <X size={20} />
               </button>
             </div>
@@ -90,12 +90,14 @@ export const ConfirmationModal: React.FC<ConfirmationModalProps> = ({
         </div>
         <div className="flex flex-col sm:flex-row gap-3">
           <button
+            type="button"
             onClick={onClose}
             className="flex-1 py-4 bg-slate-100 text-slate-500 rounded-2xl font-black uppercase tracking-widest text-xs hover:bg-slate-200 transition-all"
           >
             {cancelLabel}
           </button>
           <button
+            type="button"
             onClick={() => {
               onConfirm();
               onClose();
