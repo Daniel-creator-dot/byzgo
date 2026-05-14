@@ -627,6 +627,7 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
   const [topUpAmount, setTopUpAmount] = useState('50');
   const [cart, setCart] = useState<any[]>([]);
   const [isCartOpen, setIsCartOpen] = useState(false);
+  const [orderToCancel, setOrderToCancel] = useState<Order | null>(null);
   
   const [courierForm, setCourierForm] = useState({
     pickup: null as { lat: number, lng: number, address: string } | null,
@@ -1135,16 +1136,7 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
                   
                   {order.status === 'pending' && (
                     <button 
-                      onClick={async () => {
-                        if (window.confirm('Are you sure you want to cancel this order? It will be fully refunded to your wallet.')) {
-                          try {
-                            await axios.post(`/api/orders/${order.id}/cancel`);
-                            addNotification('Order cancelled and refunded!', 'success');
-                          } catch (err: any) {
-                            addNotification(err.response?.data?.message || 'Cancellation failed', 'warning');
-                          }
-                        }
-                      }}
+                      onClick={() => setOrderToCancel(order)}
                       className="mb-8 w-full py-4 bg-red-50 text-red-500 rounded-2xl font-black uppercase tracking-widest text-[10px] hover:bg-red-100 transition-all active:scale-95"
                     >
                       Cancel Order
@@ -1222,6 +1214,26 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
           })}
         </div>
       )}
+
+      <ConfirmationModal 
+        isOpen={!!orderToCancel}
+        onClose={() => setOrderToCancel(null)}
+        onConfirm={async () => {
+          if (!orderToCancel) return;
+          try {
+            await axios.post(`/api/orders/${orderToCancel.id}/cancel`);
+            addNotification('Order cancelled and refunded!', 'success');
+            setOrderToCancel(null);
+          } catch (err: any) {
+            addNotification(err.response?.data?.message || 'Cancellation failed', 'warning');
+            setOrderToCancel(null);
+          }
+        }}
+        title="Cancel Order"
+        message={`Are you sure you want to cancel order #${orderToCancel?.id.slice(-6)}? The full amount will be refunded to your wallet instantly.`}
+        confirmLabel="Yes, Cancel Order"
+        type="danger"
+      />
 
       {activeTab === 'profile' && (
         <div className="bg-white rounded-[2rem] sm:rounded-[3rem] p-6 sm:p-12 shadow-xl border border-slate-100 max-w-2xl mx-auto">
