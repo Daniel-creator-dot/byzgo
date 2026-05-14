@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { BrowserRouter, Routes, Route, useLocation, useNavigate } from 'react-router-dom';
 import { socket } from './lib/socket';
 import { Role, Order, OrderStatus } from './types.ts';
-import { Layout, User as UserIcon, Store, Bike, Shield, ShoppingBag, MapPin, CreditCard, ChevronRight, CheckCircle2, Clock, Send, Navigation, Lock, Mail, Eye, EyeOff, LogOut, Package, Phone, Edit3, Save, X, Star, Home, Users, BarChart3, AlertCircle } from 'lucide-react';
+import { Layout, User as UserIcon, Store, Bike, Shield, ShoppingBag, MapPin, CreditCard, ChevronRight, CheckCircle2, Clock, Send, Navigation, Lock, Mail, Eye, EyeOff, LogOut, Package, Phone, Edit3, Save, X, Star, Home, Users, BarChart3, AlertCircle, AlertTriangle } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import axios from 'axios';
 import { clsx, type ClassValue } from 'clsx';
@@ -1132,6 +1132,24 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
                       {order.status.replace('_', ' ')}
                     </div>
                   </div>
+                  
+                  {order.status === 'pending' && (
+                    <button 
+                      onClick={async () => {
+                        if (window.confirm('Are you sure you want to cancel this order? It will be fully refunded to your wallet.')) {
+                          try {
+                            await axios.post(`/api/orders/${order.id}/cancel`);
+                            addNotification('Order cancelled and refunded!', 'success');
+                          } catch (err: any) {
+                            addNotification(err.response?.data?.message || 'Cancellation failed', 'warning');
+                          }
+                        }
+                      }}
+                      className="mb-8 w-full py-4 bg-red-50 text-red-500 rounded-2xl font-black uppercase tracking-widest text-[10px] hover:bg-red-100 transition-all active:scale-95"
+                    >
+                      Cancel Order
+                    </button>
+                  )}
 
                   {isActive && (
                     <div className="mb-8 h-64 rounded-3xl overflow-hidden border border-slate-100 shadow-inner relative">
@@ -1190,6 +1208,13 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
                           ))}
                         </div>
                       )}
+                    </div>
+                  )}
+                  {order.status === 'delivered' && (
+                    <div className="mt-6 flex justify-center">
+                      <button className="text-[9px] font-black uppercase tracking-widest text-slate-300 hover:text-red-500 transition-colors flex items-center gap-2">
+                        <AlertTriangle size={12} /> Report a problem with this order
+                      </button>
                     </div>
                   )}
               </div>

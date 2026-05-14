@@ -717,6 +717,36 @@ app.post('/api/orders/:id/rate', authenticateToken, async (req: any, res) => {
   }
 });
 
+app.post('/api/orders/:id/cancel', authenticateToken, async (req: any, res) => {
+  const orderId = req.params.id;
+  try {
+    const orderRes = await pool.query('SELECT status, total, customer_id FROM orders WHERE id = $1', [orderId]);
+    if (orderRes.rowCount === 0) return res.status(404).json({ message: 'Order not found' });
+    
+    const order = orderRes.rows[0];
+    if (order.status !== 'pending') {
+      return res.status(400).json({ message: 'Only pending orders can be cancelled' });
+    }
+
+    if (order.customer_id !== req.user.id) {
+      return res.status(403).json({ message: 'Unauthorized' });
+    }
+
+    await pool.query('UPDATE orders SET status = $1 WHERE id = $2', ['cancelled', orderId]);
+    await pool.query('UPDATE users SET balance = balance + $1 WHERE id = $2', [order.total, req.user.id]);
+    await pool.query(
+      'INSERT INTO wallet_transactions (user_id, amount, type, reference) VALUES ($1, $2, $3, $4)',
+      [req.user.id, order.total, 'topup', `Refund for cancelled order #${orderId.slice(-6)}`]
+    );
+
+    res.json({ message: 'Order cancelled and refunded successfully' });
+    io.emit('order:updated', { id: orderId, status: 'cancelled' });
+  } catch (err) {
+    console.error('Cancel order error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 // Admin: Toggle User Status
 app.patch('/api/admin/users/:id/status', authenticateToken, async (req: any, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Unauthorized' });
