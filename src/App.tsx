@@ -628,6 +628,14 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
   const [cart, setCart] = useState<any[]>([]);
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [orderToCancel, setOrderToCancel] = useState<Order | null>(null);
+  const [walletTab, setWalletTab] = useState<'topup' | 'withdraw'>('topup');
+  const [withdrawAmount, setWithdrawAmount] = useState('');
+  const [withdrawMethod, setWithdrawMethod] = useState<'momo' | 'bank'>('momo');
+  const [withdrawPhone, setWithdrawPhone] = useState((user as any).phone || '');
+  const [withdrawNetwork, setWithdrawNetwork] = useState('mtn');
+  const [withdrawBank, setWithdrawBank] = useState('');
+  const [withdrawAccount, setWithdrawAccount] = useState('');
+  const [withdrawName, setWithdrawName] = useState(user.name);
   
   const [courierForm, setCourierForm] = useState({
     pickup: null as { lat: number, lng: number, address: string } | null,
@@ -759,31 +767,93 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
         {isTopUpOpen && (
           <>
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsTopUpOpen(false)} className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[100]" />
-            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-sm bg-white p-8 rounded-[3rem] shadow-2xl z-[110] border border-slate-100">
-               <h3 className="text-2xl font-black italic tracking-tighter mb-6">Top Up Wallet</h3>
-               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-6">
-                  {['20', '50', '100', '200'].map(val => (
-                    <button key={val} onClick={() => setTopUpAmount(val)} className={cn("py-3 rounded-xl font-bold transition-all border text-sm", topUpAmount === val ? "bg-brand-blue text-white border-brand-blue shadow-lg" : "bg-slate-50 text-slate-500 border-slate-100")}>₵{val}</button>
-                  ))}
+            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-sm bg-white p-6 sm:p-8 rounded-[3rem] shadow-2xl z-[110] border border-slate-100 overflow-y-auto max-h-[90vh]">
+               <div className="flex p-1 bg-slate-100 rounded-2xl mb-6">
+                 <button onClick={() => setWalletTab('topup')} className={cn("flex-1 py-2 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all", walletTab === 'topup' ? "bg-white text-brand-blue shadow-sm" : "text-slate-400")}>Top Up</button>
+                 <button onClick={() => setWalletTab('withdraw')} className={cn("flex-1 py-2 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all", walletTab === 'withdraw' ? "bg-white text-brand-blue shadow-sm" : "text-slate-400")}>Withdraw</button>
                </div>
-               <button 
-                 onClick={async () => {
-                    const handler = window.PaystackPop.setup({
-                      key: paystackKey, // Key fetched from database
-                     email: user.email,
-                     amount: Number(topUpAmount) * 100,
-                     currency: 'GHS',
-                     callback: async (response: any) => {
-                       await axios.post('/api/wallet/topup', { reference: response.reference });
-                       setIsTopUpOpen(false);
-                     }
-                   });
-                   handler.openIframe();
-                 }}
-                 className="w-full py-4 bg-brand-blue text-white rounded-2xl font-black uppercase tracking-widest text-xs"
-               >
-                 Confirm Payment
-               </button>
+
+               {walletTab === 'topup' ? (
+                 <>
+                   <h3 className="text-xl font-black italic tracking-tighter mb-4 text-slate-800">Top Up Wallet</h3>
+                   <div className="grid grid-cols-2 gap-2 mb-6">
+                      {['20', '50', '100', '200'].map(val => (
+                        <button key={val} onClick={() => setTopUpAmount(val)} className={cn("py-3 rounded-xl font-bold transition-all border text-sm", topUpAmount === val ? "bg-brand-blue text-white border-brand-blue shadow-lg" : "bg-slate-50 text-slate-500 border-slate-100")}>₵{val}</button>
+                      ))}
+                   </div>
+                   <div className="mb-6">
+                      <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Custom Amount</label>
+                      <input type="number" value={topUpAmount} onChange={e => setTopUpAmount(e.target.value)} className="w-full bg-slate-50 border border-slate-100 p-4 rounded-xl focus:outline-none focus:border-brand-blue font-mono font-black text-lg" />
+                   </div>
+                   <button 
+                     onClick={async () => {
+                        const handler = (window as any).PaystackPop.setup({
+                          key: paystackKey,
+                          email: user.email,
+                          amount: Number(topUpAmount) * 100,
+                          currency: 'GHS',
+                          callback: async (response: any) => {
+                            await axios.post('/api/wallet/topup', { reference: response.reference });
+                            addNotification('Wallet topped up successfully!', 'success');
+                            setIsTopUpOpen(false);
+                          }
+                        });
+                        handler.openIframe();
+                     }}
+                     className="w-full py-4 bg-brand-blue text-white rounded-2xl font-black uppercase tracking-widest text-xs hover:scale-105 active:scale-95 transition-all shadow-xl"
+                   >
+                     Pay with Card/Momo
+                   </button>
+                 </>
+               ) : (
+                 <form onSubmit={async (e) => {
+                   e.preventDefault();
+                   if (Number(withdrawAmount) > user.balance) return addNotification('Insufficient balance', 'warning');
+                   try {
+                     await axios.post('/api/wallet/withdraw', {
+                       amount: Number(withdrawAmount),
+                       phone: withdrawPhone,
+                       network: withdrawNetwork,
+                       method: withdrawMethod,
+                       bank: withdrawBank,
+                       account: withdrawAccount
+                     });
+                     addNotification('Withdrawal requested successfully!', 'success');
+                     setIsTopUpOpen(false);
+                   } catch (err: any) {
+                     addNotification(err.response?.data?.message || 'Withdrawal failed', 'warning');
+                   }
+                 }} className="space-y-4">
+                    <h3 className="text-xl font-black italic tracking-tighter text-slate-800">Withdraw Funds</h3>
+                    <div>
+                      <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Amount to Withdraw</label>
+                      <input type="number" required value={withdrawAmount} onChange={e => setWithdrawAmount(e.target.value)} className="w-full bg-slate-50 border border-slate-100 p-4 rounded-xl focus:outline-none focus:border-brand-blue font-mono font-black text-lg" placeholder="0.00" />
+                    </div>
+
+                    <div className="flex gap-2">
+                      <button type="button" onClick={() => setWithdrawMethod('momo')} className={cn("flex-1 py-3 rounded-xl border text-[10px] font-black uppercase tracking-widest transition-all", withdrawMethod === 'momo' ? "bg-brand-blue text-white border-brand-blue" : "bg-white text-slate-400 border-slate-100")}>MoMo</button>
+                      <button type="button" onClick={() => setWithdrawMethod('bank')} className={cn("flex-1 py-3 rounded-xl border text-[10px] font-black uppercase tracking-widest transition-all", withdrawMethod === 'bank' ? "bg-brand-blue text-white border-brand-blue" : "bg-white text-slate-400 border-slate-100")}>Bank</button>
+                    </div>
+
+                    {withdrawMethod === 'momo' ? (
+                      <div className="space-y-3">
+                         <select value={withdrawNetwork} onChange={e => setWithdrawNetwork(e.target.value)} className="w-full bg-slate-50 border border-slate-100 p-4 rounded-xl focus:outline-none font-bold text-xs">
+                           <option value="mtn">MTN Mobile Money</option>
+                           <option value="vodafone">Vodafone Cash</option>
+                           <option value="airteltigo">AirtelTigo Money</option>
+                         </select>
+                         <input type="tel" placeholder="Mobile Number" required value={withdrawPhone} onChange={e => setWithdrawPhone(e.target.value)} className="w-full bg-slate-50 border border-slate-100 p-4 rounded-xl focus:outline-none font-bold text-xs" />
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                         <input type="text" placeholder="Bank Name" required value={withdrawBank} onChange={e => setWithdrawBank(e.target.value)} className="w-full bg-slate-50 border border-slate-100 p-4 rounded-xl focus:outline-none font-bold text-xs" />
+                         <input type="text" placeholder="Account Number" required value={withdrawAccount} onChange={e => setWithdrawAccount(e.target.value)} className="w-full bg-slate-50 border border-slate-100 p-4 rounded-xl focus:outline-none font-bold text-xs" />
+                      </div>
+                    )}
+
+                    <button type="submit" className="w-full py-4 bg-slate-900 text-white rounded-2xl font-black uppercase tracking-widest text-xs hover:scale-105 active:scale-95 transition-all shadow-xl">Confirm Withdrawal</button>
+                 </form>
+               )}
             </motion.div>
           </>
         )}
