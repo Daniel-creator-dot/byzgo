@@ -19,6 +19,8 @@ export interface Order {
   lng?: number;
   rating?: number;
   rating_comment?: string;
+  payment_status?: string;
+  payment_method?: string;
 }
 
 export interface Rider {

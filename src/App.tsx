@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { BrowserRouter, Routes, Route, useLocation, useNavigate } from 'react-router-dom';
 import { socket } from './lib/socket';
 import { Role, Order, OrderStatus } from './types.ts';
-import { Layout, User as UserIcon, Store, Bike, Shield, ShoppingBag, MapPin, CreditCard, ChevronRight, CheckCircle2, Clock, Send, Navigation, Lock, Mail, Eye, EyeOff, LogOut, Package, Phone, Edit3, Save, X, Star, Home, Users, BarChart3, AlertCircle, AlertTriangle } from 'lucide-react';
+import { Layout, User as UserIcon, Store, Bike, Shield, ShoppingBag, MapPin, CreditCard, ChevronRight, CheckCircle2, Clock, Send, Navigation, Lock, Mail, Eye, EyeOff, LogOut, Package, Phone, Edit3, Save, X, Star, Home, Users, BarChart3, AlertCircle, AlertTriangle, Check } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import axios from 'axios';
 import { clsx, type ClassValue } from 'clsx';
@@ -954,7 +954,7 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
                     <button 
                       disabled={user.balance < total}
                       onClick={() => {
-                        onPlaceOrder(cart.map(item => ({ id: item.id, name: item.name, quantity: item.quantity, price: item.price })), total, selectedVendor?.id, { paymentMethod: 'wallet' });
+                        onPlaceOrder(cart.map(item => ({ id: item.id, name: item.name, quantity: item.quantity, price: item.price })), total, selectedVendor?.id, { payment_method: 'wallet' });
                         setCart([]);
                         setIsCartOpen(false);
                         setActiveTab('tracking');
@@ -965,7 +965,7 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
                     </button>
                     <button 
                       onClick={() => {
-                        onPlaceOrder(cart.map(item => ({ id: item.id, name: item.name, quantity: item.quantity, price: item.price })), total, selectedVendor?.id, { paymentMethod: 'pay_on_delivery' });
+                        onPlaceOrder(cart.map(item => ({ id: item.id, name: item.name, quantity: item.quantity, price: item.price })), total, selectedVendor?.id, { payment_method: 'pay_on_delivery' });
                         setCart([]);
                         setIsCartOpen(false);
                         setActiveTab('tracking');
@@ -1091,7 +1091,8 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
             onPlaceOrder([{ id: 'courier-1', name: `Delivery: ${courierForm.itemDesc}`, quantity: 1, price: 50 }], 50, undefined, {
                order_type: 'courier',
                address: courierForm.destination,
-               pickup: courierForm.pickup
+               pickup: courierForm.pickup,
+               payment_method: 'pay_on_delivery'
             });
             setActiveTab('tracking');
           }} className="space-y-5 sm:space-y-6">
@@ -1240,11 +1241,14 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
                         </div>
                       </div>
                     </div>
-                    <div className={cn(
-                      "px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest",
-                      order.status === 'delivered' ? "bg-brand-green/10 text-brand-green" : "bg-brand-blue/10 text-brand-blue"
-                    )}>
-                      {order.status.replace('_', ' ')}
+                    <div className="flex flex-col items-end gap-2">
+                      <div className={cn(
+                        "px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest",
+                        order.status === 'delivered' ? "bg-brand-green/10 text-brand-green" : "bg-brand-blue/10 text-brand-blue"
+                      )}>
+                        {order.status.replace('_', ' ')}
+                      </div>
+                      <PaymentStatusBadge order={order} />
                     </div>
                   </div>
                   
@@ -1479,6 +1483,21 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
 }
 
 
+function PaymentStatusBadge({ order }: { order: Order }) {
+  if (!order.payment_status) return null;
+  const isPaid = order.payment_status === 'paid';
+  return (
+    <div className={cn(
+      "px-3 py-1.5 rounded-lg text-[8px] font-black uppercase tracking-widest flex items-center gap-1.5",
+      isPaid ? "bg-emerald-500 text-white shadow-lg shadow-emerald-500/20" : "bg-orange-500 text-white shadow-lg shadow-orange-500/20"
+    )}>
+      {isPaid ? <Check size={10} strokeWidth={4} /> : <AlertCircle size={10} strokeWidth={4} />}
+      {isPaid ? 'Paid Online' : 'Cash on Delivery'}
+    </div>
+  );
+}
+
+
 function TrackingStep({ label, active }: { label: string, active: boolean }) {
   return (
     <div className="flex items-center gap-6 relative">
@@ -1676,10 +1695,11 @@ function VendorView({ user, orders, products, riderLocations, onUpdateStatus, on
                     ))}
                   </div>
 
-                  <div className="flex gap-2 sm:gap-3 flex-wrap">
+                  <div className="flex gap-2 sm:gap-3 flex-wrap items-center">
                      {order.status === 'pending' && <button onClick={() => onUpdateStatus(order.id, 'preparing')} className="flex-1 py-3 sm:py-4 bg-brand-blue text-white rounded-xl sm:rounded-2xl font-black uppercase tracking-widest text-[10px] sm:text-xs">Start Cook</button>}
                      {order.status === 'preparing' && <button onClick={() => onUpdateStatus(order.id, 'ready')} className="flex-1 py-3 sm:py-4 bg-brand-green text-white rounded-xl sm:rounded-2xl font-black uppercase tracking-widest text-[10px] sm:text-xs">Mark Ready</button>}
                      <div className="px-3 sm:px-4 py-2 bg-slate-100 rounded-xl text-[10px] font-black uppercase tracking-widest self-center">{order.status}</div>
+                     <PaymentStatusBadge order={order} />
                   </div>
                 </div>
               );
@@ -2306,8 +2326,11 @@ function RiderView({ user, orders, vendors, onUpdateStatus }: { user: AuthUser, 
                      Courier
                    </div>
                  )}
-                 <div className="flex justify-between items-center mb-4">
-                    <h4 className="font-black text-lg sm:text-xl tracking-tighter">#{order.id.slice(-4)}</h4>
+                  <div className="flex justify-between items-start mb-4">
+                     <div className="flex flex-col">
+                        <h4 className="font-black text-lg sm:text-xl tracking-tighter">#{order.id.slice(-4)}</h4>
+                        <PaymentStatusBadge order={order} />
+                     </div>
                     <span className={cn("font-mono font-black", isCourier ? "text-brand-green" : "text-brand-blue")}>₵{order.total}</span>
                  </div>
 
@@ -2351,7 +2374,10 @@ function RiderView({ user, orders, vendors, onUpdateStatus }: { user: AuthUser, 
                  {isCourier && <div className="absolute top-0 right-0 bg-brand-blue text-[8px] font-black px-3 py-1.5 rounded-bl-xl uppercase tracking-widest text-white">Courier</div>}
                  <div className="flex justify-between items-center mb-4 sm:mb-6">
                     <div className="flex items-center gap-2">
-                      <h4 className="font-black text-lg sm:text-xl tracking-tighter">#{order.id.slice(-4)}</h4>
+                       <div className="flex flex-col">
+                         <h4 className="font-black text-lg sm:text-xl tracking-tighter">#{order.id.slice(-4)}</h4>
+                         <PaymentStatusBadge order={order} />
+                      </div>
                       {isCourier && <Send size={14} className="text-brand-blue" />}
                     </div>
                     <span className="px-3 py-1 bg-white/10 rounded-lg text-[10px] font-black uppercase tracking-widest">{order.status.replace('_', ' ')}</span>
@@ -2734,6 +2760,7 @@ function AdminView({ user, orders, addNotification }: { user: AuthUser, orders: 
                       <th className="px-8 py-4 text-[10px] font-black uppercase tracking-widest text-slate-400">Status</th>
                       <th className="px-8 py-4 text-[10px] font-black uppercase tracking-widest text-slate-400">Customer</th>
                       <th className="px-8 py-4 text-[10px] font-black uppercase tracking-widest text-slate-400">Total</th>
+                     <th className="px-8 py-4 text-[10px] font-black uppercase tracking-widest text-slate-400">Payment</th>
                     </tr>
                  </thead>
                  <tbody>
@@ -2743,6 +2770,7 @@ function AdminView({ user, orders, addNotification }: { user: AuthUser, orders: 
                         <td className="px-8 py-6"><span className="px-3 py-1 bg-slate-100 rounded-lg text-[10px] font-black uppercase">{o.status}</span></td>
                         <td className="px-8 py-6 text-sm font-bold text-slate-600">{o.customerName}</td>
                         <td className="px-8 py-6 font-mono font-black text-brand-blue">₵{o.total}</td>
+                        <td className="px-8 py-6"><PaymentStatusBadge order={o} /></td>
                       </tr>
                     ))}
                  </tbody>
@@ -2757,7 +2785,10 @@ function AdminView({ user, orders, addNotification }: { user: AuthUser, orders: 
                        <span className="font-mono font-black text-brand-blue">₵{o.total}</span>
                     </div>
                     <div className="flex justify-between items-center">
-                       <span className="px-3 py-1 bg-slate-100 rounded-lg text-[10px] font-black uppercase">{o.status}</span>
+                       <div className="flex flex-col gap-1">
+                         <span className="px-3 py-1 bg-slate-100 rounded-lg text-[10px] font-black uppercase inline-block">{o.status}</span>
+                         <PaymentStatusBadge order={o} />
+                       </div>
                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{o.customerName}</span>
                     </div>
                  </div>

@@ -138,6 +138,8 @@ const initDb = async () => {
         ALTER TABLE orders ADD COLUMN IF NOT EXISTS pickup_lat DOUBLE PRECISION;
         ALTER TABLE orders ADD COLUMN IF NOT EXISTS pickup_lng DOUBLE PRECISION;
         ALTER TABLE orders ADD COLUMN IF NOT EXISTS region TEXT;
+        ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_status TEXT DEFAULT 'pending';
+        ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_method TEXT;
       EXCEPTION WHEN others THEN NULL;
       END $$;
 
@@ -552,8 +554,11 @@ app.get('/api/orders', authenticateToken, async (req: any, res) => {
 });
 
 app.post('/api/orders', authenticateToken, async (req: any, res) => {
-  const { items, total, address, pickup, orderType, order_type, scheduledTime, vendorId, lat, lng, region: providedRegion, payment_reference } = req.body;
+  const { items, total, address, pickup, orderType, order_type, scheduledTime, vendorId, lat, lng, region: providedRegion, payment_reference, payment_method } = req.body;
   
+  let paymentStatus = 'pending';
+  const finalPaymentMethod = payment_method || (payment_reference ? 'paystack' : 'pay_on_delivery');
+
   // Verify Paystack payment if reference provided
   if (payment_reference) {
     try {
@@ -564,6 +569,7 @@ app.post('/api/orders', authenticateToken, async (req: any, res) => {
       if (response.data.data.status !== 'success') {
         return res.status(400).json({ message: 'Payment verification failed' });
       }
+      paymentStatus = 'paid';
       // Log the payment as a transaction
       await pool.query(
         'INSERT INTO wallet_transactions (user_id, amount, type, reference) VALUES ($1, $2, $3, $4)',
@@ -573,6 +579,29 @@ app.post('/api/orders', authenticateToken, async (req: any, res) => {
       console.error('Order payment verification error:', err);
       return res.status(500).json({ message: 'Payment verification error' });
     }
+  } else if (payment_method === 'wallet') {
+    try {
+      // Check balance
+      const userRes = await pool.query('SELECT balance FROM users WHERE id = $1', [req.user.id]);
+      if (parseFloat(userRes.rows[0].balance) < total) {
+        return res.status(400).json({ message: 'Insufficient wallet balance' });
+      }
+      
+      // Deduct balance
+      await pool.query('UPDATE users SET balance = balance - $1 WHERE id = $2', [total, req.user.id]);
+      paymentStatus = 'paid';
+      
+      // Log transaction
+      await pool.query(
+        'INSERT INTO wallet_transactions (user_id, amount, type, reference) VALUES ($1, $2, $3, $4)',
+        [req.user.id, total, 'payment', 'Wallet payment for order']
+      );
+    } catch (err) {
+      console.error('Wallet payment error:', err);
+      return res.status(500).json({ message: 'Wallet payment failed' });
+    }
+  } else if (finalPaymentMethod === 'pay_on_delivery') {
+    paymentStatus = 'cash_on_delivery';
   }
 
   const finalOrderType = orderType || order_type || 'food';
@@ -600,8 +629,8 @@ app.post('/api/orders', authenticateToken, async (req: any, res) => {
     }
 
     const result = await pool.query(
-      'INSERT INTO orders (customer_id, vendor_id, items, total, address, pickup_address, order_type, scheduled_time, lat, lng, pickup_lat, pickup_lng, region) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *',
-      [req.user.id, vendorId, JSON.stringify(items), total, address, finalPickup, finalOrderType, scheduledTime, lat, lng, pickupLat, pickupLng, finalRegion]
+      'INSERT INTO orders (customer_id, vendor_id, items, total, address, pickup_address, order_type, scheduled_time, lat, lng, pickup_lat, pickup_lng, region, payment_status, payment_method) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING *',
+      [req.user.id, vendorId, JSON.stringify(items), total, address, finalPickup, finalOrderType, scheduledTime, lat, lng, pickupLat, pickupLng, finalRegion, paymentStatus, finalPaymentMethod]
     );
     const order = result.rows[0];
     res.json(order);
