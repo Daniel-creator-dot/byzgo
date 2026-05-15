@@ -8,9 +8,9 @@ import axios from 'axios';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { APIProvider, Map, Marker, useMap, useMapsLibrary } from '@vis.gl/react-google-maps';
-import { Modal, ConfirmationModal } from './components/UI';
+import { Modal, ConfirmationModal, LoadingIndicator } from './components/UI';
 import { auth, googleProvider } from './lib/firebase';
-import { signInWithPopup } from 'firebase/auth';
+import { signInWithPopup, signInWithRedirect, getRedirectResult } from 'firebase/auth';
 
 // Helper for Tailwind classes
 function cn(...inputs: ClassValue[]) {
@@ -121,7 +121,7 @@ function PullToRefresh({ onRefresh, refreshing, children }: { onRefresh: () => P
         <div className={cn("flex items-center gap-2 font-black text-[10px] uppercase tracking-widest transition-opacity", (pullDistance > 10 || refreshing) ? "opacity-100" : "opacity-0")}>
           {refreshing ? (
             <div className="flex items-center gap-2">
-              <div className="w-4 h-4 border-2 border-brand-blue border-t-transparent rounded-full animate-spin" />
+              <LoadingIndicator size="sm" />
               <span>Refreshing...</span>
             </div>
           ) : (
@@ -243,6 +243,35 @@ function MainApp() {
 
   // Fetch initial data and setup sockets
   useEffect(() => {
+    // Handle Google Redirect Result
+    const initAuth = async () => {
+      try {
+        const result = await getRedirectResult(auth);
+        if (result) {
+          const idToken = await result.user.getIdToken();
+          const savedRole = localStorage.getItem('google_login_role') || 'customer';
+          const res = await axios.post('/api/auth/google', {
+            credential: idToken,
+            role: savedRole
+          });
+          setUser(res.data.user);
+          setToken(res.data.token);
+          localStorage.setItem('user', JSON.stringify(res.data.user));
+          localStorage.removeItem('google_login_role');
+        }
+      } catch (err) {
+        console.error('Redirect result failed', err);
+      } finally {
+        if (!token && !localStorage.getItem('token')) {
+          setLoading(false);
+        }
+      }
+    };
+    initAuth();
+  }, []);
+
+  // Fetch initial data and setup sockets when token is available
+  useEffect(() => {
     if (!token) {
       setLoading(false);
       return;
@@ -252,6 +281,12 @@ function MainApp() {
       try {
         await refreshData();
         const storedUser = JSON.parse(localStorage.getItem('user') || '{}');
+        // Set default tab based on role
+        if (storedUser.role === 'vendor') setActiveTab('orders');
+        else if (storedUser.role === 'rider') setActiveTab('dashboard');
+        else if (storedUser.role === 'admin') setActiveTab('orders');
+        else setActiveTab('menu');
+
         socket.connect();
         socket.emit('join', storedUser.id);
       } catch (err) {
@@ -338,16 +373,12 @@ function MainApp() {
   if (loading) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 gap-8">
-        <div className="relative">
-          <div className="w-20 h-20 border-4 border-slate-100 rounded-full" />
-          <div className="absolute inset-0 w-20 h-20 border-4 border-brand-blue border-t-transparent rounded-full animate-spin shadow-lg" />
-        </div>
+        <LoadingIndicator size="xl" withText text="Loading flavors..." />
         <div className="text-center">
           <h2 className="text-3xl font-black italic tracking-tighter mb-2">
             <span className="text-brand-blue">bytz</span>
             <span className="text-brand-green">go</span>
           </h2>
-          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 animate-pulse">Loading flavors...</p>
         </div>
       </div>
     );
@@ -488,12 +519,82 @@ function MainApp() {
                 } catch (err) {
                   console.error('Delete product failed', err);
                 }
-              }} />}
-              {user.role === 'rider' && <RiderView user={user} orders={orders} vendors={vendors} onUpdateStatus={updateOrderStatus} />}
-              {user.role === 'admin' && <AdminView user={user} orders={orders} addNotification={addNotification} />}
+              }} activeTab={activeTab} setActiveTab={setActiveTab} />}
+              {user.role === 'rider' && <RiderView user={user} orders={orders} vendors={vendors} onUpdateStatus={updateOrderStatus} activeTab={activeTab} setActiveTab={setActiveTab} />}
+              {user.role === 'admin' && <AdminView user={user} orders={orders} addNotification={addNotification} activeTab={activeTab} setActiveTab={setActiveTab} />}
             </AnimatePresence>
           </main>
         </PullToRefresh>
+
+        {/* Global Mobile Bottom Navigation - Moved outside PullToRefresh to fix "middle of screen" issue */}
+        {!loading && user && (
+          <nav className="fixed bottom-0 left-0 right-0 bg-white/80 backdrop-blur-xl border-t border-slate-100 flex sm:hidden z-[100] px-6 py-3 justify-around shadow-[0_-10px_30px_rgba(0,0,0,0.05)]">
+            {user.role === 'customer' && (
+              <>
+                <button onClick={() => setActiveTab('menu')} className={cn("flex flex-col items-center gap-1 transition-all", activeTab === 'menu' ? "text-brand-blue" : "text-slate-400")}>
+                  <Home size={20} className={activeTab === 'menu' ? "fill-brand-blue/10" : ""} />
+                  <span className="text-[8px] font-black uppercase tracking-widest">Home</span>
+                </button>
+                <button onClick={() => setActiveTab('tracking')} className={cn("flex flex-col items-center gap-1 transition-all", activeTab === 'tracking' ? "text-brand-blue" : "text-slate-400")}>
+                  <Navigation size={20} className={activeTab === 'tracking' ? "fill-brand-blue/10" : ""} />
+                  <span className="text-[8px] font-black uppercase tracking-widest">Orders</span>
+                </button>
+                <button onClick={() => setActiveTab('courier')} className={cn("flex flex-col items-center gap-1 transition-all", activeTab === 'courier' ? "text-brand-blue" : "text-slate-400")}>
+                  <Package size={20} className={activeTab === 'courier' ? "fill-brand-blue/10" : ""} />
+                  <span className="text-[8px] font-black uppercase tracking-widest">Courier</span>
+                </button>
+              </>
+            )}
+            {user.role === 'vendor' && (
+              <>
+                <button onClick={() => setActiveTab('orders')} className={cn("flex flex-col items-center gap-1 transition-all", activeTab === 'orders' ? "text-brand-blue" : "text-slate-400")}>
+                  <ShoppingBag size={20} className={activeTab === 'orders' ? "fill-brand-blue/10" : ""} />
+                  <span className="text-[8px] font-black uppercase tracking-widest">Orders</span>
+                </button>
+                <button onClick={() => setActiveTab('products')} className={cn("flex flex-col items-center gap-1 transition-all", activeTab === 'products' ? "text-brand-blue" : "text-slate-400")}>
+                  <Layout size={20} className={activeTab === 'products' ? "fill-brand-blue/10" : ""} />
+                  <span className="text-[8px] font-black uppercase tracking-widest">Menu</span>
+                </button>
+                <button onClick={() => setActiveTab('wallet')} className={cn("flex flex-col items-center gap-1 transition-all", activeTab === 'wallet' ? "text-brand-blue" : "text-slate-400")}>
+                  <CreditCard size={20} className={activeTab === 'wallet' ? "fill-brand-blue/10" : ""} />
+                  <span className="text-[8px] font-black uppercase tracking-widest">Wallet</span>
+                </button>
+              </>
+            )}
+            {user.role === 'rider' && (
+              <>
+                <button onClick={() => setActiveTab('dashboard')} className={cn("flex flex-col items-center gap-1 transition-all", activeTab === 'dashboard' ? "text-brand-blue" : "text-slate-400")}>
+                  <Layout size={20} className={activeTab === 'dashboard' ? "fill-brand-blue/10" : ""} />
+                  <span className="text-[8px] font-black uppercase tracking-widest">Hub</span>
+                </button>
+                <button onClick={() => setActiveTab('history')} className={cn("flex flex-col items-center gap-1 transition-all", activeTab === 'history' ? "text-brand-blue" : "text-slate-400")}>
+                  <Clock size={20} className={activeTab === 'history' ? "fill-brand-blue/10" : ""} />
+                  <span className="text-[8px] font-black uppercase tracking-widest">History</span>
+                </button>
+                <button onClick={() => setActiveTab('wallet')} className={cn("flex flex-col items-center gap-1 transition-all", activeTab === 'wallet' ? "text-brand-blue" : "text-slate-400")}>
+                  <CreditCard size={20} className={activeTab === 'wallet' ? "fill-brand-blue/10" : ""} />
+                  <span className="text-[8px] font-black uppercase tracking-widest">Wallet</span>
+                </button>
+              </>
+            )}
+            {user.role === 'admin' && (
+              <>
+                <button onClick={() => setActiveTab('orders')} className={cn("flex flex-col items-center gap-1 transition-all", activeTab === 'orders' ? "text-brand-blue" : "text-slate-400")}>
+                  <ShoppingBag size={20} className={activeTab === 'orders' ? "fill-brand-blue/10" : ""} />
+                  <span className="text-[8px] font-black uppercase tracking-widest">Orders</span>
+                </button>
+                <button onClick={() => setActiveTab('users')} className={cn("flex flex-col items-center gap-1 transition-all", activeTab === 'users' ? "text-brand-blue" : "text-slate-400")}>
+                  <Users size={20} className={activeTab === 'users' ? "fill-brand-blue/10" : ""} />
+                  <span className="text-[8px] font-black uppercase tracking-widest">Users</span>
+                </button>
+                <button onClick={() => setActiveTab('zones')} className={cn("flex flex-col items-center gap-1 transition-all", activeTab === 'zones' ? "text-brand-blue" : "text-slate-400")}>
+                  <MapPin size={20} className={activeTab === 'zones' ? "fill-brand-blue/10" : ""} />
+                  <span className="text-[8px] font-black uppercase tracking-widest">Zones</span>
+                </button>
+              </>
+            )}
+          </nav>
+        )}
 
         {/* Global Floating Elements for Customer */}
         {user?.role === 'customer' && (
@@ -829,7 +930,7 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
               disabled={loading}
               className="w-full py-4 bg-brand-blue text-white rounded-2xl font-black uppercase tracking-widest text-xs hover:scale-[1.02] active:scale-[0.98] transition-all shadow-xl shadow-brand-blue/20 flex items-center justify-center gap-2"
             >
-              {loading ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : (isLogin ? 'Sign In' : 'Create Account')}
+              {loading ? <LoadingIndicator size="sm" /> : (isLogin ? 'Sign In' : 'Create Account')}
             </button>
           </form>
 
@@ -845,13 +946,22 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
                   setLoading(true);
                   setError('');
                   try {
-                    const result = await signInWithPopup(auth, googleProvider);
-                    const idToken = await result.user.getIdToken();
-                    const res = await axios.post('/api/auth/google', {
-                      credential: idToken,
-                      role: role
-                    });
-                    onLogin(res.data.user, res.data.token);
+                    // Store role in localStorage before redirect
+                    localStorage.setItem('google_login_role', role);
+                    
+                    // For mobile WebViews, redirect is more reliable than popups
+                    const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+                    if (isMobile) {
+                      await signInWithRedirect(auth, googleProvider);
+                    } else {
+                      const result = await signInWithPopup(auth, googleProvider);
+                      const idToken = await result.user.getIdToken();
+                      const res = await axios.post('/api/auth/google', {
+                        credential: idToken,
+                        role: role
+                      });
+                      onLogin(res.data.user, res.data.token);
+                    }
                   } catch (err: any) {
                     setError('Authentication failed. Please try again.');
                   } finally {
@@ -862,7 +972,7 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
                 disabled={loading}
               >
                 {loading ? (
-                  <div className="w-4 h-4 border-2 border-brand-blue border-t-transparent rounded-full animate-spin" />
+                  <LoadingIndicator size="sm" />
                 ) : (
                   <>
                     <svg width="18" height="18" viewBox="0 0 24 24">
@@ -1046,21 +1156,7 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="relative space-y-8 pb-24 sm:pb-0">
-      {/* Mobile Bottom Navigation */}
-      <nav className="fixed bottom-0 left-0 right-0 bg-white/80 backdrop-blur-xl border-t border-slate-100 flex sm:hidden z-[100] px-6 py-3 justify-around shadow-[0_-10px_30px_rgba(0,0,0,0.05)]">
-         <button onClick={() => setActiveTab('menu')} className={cn("flex flex-col items-center gap-1 transition-all", activeTab === 'menu' ? "text-brand-blue" : "text-slate-400")}>
-            <Home size={20} className={activeTab === 'menu' ? "fill-brand-blue/10" : ""} />
-            <span className="text-[8px] font-black uppercase tracking-widest">Home</span>
-         </button>
-         <button onClick={() => setActiveTab('tracking')} className={cn("flex flex-col items-center gap-1 transition-all", activeTab === 'tracking' ? "text-brand-blue" : "text-slate-400")}>
-            <Navigation size={20} className={activeTab === 'tracking' ? "fill-brand-blue/10" : ""} />
-            <span className="text-[8px] font-black uppercase tracking-widest">Orders</span>
-         </button>
-         <button onClick={() => setActiveTab('courier')} className={cn("flex flex-col items-center gap-1 transition-all", activeTab === 'courier' ? "text-brand-blue" : "text-slate-400")}>
-            <Package size={20} className={activeTab === 'courier' ? "fill-brand-blue/10" : ""} />
-            <span className="text-[8px] font-black uppercase tracking-widest">Courier</span>
-         </button>
-      </nav>
+      {/* Mobile Bottom Navigation - Moved to App component */}
 
       {/* Modals and Cart Logic same as before */}
       {/* Modals */}
@@ -1663,7 +1759,7 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
 
             <div className="pt-4">
               <button type="submit" disabled={profileSaving} className="w-full py-5 bg-slate-900 text-white rounded-[2rem] font-black uppercase tracking-widest text-sm hover:scale-[1.02] active:scale-[0.98] transition-all shadow-2xl flex items-center justify-center gap-3">
-                {profileSaving ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <><Save size={18} /> Save Changes</>}
+                {profileSaving ? <LoadingIndicator size="sm" /> : <><Save size={18} /> Save Changes</>}
               </button>
             </div>
           </form>
@@ -1700,8 +1796,7 @@ function TrackingStep({ label, active }: { label: string, active: boolean }) {
   );
 }
 
-function VendorView({ user, orders, products, riderLocations, onUpdateStatus, onAddProduct, onDeleteProduct, addNotification }: { user: AuthUser, orders: Order[], products: any[], riderLocations: { [key: string]: { lat: number, lng: number } }, onUpdateStatus: (id: string, s: OrderStatus, extra?: any) => void, onAddProduct: (p: any) => void, onDeleteProduct: (id: string) => void, addNotification: (m: string, t?: 'info' | 'success' | 'warning') => void }) {
-  const [activeTab, setActiveTab] = useState<'orders' | 'products' | 'store' | 'wallet'>('orders');
+function VendorView({ user, orders, products, riderLocations, onUpdateStatus, onAddProduct, onDeleteProduct, addNotification, activeTab, setActiveTab }: { user: AuthUser, orders: Order[], products: any[], riderLocations: { [key: string]: { lat: number, lng: number } }, onUpdateStatus: (id: string, s: OrderStatus, extra?: any) => void, onAddProduct: (p: any) => void, onDeleteProduct: (id: string) => void, addNotification: (m: string, t?: 'info' | 'success' | 'warning') => void, activeTab: any, setActiveTab: (v: any) => void }) {
   const [isAddProductOpen, setIsAddProductOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<any | null>(null);
   const [productToDelete, setProductToDelete] = useState<any | null>(null);
@@ -1805,7 +1900,7 @@ function VendorView({ user, orders, products, riderLocations, onUpdateStatus, on
 
   return (
     <div className="space-y-6 sm:space-y-10 pb-24 sm:pb-0 relative">
-       <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 flex md:hidden z-[100] px-4 py-2 justify-around">
+       {/* Mobile Bottom Navigation - Moved to App component */}
          <button onClick={() => setActiveTab('orders')} className={cn("flex flex-col items-center gap-0.5 py-1 px-3 rounded-xl transition-all", activeTab === 'orders' ? "text-brand-blue bg-brand-blue/5" : "text-slate-400")}>
             <ShoppingBag size={20} />
             <span className="text-[8px] font-black uppercase tracking-widest">Orders</span>
@@ -1952,7 +2047,7 @@ function VendorView({ user, orders, products, riderLocations, onUpdateStatus, on
                        <div className="flex gap-2">
                          <input type="text" placeholder="Paste URL or upload →" className="flex-1 bg-slate-50 border border-slate-100 p-4 rounded-xl focus:outline-none focus:border-brand-blue font-bold text-sm" value={newProduct.image_url} onChange={(e) => setNewProduct({...newProduct, image_url: e.target.value})} />
                          <label className={cn("px-4 py-4 rounded-xl font-black uppercase tracking-widest text-[10px] cursor-pointer transition-all flex items-center gap-1", uploading ? "bg-slate-200 text-slate-400" : "bg-brand-blue text-white hover:scale-105")}>
-                           {uploading ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : '📷'}
+                           {uploading ? <LoadingIndicator size="sm" /> : '📷'}
                            <input type="file" accept="image/*" className="hidden" disabled={uploading} onChange={(e) => {
                              const file = e.target.files?.[0];
                              if (file) handleFileUpload(file, (url) => setNewProduct({...newProduct, image_url: url}));
@@ -2017,7 +2112,7 @@ function VendorView({ user, orders, products, riderLocations, onUpdateStatus, on
               <div className="flex gap-2">
                 <input type="text" placeholder="Paste URL or upload →" value={storeForm.cover_image} onChange={e => setStoreForm({...storeForm, cover_image: e.target.value})} className="flex-1 bg-slate-50 border border-slate-100 rounded-2xl py-4 px-6 font-bold text-sm focus:outline-none focus:border-brand-blue transition-all" />
                 <label className={cn("px-5 py-4 rounded-2xl font-black cursor-pointer transition-all flex items-center", uploading ? "bg-slate-200 text-slate-400" : "bg-brand-green text-white hover:scale-105")}>
-                  {uploading ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : '📷'}
+                  {uploading ? <LoadingIndicator size="sm" /> : '📷'}
                   <input type="file" accept="image/*" className="hidden" disabled={uploading} onChange={(e) => {
                     const file = e.target.files?.[0];
                     if (file) handleFileUpload(file, (url) => setStoreForm({...storeForm, cover_image: url}));
@@ -2089,7 +2184,7 @@ function VendorView({ user, orders, products, riderLocations, onUpdateStatus, on
             )}
 
             <button type="submit" disabled={storeSaving} className="w-full py-5 bg-brand-green text-white rounded-[2rem] font-black uppercase tracking-widest text-sm hover:scale-[1.02] active:scale-[0.98] transition-all shadow-2xl shadow-brand-green/20 flex items-center justify-center gap-3">
-              {storeSaving ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <><Save size={18} /> Update Store</>}
+              {storeSaving ? <LoadingIndicator size="sm" /> : <><Save size={18} /> Update Store</>}
             </button>
           </form>
         </div>
@@ -2275,14 +2370,13 @@ function Directions({ origin, destination, onETAUpdate }: { origin: google.maps.
   return null;
 }
 
-function RiderView({ user, orders, vendors, onUpdateStatus }: { user: AuthUser, orders: Order[], vendors: any[], onUpdateStatus: (id: string, s: OrderStatus, extra?: any) => void }) {
+function RiderView({ user, orders, vendors, onUpdateStatus, activeTab, setActiveTab }: { user: AuthUser, orders: Order[], vendors: any[], onUpdateStatus: (id: string, s: OrderStatus, extra?: any) => void, activeTab: any, setActiveTab: (v: any) => void }) {
   const mapsLib = useMapsLibrary('core');
   const availableOrders = orders.filter(o => o.status === 'ready' && !o.rider_id);
   const myActiveOrders = orders.filter(o => o.rider_id === user.id && o.status !== 'delivered');
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [riderPos, setRiderPos] = useState<{lat: number, lng: number}>({ lat: 5.6037, lng: -0.1870 });
   const [navigatingTo, setNavigatingTo] = useState<{lat: number, lng: number} | null>(null);
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'history' | 'wallet' | 'profile'>('dashboard');
   const [profileForm, setProfileForm] = useState({ 
     email: user.email, 
     phone: (user as any).phone || '',
@@ -2411,20 +2505,7 @@ function RiderView({ user, orders, vendors, onUpdateStatus }: { user: AuthUser, 
       </header>
 
       {/* Mobile/Tablet Bottom Navigation */}
-      <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 flex md:hidden z-[100] px-4 py-2 justify-around">
-         <button onClick={() => setActiveTab('dashboard')} className={cn("flex flex-col items-center gap-0.5 py-1 px-3 rounded-xl transition-all", activeTab === 'dashboard' ? "text-brand-blue bg-brand-blue/5" : "text-slate-400")}>
-            <Layout size={20} />
-            <span className="text-[8px] font-black uppercase tracking-widest">Hub</span>
-         </button>
-         <button onClick={() => setActiveTab('history')} className={cn("flex flex-col items-center gap-0.5 py-1 px-3 rounded-xl transition-all", activeTab === 'history' ? "text-brand-blue bg-brand-blue/5" : "text-slate-400")}>
-            <Clock size={20} />
-            <span className="text-[8px] font-black uppercase tracking-widest">History</span>
-         </button>
-         <button onClick={() => setActiveTab('wallet')} className={cn("flex flex-col items-center gap-0.5 py-1 px-3 rounded-xl transition-all", activeTab === 'wallet' ? "text-brand-blue bg-brand-blue/5" : "text-slate-400")}>
-            <CreditCard size={20} />
-            <span className="text-[8px] font-black uppercase tracking-widest">Wallet</span>
-         </button>
-      </nav>
+      {/* Mobile/Tablet Bottom Navigation - Moved to App component */}
 
       {/* Always-visible Tab Bar */}
       <div className="flex gap-2 bg-slate-100 p-1 rounded-2xl w-full md:hidden">
@@ -2843,8 +2924,7 @@ function RiderView({ user, orders, vendors, onUpdateStatus }: { user: AuthUser, 
   );
 }
 
-function AdminView({ user, orders, addNotification }: { user: AuthUser, orders: Order[], addNotification: (m: string, t?: 'info' | 'success' | 'warning') => void }) {
-  const [activeTab, setActiveTab] = useState<'orders' | 'users' | 'zones' | 'products' | 'revenue'>('orders');
+function AdminView({ user, orders, addNotification, activeTab, setActiveTab }: { user: AuthUser, orders: Order[], addNotification: (m: string, t?: 'info' | 'success' | 'warning') => void, activeTab: any, setActiveTab: (v: any) => void }) {
   const [allUsers, setAllUsers] = useState<any[]>([]);
   const [zones, setZones] = useState<any[]>([]);
   const [pendingProducts, setPendingProducts] = useState<any[]>([]);
@@ -2906,20 +2986,7 @@ function AdminView({ user, orders, addNotification }: { user: AuthUser, orders: 
 
   return (
     <div className="space-y-10 pb-24 sm:pb-0 relative">
-       <nav className="fixed bottom-0 left-0 right-0 bg-white/80 backdrop-blur-xl border-t border-slate-100 flex sm:hidden z-[100] px-6 py-3 justify-around shadow-[0_-10px_30px_rgba(0,0,0,0.05)]">
-         <button onClick={() => setActiveTab('orders')} className={cn("flex flex-col items-center gap-1 transition-all", activeTab === 'orders' ? "text-brand-blue" : "text-slate-400")}>
-            <ShoppingBag size={20} className={activeTab === 'orders' ? "fill-brand-blue/10" : ""} />
-            <span className="text-[8px] font-black uppercase tracking-widest">Orders</span>
-         </button>
-         <button onClick={() => setActiveTab('users')} className={cn("flex flex-col items-center gap-1 transition-all", activeTab === 'users' ? "text-brand-blue" : "text-slate-400")}>
-            <Users size={20} className={activeTab === 'users' ? "fill-brand-blue/10" : ""} />
-            <span className="text-[8px] font-black uppercase tracking-widest">Users</span>
-         </button>
-         <button onClick={() => setActiveTab('zones')} className={cn("flex flex-col items-center gap-1 transition-all", activeTab === 'zones' ? "text-brand-blue" : "text-slate-400")}>
-            <MapPin size={20} className={activeTab === 'zones' ? "fill-brand-blue/10" : ""} />
-            <span className="text-[8px] font-black uppercase tracking-widest">Zones</span>
-         </button>
-      </nav>
+       {/* Mobile Bottom Navigation - Moved to App component */}
 
        <header className="flex flex-col lg:flex-row justify-between items-start lg:items-end gap-6">
           <div>

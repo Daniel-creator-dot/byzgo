@@ -116,3 +116,41 @@ export const ConfirmationModal: React.FC<ConfirmationModalProps> = ({
     </Modal>
   );
 };
+
+interface LoadingIndicatorProps {
+  size?: 'sm' | 'md' | 'lg' | 'xl';
+  className?: string;
+  withText?: boolean;
+  text?: string;
+}
+
+export const LoadingIndicator: React.FC<LoadingIndicatorProps> = ({ 
+  size = 'md', 
+  className = '', 
+  withText = false,
+  text = 'Loading...'
+}) => {
+  const sizes = {
+    sm: 'w-6 h-6',
+    md: 'w-12 h-12',
+    lg: 'w-20 h-20',
+    xl: 'w-32 h-32'
+  };
+
+  return (
+    <div className={cn("flex flex-col items-center justify-center gap-4", className)}>
+      <div className={cn("relative", sizes[size])}>
+        <img 
+          src="/loading.gif" 
+          alt="Loading..." 
+          className="w-full h-full object-contain"
+        />
+      </div>
+      {withText && (
+        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 animate-pulse">
+          {text}
+        </p>
+      )}
+    </div>
+  );
+};
