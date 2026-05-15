@@ -140,6 +140,7 @@ const initDb = async () => {
         ALTER TABLE orders ADD COLUMN IF NOT EXISTS region TEXT;
         ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_status TEXT DEFAULT 'pending';
         ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_method TEXT;
+        ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_fee DECIMAL(10,2) DEFAULT 0.00;
       EXCEPTION WHEN others THEN NULL;
       END $$;
 
@@ -556,7 +557,7 @@ app.get('/api/orders', authenticateToken, async (req: any, res) => {
 });
 
 app.post('/api/orders', authenticateToken, async (req: any, res) => {
-  const { items, total, address, pickup, orderType, order_type, scheduledTime, vendorId, lat, lng, region: providedRegion, payment_reference, payment_method } = req.body;
+  const { items, total, address, pickup, orderType, order_type, scheduledTime, vendorId, lat, lng, region: providedRegion, payment_reference, payment_method, delivery_fee } = req.body;
   
   let paymentStatus = 'pending';
   const finalPaymentMethod = payment_method || (payment_reference ? 'paystack' : 'pay_on_delivery');
@@ -633,8 +634,8 @@ app.post('/api/orders', authenticateToken, async (req: any, res) => {
     }
 
     const result = await pool.query(
-      'INSERT INTO orders (customer_id, vendor_id, items, total, address, pickup_address, order_type, scheduled_time, lat, lng, pickup_lat, pickup_lng, region, payment_status, payment_method) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING *',
-      [req.user.id, vendorId, JSON.stringify(items), total, address, finalPickup, finalOrderType, scheduledTime, lat, lng, pickupLat, pickupLng, finalRegion, paymentStatus, finalPaymentMethod]
+      'INSERT INTO orders (customer_id, vendor_id, items, total, address, pickup_address, order_type, scheduled_time, lat, lng, pickup_lat, pickup_lng, region, payment_status, payment_method, delivery_fee) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING *',
+      [req.user.id, vendorId, JSON.stringify(items), total, address || 'Customer Address', pickup || 'Vendor Address', orderType || order_type || 'food', scheduledTime || null, lat, lng, 0, 0, providedRegion || req.user.region, paymentStatus, finalPaymentMethod, delivery_fee || 0]
     );
     const order = result.rows[0];
     res.json(order);
@@ -684,7 +685,8 @@ app.patch('/api/orders/:id', authenticateToken, async (req: any, res) => {
             io.to(order.vendor_id).emit('wallet:updated', { balance: parseFloat(vRes.rows[0].balance) });
           }
           if (order.rider_id) {
-            const riderAmount = total * 0.1;
+            // Update Rider Wallet based on dynamic delivery fee
+            const riderAmount = order.delivery_fee && Number(order.delivery_fee) > 0 ? Number(order.delivery_fee) : total * 0.1;
             const rRes = await pool.query('UPDATE users SET balance = balance + $1 WHERE id = $2 RETURNING balance', [riderAmount, order.rider_id]);
             await pool.query(
               'INSERT INTO wallet_transactions (user_id, amount, type, reference) VALUES ($1, $2, $3, $4)',

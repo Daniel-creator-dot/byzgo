@@ -17,6 +17,19 @@ function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+// Helper to calculate distance between two coordinates in km (Haversine formula)
+function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number) {
+  if (!lat1 || !lon1 || !lat2 || !lon2) return 0;
+  const R = 6371; // km
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+            Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
 // Custom Motorbike Icon for better branding
 const MotorIcon = ({ size = 24, className = "" }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
@@ -68,6 +81,11 @@ interface AuthUser {
   balance: number;
   status?: string;
   region?: string;
+  lat?: number;
+  lng?: number;
+  phone?: string;
+  address?: string;
+  cover_image?: string;
 }
 
 function PullToRefresh({ onRefresh, refreshing, children }: { onRefresh: () => Promise<void>, refreshing: boolean, children: React.ReactNode }) {
@@ -168,6 +186,7 @@ function MainApp() {
   const [loading, setLoading] = useState(true);
   const [isLogoutModalOpen, setIsLogoutModalOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<string>('menu');
+  const [zones, setZones] = useState<any[]>([]);
   const [cart, setCart] = useState<any[]>(() => {
     try {
       const saved = localStorage.getItem('bytzgo_cart');
@@ -181,7 +200,22 @@ function MainApp() {
     localStorage.setItem('bytzgo_cart', JSON.stringify(cart));
   }, [cart]);
   const [isCartOpen, setIsCartOpen] = useState(false);
-  const cartTotal = cart.reduce((acc, item) => acc + (item.price * item.quantity), 0);
+  const subtotal = cart.reduce((acc, curr) => acc + (curr.price * curr.quantity), 0);
+  const calculateDeliveryFee = () => {
+    if (cart.length === 0 || !user) return 0;
+    const vendorId = cart[0].vendor_id;
+    const vendor = vendors.find(v => v.id === vendorId);
+    if (!vendor || !vendor.lat || !vendor.lng || !user.lat || !user.lng) return 10;
+    const distance = calculateDistance(user.lat, user.lng, vendor.lat, vendor.lng);
+    const zone = zones.find(z => z.region === user.region && z.is_active);
+    if (!zone) return 10;
+    const fee = Number(zone.base_price) + (distance * Number(zone.price_per_km));
+    const min = Number(zone.min_price);
+    const max = zone.max_price ? Number(zone.max_price) : Infinity;
+    return Math.max(min, Math.min(fee, max));
+  };
+  const deliveryFee = calculateDeliveryFee();
+  const total = subtotal + deliveryFee;
   const [riderLocations, setRiderLocations] = useState<{ [key: string]: { lat: number, lng: number } }>({});
   const [notifications, setNotifications] = useState<{ id: string, message: string, type: 'info' | 'success' | 'warning' }[]>([]);
   const [paystackKey, setPaystackKey] = useState<string>('');
@@ -192,18 +226,20 @@ function MainApp() {
     setRefreshing(true);
     try {
       const storedUser = JSON.parse(localStorage.getItem('user') || '{}');
-      const [profileRes, ordersRes, productsRes, vendorsRes, configRes] = await Promise.all([
+      const [profileRes, ordersRes, productsRes, vendorsRes, configRes, zonesRes] = await Promise.all([
         axios.get('/api/wallet'),
         axios.get('/api/orders'),
         axios.get('/api/products'),
-        axios.get('/api/vendors', { params: { region: (user as any)?.region || storedUser.region } }),
-        axios.get('/api/config/paystack').catch(() => ({ data: { publicKey: '' } }))
+        axios.get('/api/vendors', { params: { region: user?.region || storedUser.region } }),
+        axios.get('/api/config/paystack').catch(() => ({ data: { publicKey: '' } })),
+        axios.get('/api/delivery-zones').catch(() => ({ data: [] }))
       ]);
       setPaystackKey(configRes.data.publicKey);
       setUser(prev => prev ? { ...prev, balance: profileRes.data.balance } : { ...storedUser, balance: profileRes.data.balance });
       setOrders(ordersRes.data);
       setProducts(productsRes.data);
       setVendors(vendorsRes.data);
+      setZones(zonesRes.data);
     } catch (err) {
       console.error('Fetch failed', err);
     } finally {
@@ -493,17 +529,26 @@ function MainApp() {
                 cart={cart} setCart={setCart} isCartOpen={isCartOpen} setIsCartOpen={setIsCartOpen}
                 activeTab={activeTab} setActiveTab={setActiveTab}
                 onPlaceOrder={async (items, total, vendorId, extra = {}) => {
-                  await axios.post('/api/orders', { 
-                    items, 
-                    total, 
-                    vendorId,
-                    address: extra.address || (user as any).address || 'East Legon, Accra', 
-                    lat: extra.lat || (user as any).lat,
-                    lng: extra.lng || (user as any).lng,
-                    ...extra
-                  });
-                  await refreshData();
+                  try {
+                    await axios.post('/api/orders', { 
+                      items, 
+                      total, 
+                      vendorId,
+                      address: extra.address || user.address || 'East Legon, Accra', 
+                      lat: extra.lat || user.lat,
+                      lng: extra.lng || user.lng,
+                      ...extra
+                    });
+                    await refreshData();
+                  } catch (err) {
+                    console.error('Order failed', err);
+                    addNotification('Failed to place order', 'warning');
+                  }
                 }} 
+                zones={zones}
+                subtotal={subtotal}
+                deliveryFee={deliveryFee}
+                total={total}
               />}
               {user.role === 'vendor' && <VendorView user={user} orders={orders} products={products} riderLocations={riderLocations} onUpdateStatus={updateOrderStatus} addNotification={addNotification} onAddProduct={(p) => setProducts(prev => {
                 const exists = prev.find(item => item.id === p.id);
@@ -610,7 +655,7 @@ function MainApp() {
                     </span>
                   )}
                 </div>
-                <span className="font-black text-sm pr-2">GH₵{cartTotal.toFixed(2)}</span>
+                <span className="font-black text-sm pr-2">GH₵{subtotal.toFixed(2)}</span>
               </button>
             )}
 
@@ -682,12 +727,20 @@ function MainApp() {
                     )}
                   </div>
 
-                  {cart.length > 0 && (
-                    <div className="mt-8 pt-8 border-t border-slate-100 space-y-6">
-                      <div className="flex justify-between items-end">
-                        <span className="text-slate-400 font-black uppercase tracking-widest text-xs">Total Bill</span>
-                        <span className="text-3xl font-black tracking-tighter text-brand-blue italic">GH₵{cartTotal.toFixed(2)}</span>
-                      </div>
+                    {cart.length > 0 && (
+                      <div className="mt-8 pt-8 border-t border-slate-100 space-y-4">
+                        <div className="flex justify-between items-center text-slate-500">
+                          <span className="text-[10px] font-black uppercase tracking-widest">Subtotal</span>
+                          <span className="font-mono font-bold">GH₵{subtotal.toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between items-center text-brand-green bg-brand-green/5 p-3 rounded-2xl border border-brand-green/10">
+                          <span className="text-[10px] font-black uppercase tracking-widest">Delivery Fee (Rider Payout)</span>
+                          <span className="font-mono font-bold">GH₵{deliveryFee.toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between items-end pt-2">
+                          <span className="text-slate-400 font-black uppercase tracking-widest text-xs">Total Bill</span>
+                          <span className="text-3xl font-black tracking-tighter text-brand-blue italic">GH₵{total.toFixed(2)}</span>
+                        </div>
                       
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                         <button onClick={async () => {
@@ -706,12 +759,13 @@ function MainApp() {
                           const handler = (window as any).PaystackPop.setup({
                             key: currentKey,
                             email: user.email,
-                            amount: Math.round(cartTotal * 100),
+                            amount: Math.round(total * 100),
                             currency: 'GHS',
                             callback: (response: any) => {
                               axios.post('/api/orders', { 
                                 items: cart.map(item => ({ id: item.id, name: item.name, quantity: item.quantity, price: item.price })), 
-                                total: cartTotal, 
+                                total: total, 
+                                delivery_fee: deliveryFee,
                                 vendorId: cart[0].vendor_id, // Assuming same vendor for all items
                                 payment_reference: response.reference, 
                                 payment_method: 'paystack' 
@@ -728,11 +782,12 @@ function MainApp() {
                           <CreditCard size={14} /> Card/Momo
                         </button>
                         <button 
-                          disabled={user.balance < cartTotal}
+                          disabled={user.balance < total}
                           onClick={async () => {
                             await axios.post('/api/orders', { 
                               items: cart.map(item => ({ id: item.id, name: item.name, quantity: item.quantity, price: item.price })), 
-                              total: cartTotal, 
+                              total: total, 
+                              delivery_fee: deliveryFee,
                               vendorId: cart[0].vendor_id,
                               payment_method: 'wallet' 
                             });
@@ -749,7 +804,8 @@ function MainApp() {
                           onClick={async () => {
                             await axios.post('/api/orders', { 
                               items: cart.map(item => ({ id: item.id, name: item.name, quantity: item.quantity, price: item.price })), 
-                              total: cartTotal, 
+                              total: total, 
+                              delivery_fee: deliveryFee,
                               vendorId: cart[0].vendor_id,
                               payment_method: 'pay_on_delivery' 
                             });
@@ -1036,7 +1092,7 @@ function LocationAutocompleteInput({ placeholder, icon: Icon, value, onChange, o
 
 // REST OF THE VIEW COMPONENTS (CustomerView, VendorView, etc.) 
 // UPDATED TO USE REAL DATA FROM PROPS AND API
-function CustomerView({ user, orders, products, vendors, riderLocations, paystackKey, setPaystackKey, onPlaceOrder, addNotification, cart, setCart, isCartOpen, setIsCartOpen, activeTab, setActiveTab }: { user: AuthUser, orders: Order[], products: any[], vendors: any[], riderLocations: { [key: string]: { lat: number, lng: number } }, paystackKey: string, setPaystackKey: (k: string) => void, onPlaceOrder: (items: any[], total: number, vendorId?: string, extra?: any) => void, addNotification: (m: string, t?: 'info' | 'success' | 'warning') => void, cart: any[], setCart: React.Dispatch<React.SetStateAction<any[]>>, isCartOpen: boolean, setIsCartOpen: (v: boolean) => void, activeTab: string, setActiveTab: (v: any) => void }) {
+function CustomerView({ user, orders, products, vendors, riderLocations, paystackKey, setPaystackKey, onPlaceOrder, addNotification, cart, setCart, isCartOpen, setIsCartOpen, activeTab, setActiveTab, zones, subtotal, deliveryFee, total }: { user: AuthUser, orders: Order[], products: any[], vendors: any[], riderLocations: { [key: string]: { lat: number, lng: number } }, paystackKey: string, setPaystackKey: (k: string) => void, onPlaceOrder: (items: any[], total: number, vendorId?: string, extra?: any) => void, addNotification: (m: string, t?: 'info' | 'success' | 'warning') => void, cart: any[], setCart: React.Dispatch<React.SetStateAction<any[]>>, isCartOpen: boolean, setIsCartOpen: (v: boolean) => void, activeTab: string, setActiveTab: (v: any) => void, zones: any[], subtotal: number, deliveryFee: number, total: number }) {
   const [selectedVendor, setSelectedVendor] = useState<any | null>(null);
   const [isTopUpOpen, setIsTopUpOpen] = useState(false);
   const [topUpAmount, setTopUpAmount] = useState('50');
@@ -1044,7 +1100,7 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
   const [walletTab, setWalletTab] = useState<'topup' | 'withdraw'>('topup');
   const [withdrawAmount, setWithdrawAmount] = useState('');
   const [withdrawMethod, setWithdrawMethod] = useState<'momo' | 'bank'>('momo');
-  const [withdrawPhone, setWithdrawPhone] = useState((user as any).phone || '');
+  const [withdrawPhone, setWithdrawPhone] = useState(user.phone || '');
   const [withdrawNetwork, setWithdrawNetwork] = useState('mtn');
   const [withdrawBank, setWithdrawBank] = useState('');
   const [withdrawAccount, setWithdrawAccount] = useState('');
@@ -1064,12 +1120,28 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
   const [isMapOpen, setIsMapOpen] = useState(false);
   const [profileForm, setProfileForm] = useState({ 
     email: user.email, 
-    phone: (user as any).phone || '',
-    address: (user as any).address || '',
-    lat: (user as any).lat || 5.6037,
-    lng: (user as any).lng || -0.1870,
+    phone: user.phone || '',
+    address: user.address || '',
+    lat: user.lat || 5.6037,
+    lng: user.lng || -0.1870,
     region: user.region || ''
   });
+
+  const calculateCourierFee = () => {
+    if (!courierForm.pickup || !courierForm.destination) return 50;
+    const distance = calculateDistance(
+      courierForm.pickup.lat, courierForm.pickup.lng,
+      courierForm.destination.lat, courierForm.destination.lng
+    );
+    const zone = zones.find(z => z.region === user.region && z.is_active) || zones[0];
+    if (!zone) return 50;
+    const fee = Number(zone.base_price) + (distance * Number(zone.price_per_km));
+    const min = Number(zone.min_price);
+    const max = zone.max_price ? Number(zone.max_price) : Infinity;
+    return Math.max(min, Math.min(fee, max));
+  };
+  const courierFee = calculateCourierFee();
+
   const [profileSaving, setProfileSaving] = useState(false);
   const [profileMsg, setProfileMsg] = useState('');
 
@@ -1101,8 +1173,6 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
       return i;
     }));
   };
-
-  const total = cart.reduce((acc, curr) => acc + (curr.price * curr.quantity), 0);
 
   const handlePay = async () => {
     console.log('handlePay triggered. Cart length:', cart.length);
@@ -1379,10 +1449,16 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
 
           <form onSubmit={(e) => {
             e.preventDefault();
-            onPlaceOrder([{ id: 'courier-1', name: `Delivery: ${courierForm.itemDesc}`, quantity: 1, price: 50 }], 50, undefined, {
+            if (!courierForm.pickup || !courierForm.destination) return addNotification('Please select pickup and destination', 'warning');
+            onPlaceOrder([{ id: 'courier-1', name: `Delivery: ${courierForm.itemDesc}`, quantity: 1, price: courierFee }], courierFee, undefined, {
                order_type: 'courier',
-               address: courierForm.destination,
-               pickup: courierForm.pickup,
+               address: courierForm.destination.address,
+               pickup: courierForm.pickup.address,
+               lat: courierForm.destination.lat,
+               lng: courierForm.destination.lng,
+               pickup_lat: courierForm.pickup.lat,
+               pickup_lng: courierForm.pickup.lng,
+               delivery_fee: courierFee,
                payment_method: 'pay_on_delivery'
             });
             setActiveTab('tracking');
@@ -1490,7 +1566,7 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
 
             <div className="pt-4 sm:pt-8">
               <button type="submit" className="w-full py-4 sm:py-5 bg-slate-900 text-white rounded-2xl sm:rounded-[2rem] font-black uppercase tracking-widest text-[11px] sm:text-sm hover:scale-[1.02] active:scale-[0.98] transition-all shadow-2xl flex items-center justify-center gap-3">
-                 <Package size={18} /> Request Courier • GH₵50.00
+                 <Package size={18} /> Request Courier • GH₵{courierFee.toFixed(2)}
               </button>
             </div>
           </form>
@@ -1808,10 +1884,10 @@ function VendorView({ user, orders, products, riderLocations, onUpdateStatus, on
   const [uploading, setUploading] = useState(false);
   
   const [storeForm, setStoreForm] = useState({ 
-    cover_image: (user as any).cover_image || '', 
-    address: (user as any).address || '', 
-    lat: (user as any).lat || 5.6037, 
-    lng: (user as any).lng || -0.1870,
+    cover_image: user.cover_image || '', 
+    address: user.address || '', 
+    lat: user.lat || 5.6037, 
+    lng: user.lng || -0.1870,
     region: user.region || ''
   });
   const [storeSaving, setStoreSaving] = useState(false);
@@ -1951,7 +2027,7 @@ function VendorView({ user, orders, products, riderLocations, onUpdateStatus, on
                       )}
                       <TrackingMap 
                         riderLocation={riderLoc}
-                        pickupLocation={{ lat: (user as any).lat || 5.6037, lng: (user as any).lng || -0.1870 }}
+                        pickupLocation={{ lat: user.lat || 5.6037, lng: user.lng || -0.1870 }}
                         destination={{ lat: order.lat || 5.6037, lng: order.lng || -0.1870 }}
                         orderStatus={order.status}
                       />
@@ -2365,10 +2441,10 @@ function RiderView({ user, orders, vendors, onUpdateStatus, activeTab, setActive
   const [navigatingTo, setNavigatingTo] = useState<{lat: number, lng: number} | null>(null);
   const [profileForm, setProfileForm] = useState({ 
     email: user.email, 
-    phone: (user as any).phone || '',
-    address: (user as any).address || '',
-    lat: (user as any).lat || 5.6037,
-    lng: (user as any).lng || -0.1870,
+    phone: user.phone || '',
+    address: user.address || '',
+    lat: user.lat || 5.6037,
+    lng: user.lng || -0.1870,
     region: user.region || ''
   });
   const [profileSaving, setProfileSaving] = useState(false);

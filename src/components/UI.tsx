@@ -131,21 +131,20 @@ export const LoadingIndicator: React.FC<LoadingIndicatorProps> = ({
   text = 'Loading...'
 }) => {
   const sizes = {
-    sm: 'w-6 h-6',
-    md: 'w-12 h-12',
-    lg: 'w-20 h-20',
-    xl: 'w-32 h-32'
+    sm: 'w-5 h-5 border-2',
+    md: 'w-10 h-10 border-3',
+    lg: 'w-16 h-16 border-4',
+    xl: 'w-24 h-24 border-4'
   };
 
   return (
     <div className={cn("flex flex-col items-center justify-center gap-4", className)}>
-      <div className={cn("relative", sizes[size])}>
-        <img 
-          src="/loading.gif" 
-          alt="Loading..." 
-          className="w-full h-full object-contain"
-        />
-      </div>
+      <div 
+        className={cn(
+          "rounded-full animate-spin border-brand-blue/20 border-t-brand-blue",
+          sizes[size]
+        )}
+      />
       {withText && (
         <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 animate-pulse">
           {text}
