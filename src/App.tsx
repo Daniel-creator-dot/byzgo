@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { BrowserRouter, Routes, Route, useLocation, useNavigate } from 'react-router-dom';
 import { socket } from './lib/socket';
 import { Role, Order, OrderStatus } from './types.ts';
@@ -70,6 +70,75 @@ interface AuthUser {
   region?: string;
 }
 
+function PullToRefresh({ onRefresh, refreshing, children }: { onRefresh: () => Promise<void>, refreshing: boolean, children: React.ReactNode }) {
+  const [pullDistance, setPullDistance] = useState(0);
+  const [isPulling, setIsPulling] = useState(false);
+  const pullThreshold = 80;
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    if (window.scrollY <= 0) {
+      setIsPulling(true);
+      const touch = e.touches[0];
+      (window as any).startY = touch.screenY;
+    }
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (!isPulling) return;
+    const touch = e.touches[0];
+    const distance = touch.screenY - (window as any).startY;
+    if (distance > 0) {
+      setPullDistance(Math.min(distance * 0.4, pullThreshold + 20));
+      if (distance > 10 && window.scrollY <= 0) {
+        if (e.cancelable) e.preventDefault();
+      }
+    } else {
+      setIsPulling(false);
+      setPullDistance(0);
+    }
+  };
+
+  const handleTouchEnd = () => {
+    if (pullDistance >= pullThreshold) {
+      onRefresh();
+    }
+    setPullDistance(0);
+    setIsPulling(false);
+  };
+
+  return (
+    <div 
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+      className="relative"
+    >
+      <motion.div 
+        animate={{ height: refreshing ? 60 : pullDistance }}
+        transition={{ type: 'spring', damping: 20, stiffness: 200 }}
+        className="overflow-hidden flex items-center justify-center bg-slate-50 text-brand-blue"
+      >
+        <div className={cn("flex items-center gap-2 font-black text-[10px] uppercase tracking-widest transition-opacity", (pullDistance > 10 || refreshing) ? "opacity-100" : "opacity-0")}>
+          {refreshing ? (
+            <div className="flex items-center gap-2">
+              <div className="w-4 h-4 border-2 border-brand-blue border-t-transparent rounded-full animate-spin" />
+              <span>Refreshing...</span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              <Navigation size={14} className={cn("transition-transform duration-300", pullDistance >= pullThreshold ? "rotate-180" : "")} />
+              <span>{pullDistance >= pullThreshold ? "Release to refresh" : "Pull to refresh"}</span>
+            </div>
+          )}
+        </div>
+      </motion.div>
+      <div className={cn("transition-transform duration-200", isPulling && pullDistance > 0 ? "pointer-events-none" : "")} style={{ transform: `translateY(${refreshing ? 0 : pullDistance * 0.2}px)` }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   return (
     <BrowserRouter>
@@ -101,6 +170,31 @@ function MainApp() {
   const [riderLocations, setRiderLocations] = useState<{ [key: string]: { lat: number, lng: number } }>({});
   const [notifications, setNotifications] = useState<{ id: string, message: string, type: 'info' | 'success' | 'warning' }[]>([]);
   const [paystackKey, setPaystackKey] = useState<string>('');
+  const [refreshing, setRefreshing] = useState(false);
+
+  const refreshData = async () => {
+    if (!token) return;
+    setRefreshing(true);
+    try {
+      const storedUser = JSON.parse(localStorage.getItem('user') || '{}');
+      const [profileRes, ordersRes, productsRes, vendorsRes, configRes] = await Promise.all([
+        axios.get('/api/wallet'),
+        axios.get('/api/orders'),
+        axios.get('/api/products'),
+        axios.get('/api/vendors', { params: { region: (user as any)?.region || storedUser.region } }),
+        axios.get('/api/config/paystack').catch(() => ({ data: { publicKey: '' } }))
+      ]);
+      setPaystackKey(configRes.data.publicKey);
+      setUser(prev => prev ? { ...prev, balance: profileRes.data.balance } : { ...storedUser, balance: profileRes.data.balance });
+      setOrders(ordersRes.data);
+      setProducts(productsRes.data);
+      setVendors(vendorsRes.data);
+    } catch (err) {
+      console.error('Fetch failed', err);
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   const addNotification = (message: string, type: 'info' | 'success' | 'warning' = 'info') => {
     const id = Math.random().toString(36).substr(2, 9);
@@ -141,21 +235,8 @@ function MainApp() {
 
     const init = async () => {
       try {
+        await refreshData();
         const storedUser = JSON.parse(localStorage.getItem('user') || '{}');
-        const [profileRes, ordersRes, productsRes, vendorsRes, configRes] = await Promise.all([
-          axios.get('/api/wallet'),
-          axios.get('/api/orders'),
-          axios.get('/api/products'),
-          axios.get('/api/vendors', { params: { region: storedUser.region } }),
-          axios.get('/api/config/paystack').catch(() => ({ data: { publicKey: '' } }))
-        ]);
-        setPaystackKey(configRes.data.publicKey);
-        
-        setUser({ ...storedUser, balance: profileRes.data.balance });
-        setOrders(ordersRes.data);
-        setProducts(productsRes.data);
-        setVendors(vendorsRes.data);
-        
         socket.connect();
         socket.emit('join', storedUser.id);
       } catch (err) {
@@ -325,59 +406,62 @@ function MainApp() {
           type="danger"
         />
 
-        <main className="p-4 sm:p-8 max-w-7xl mx-auto pb-24">
-          <AnimatePresence>
-            <div className="fixed top-4 right-4 z-[9999] space-y-2 pointer-events-none">
-              {notifications.map(n => (
-                <motion.div 
-                  key={n.id} 
-                  initial={{ opacity: 0, x: 50, scale: 0.9 }} 
-                  animate={{ opacity: 1, x: 0, scale: 1 }} 
-                  exit={{ opacity: 0, x: 50, scale: 0.9 }}
-                  className={cn(
-                    "px-6 py-4 rounded-2xl shadow-2xl border flex items-center gap-3 pointer-events-auto",
-                    n.type === 'success' ? "bg-brand-green text-white border-brand-green/20" : 
-                    n.type === 'warning' ? "bg-red-500 text-white border-red-500/20" : 
-                    "bg-slate-900 text-white border-slate-700"
-                  )}
-                >
-                  <span className="text-sm font-black uppercase tracking-widest">{n.message}</span>
-                  <button onClick={() => setNotifications(prev => prev.filter(nn => nn.id !== n.id))} className="ml-2 hover:opacity-50 transition-opacity">
-                    <X size={14} />
-                  </button>
-                </motion.div>
-              ))}
-            </div>
-          </AnimatePresence>
-
-          <AnimatePresence mode="wait">
-            {user.role === 'customer' && <CustomerView user={user} orders={orders} products={products} vendors={vendors} riderLocations={riderLocations} paystackKey={paystackKey} setPaystackKey={setPaystackKey} addNotification={addNotification} onPlaceOrder={async (items, total, vendorId, extra = {}) => {
-              await axios.post('/api/orders', { 
-                items, 
-                total, 
-                vendorId,
-                address: extra.address || (user as any).address || 'East Legon, Accra', 
-                lat: extra.lat || (user as any).lat,
-                lng: extra.lng || (user as any).lng,
-                ...extra
-              });
-            }} />}
-            {user.role === 'vendor' && <VendorView user={user} orders={orders} products={products} riderLocations={riderLocations} onUpdateStatus={updateOrderStatus} addNotification={addNotification} onAddProduct={(p) => setProducts(prev => {
-              const exists = prev.find(item => item.id === p.id);
-              if (exists) return prev.map(item => item.id === p.id ? p : item);
-              return [...prev, p];
-            })} onDeleteProduct={async (id) => {
-              try {
-                await axios.delete(`/api/products/${id}`);
-                setProducts(prev => prev.filter(p => p.id !== id));
-              } catch (err) {
-                console.error('Delete product failed', err);
-              }
-            }} />}
-            {user.role === 'rider' && <RiderView user={user} orders={orders} vendors={vendors} onUpdateStatus={updateOrderStatus} />}
-            {user.role === 'admin' && <AdminView user={user} orders={orders} addNotification={addNotification} />}
-          </AnimatePresence>
-        </main>
+        <PullToRefresh onRefresh={refreshData} refreshing={refreshing}>
+          <main className="p-4 sm:p-8 max-w-7xl mx-auto pb-24">
+            <AnimatePresence>
+              <div className="fixed top-4 right-4 z-[9999] space-y-2 pointer-events-none">
+                {notifications.map(n => (
+                  <motion.div 
+                    key={n.id} 
+                    initial={{ opacity: 0, x: 50, scale: 0.9 }} 
+                    animate={{ opacity: 1, x: 0, scale: 1 }} 
+                    exit={{ opacity: 0, x: 50, scale: 0.9 }}
+                    className={cn(
+                      "px-6 py-4 rounded-2xl shadow-2xl border flex items-center gap-3 pointer-events-auto",
+                      n.type === 'success' ? "bg-brand-green text-white border-brand-green/20" : 
+                      n.type === 'warning' ? "bg-red-500 text-white border-red-500/20" : 
+                      "bg-slate-900 text-white border-slate-700"
+                    )}
+                  >
+                    <span className="text-sm font-black uppercase tracking-widest">{n.message}</span>
+                    <button onClick={() => setNotifications(prev => prev.filter(nn => nn.id !== n.id))} className="ml-2 hover:opacity-50 transition-opacity">
+                      <X size={14} />
+                    </button>
+                  </motion.div>
+                ))}
+              </div>
+            </AnimatePresence>
+  
+            <AnimatePresence mode="wait">
+              {user.role === 'customer' && <CustomerView user={user} orders={orders} products={products} vendors={vendors} riderLocations={riderLocations} paystackKey={paystackKey} setPaystackKey={setPaystackKey} addNotification={addNotification} onPlaceOrder={async (items, total, vendorId, extra = {}) => {
+                await axios.post('/api/orders', { 
+                  items, 
+                  total, 
+                  vendorId,
+                  address: extra.address || (user as any).address || 'East Legon, Accra', 
+                  lat: extra.lat || (user as any).lat,
+                  lng: extra.lng || (user as any).lng,
+                  ...extra
+                });
+                await refreshData();
+              }} />}
+              {user.role === 'vendor' && <VendorView user={user} orders={orders} products={products} riderLocations={riderLocations} onUpdateStatus={updateOrderStatus} addNotification={addNotification} onAddProduct={(p) => setProducts(prev => {
+                const exists = prev.find(item => item.id === p.id);
+                if (exists) return prev.map(item => item.id === p.id ? p : item);
+                return [...prev, p];
+              })} onDeleteProduct={async (id) => {
+                try {
+                  await axios.delete(`/api/products/${id}`);
+                  setProducts(prev => prev.filter(p => p.id !== id));
+                } catch (err) {
+                  console.error('Delete product failed', err);
+                }
+              }} />}
+              {user.role === 'rider' && <RiderView user={user} orders={orders} vendors={vendors} onUpdateStatus={updateOrderStatus} />}
+              {user.role === 'admin' && <AdminView user={user} orders={orders} addNotification={addNotification} />}
+            </AnimatePresence>
+          </main>
+        </PullToRefresh>
       </div>
     </APIProvider>
   );
