@@ -1900,24 +1900,6 @@ function VendorView({ user, orders, products, riderLocations, onUpdateStatus, on
 
   return (
     <div className="space-y-6 sm:space-y-10 pb-24 sm:pb-0 relative">
-       {/* Mobile Bottom Navigation - Moved to App component */}
-         <button onClick={() => setActiveTab('orders')} className={cn("flex flex-col items-center gap-0.5 py-1 px-3 rounded-xl transition-all", activeTab === 'orders' ? "text-brand-blue bg-brand-blue/5" : "text-slate-400")}>
-            <ShoppingBag size={20} />
-            <span className="text-[8px] font-black uppercase tracking-widest">Orders</span>
-         </button>
-         <button onClick={() => setActiveTab('products')} className={cn("flex flex-col items-center gap-0.5 py-1 px-3 rounded-xl transition-all", activeTab === 'products' ? "text-brand-blue bg-brand-blue/5" : "text-slate-400")}>
-            <Layout size={20} />
-            <span className="text-[8px] font-black uppercase tracking-widest">Menu</span>
-         </button>
-         <button onClick={() => setActiveTab('store')} className={cn("flex flex-col items-center gap-0.5 py-1 px-3 rounded-xl transition-all", activeTab === 'store' ? "text-brand-blue bg-brand-blue/5" : "text-slate-400")}>
-            <Store size={20} />
-            <span className="text-[8px] font-black uppercase tracking-widest">Store</span>
-         </button>
-         <button onClick={() => setActiveTab('wallet')} className={cn("flex flex-col items-center gap-0.5 py-1 px-3 rounded-xl transition-all", activeTab === 'wallet' ? "text-brand-blue bg-brand-blue/5" : "text-slate-400")}>
-            <CreditCard size={20} />
-            <span className="text-[8px] font-black uppercase tracking-widest">Wallet</span>
-         </button>
-      </nav>
        <header className="flex flex-col gap-4 sm:gap-6">
         <div>
           <h2 className="text-2xl sm:text-4xl font-black tracking-tighter text-slate-800 uppercase italic">Kitchen Command</h2>
