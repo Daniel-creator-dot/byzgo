@@ -167,6 +167,21 @@ function MainApp() {
   const [products, setProducts] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [isLogoutModalOpen, setIsLogoutModalOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<string>('menu');
+  const [cart, setCart] = useState<any[]>(() => {
+    try {
+      const saved = localStorage.getItem('bytzgo_cart');
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    localStorage.setItem('bytzgo_cart', JSON.stringify(cart));
+  }, [cart]);
+  const [isCartOpen, setIsCartOpen] = useState(false);
+  const cartTotal = cart.reduce((acc, item) => acc + (item.price * item.quantity), 0);
   const [riderLocations, setRiderLocations] = useState<{ [key: string]: { lat: number, lng: number } }>({});
   const [notifications, setNotifications] = useState<{ id: string, message: string, type: 'info' | 'success' | 'warning' }[]>([]);
   const [paystackKey, setPaystackKey] = useState<string>('');
@@ -443,18 +458,25 @@ function MainApp() {
             </AnimatePresence>
   
             <AnimatePresence mode="wait">
-              {user.role === 'customer' && <CustomerView user={user} orders={orders} products={products} vendors={vendors} riderLocations={riderLocations} paystackKey={paystackKey} setPaystackKey={setPaystackKey} addNotification={addNotification} onPlaceOrder={async (items, total, vendorId, extra = {}) => {
-                await axios.post('/api/orders', { 
-                  items, 
-                  total, 
-                  vendorId,
-                  address: extra.address || (user as any).address || 'East Legon, Accra', 
-                  lat: extra.lat || (user as any).lat,
-                  lng: extra.lng || (user as any).lng,
-                  ...extra
-                });
-                await refreshData();
-              }} />}
+              {user.role === 'customer' && <CustomerView 
+                user={user} orders={orders} products={products} vendors={vendors} 
+                riderLocations={riderLocations} paystackKey={paystackKey} setPaystackKey={setPaystackKey} 
+                addNotification={addNotification} 
+                cart={cart} setCart={setCart} isCartOpen={isCartOpen} setIsCartOpen={setIsCartOpen}
+                activeTab={activeTab} setActiveTab={setActiveTab}
+                onPlaceOrder={async (items, total, vendorId, extra = {}) => {
+                  await axios.post('/api/orders', { 
+                    items, 
+                    total, 
+                    vendorId,
+                    address: extra.address || (user as any).address || 'East Legon, Accra', 
+                    lat: extra.lat || (user as any).lat,
+                    lng: extra.lng || (user as any).lng,
+                    ...extra
+                  });
+                  await refreshData();
+                }} 
+              />}
               {user.role === 'vendor' && <VendorView user={user} orders={orders} products={products} riderLocations={riderLocations} onUpdateStatus={updateOrderStatus} addNotification={addNotification} onAddProduct={(p) => setProducts(prev => {
                 const exists = prev.find(item => item.id === p.id);
                 if (exists) return prev.map(item => item.id === p.id ? p : item);
@@ -472,6 +494,184 @@ function MainApp() {
             </AnimatePresence>
           </main>
         </PullToRefresh>
+
+        {/* Global Floating Elements for Customer */}
+        {user?.role === 'customer' && (
+          <AnimatePresence>
+            {/* Cart Floating Button */}
+            {activeTab !== 'profile' && (
+              <button 
+                onClick={() => setIsCartOpen(true)}
+                className="fixed bottom-28 sm:bottom-8 right-4 sm:right-8 z-[60] bg-brand-blue text-white p-4 rounded-3xl shadow-2xl shadow-brand-blue/40 flex items-center gap-3 hover:scale-110 active:scale-95 transition-all"
+              >
+                <div className="relative">
+                  <ShoppingBag size={24} />
+                  {cart.length > 0 && (
+                    <span className="absolute -top-2 -right-2 bg-brand-green text-white text-[10px] font-black w-5 h-5 rounded-full flex items-center justify-center border-2 border-brand-blue">
+                      {cart.reduce((a, b) => a + b.quantity, 0)}
+                    </span>
+                  )}
+                </div>
+                <span className="font-black text-sm pr-2">GH₵{cartTotal.toFixed(2)}</span>
+              </button>
+            )}
+
+            {/* Track Order Floating Button */}
+            {orders.filter(o => o.customer_id === user.id && o.status !== 'delivered' && o.status !== 'cancelled').length > 0 && activeTab !== 'tracking' && (
+              <button
+                onClick={() => setActiveTab('tracking')}
+                className="fixed bottom-28 sm:bottom-8 left-4 sm:left-8 z-[60] bg-slate-900 text-white px-5 sm:px-6 py-3 sm:py-4 rounded-3xl shadow-2xl flex items-center gap-3 hover:scale-105 active:scale-95 transition-all group"
+              >
+                <div className="relative">
+                  <Navigation size={20} className="animate-pulse" />
+                  <span className="absolute -top-1 -right-1 w-3 h-3 bg-brand-green rounded-full border-2 border-slate-900 animate-ping" />
+                  <span className="absolute -top-1 -right-1 w-3 h-3 bg-brand-green rounded-full border-2 border-slate-900" />
+                </div>
+                <span className="font-black text-xs uppercase tracking-widest">Track · {orders.filter(o => o.customer_id === user.id && o.status !== 'delivered' && o.status !== 'cancelled').length}</span>
+              </button>
+            )}
+
+            {/* Global Cart Modal */}
+            {isCartOpen && (
+              <>
+                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsCartOpen(false)} className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[200]" />
+                <motion.div 
+                  initial={{ y: '100%' }} 
+                  animate={{ y: 0 }} 
+                  exit={{ y: '100%' }} 
+                  transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+                  className="fixed bottom-0 left-0 right-0 sm:inset-y-0 sm:right-0 sm:left-auto w-full sm:max-w-md h-auto sm:h-full max-h-[95vh] sm:max-h-none bg-white z-[210] shadow-2xl p-6 sm:p-8 pb-32 sm:pb-8 flex flex-col rounded-t-[3rem] sm:rounded-none"
+                >
+                  <div className="w-12 h-1.5 bg-slate-100 rounded-full mx-auto mb-6 sm:hidden" />
+                  <div className="flex justify-between items-center mb-8">
+                    <h3 className="text-3xl font-black italic tracking-tighter">Your Bytz</h3>
+                    <button onClick={() => setIsCartOpen(false)} className="p-2 hover:bg-slate-100 rounded-xl transition-colors">
+                      <X size={20} />
+                    </button>
+                  </div>
+
+                  <div className="flex-1 overflow-y-auto space-y-4 pr-2">
+                    {cart.length === 0 ? (
+                      <div className="text-center py-20">
+                        <ShoppingBag size={48} className="mx-auto text-slate-200 mb-4" />
+                        <p className="text-slate-400 font-bold italic uppercase tracking-tighter">Empty stomach, empty cart.</p>
+                      </div>
+                    ) : (
+                      cart.map(item => (
+                        <div key={item.id} className="bg-slate-50 p-4 rounded-2xl flex items-center justify-between border border-slate-100">
+                          <div className="flex items-center gap-4">
+                            <div className="w-12 h-12 bg-white rounded-xl shadow-sm flex items-center justify-center text-brand-blue font-black">
+                              {item.name[0]}
+                            </div>
+                            <div>
+                              <h4 className="font-black text-sm">{item.name}</h4>
+                              <p className="text-xs font-mono text-brand-blue">GH₵{Number(item.price).toFixed(2)}</p>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <button onClick={() => {
+                              const newCart = cart.map(i => i.id === item.id ? { ...i, quantity: Math.max(0, i.quantity - 1) } : i).filter(i => i.quantity > 0);
+                              setCart(newCart);
+                            }} className="w-8 h-8 rounded-lg bg-white border border-slate-200 flex items-center justify-center font-black">-</button>
+                            <span className="font-mono font-black text-sm">{item.quantity}</span>
+                            <button onClick={() => {
+                              const newCart = cart.map(i => i.id === item.id ? { ...i, quantity: i.quantity + 1 } : i);
+                              setCart(newCart);
+                            }} className="w-8 h-8 rounded-lg bg-white border border-slate-200 flex items-center justify-center font-black">+</button>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+
+                  {cart.length > 0 && (
+                    <div className="mt-8 pt-8 border-t border-slate-100 space-y-6">
+                      <div className="flex justify-between items-end">
+                        <span className="text-slate-400 font-black uppercase tracking-widest text-xs">Total Bill</span>
+                        <span className="text-3xl font-black tracking-tighter text-brand-blue italic">GH₵{cartTotal.toFixed(2)}</span>
+                      </div>
+                      
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <button onClick={async () => {
+                          // Handle Pay logic moved to App or duplicated
+                          let currentKey = paystackKey;
+                          if (!currentKey) {
+                            try {
+                              const res = await axios.get('/api/config/paystack');
+                              currentKey = res.data.publicKey;
+                              setPaystackKey(currentKey);
+                            } catch (e) {}
+                          }
+                          if (!currentKey) return addNotification('Payment system offline', 'warning');
+                          if (!(window as any).PaystackPop) return addNotification('Paystack not loaded', 'warning');
+
+                          const handler = (window as any).PaystackPop.setup({
+                            key: currentKey,
+                            email: user.email,
+                            amount: Math.round(cartTotal * 100),
+                            currency: 'GHS',
+                            callback: (response: any) => {
+                              axios.post('/api/orders', { 
+                                items: cart.map(item => ({ id: item.id, name: item.name, quantity: item.quantity, price: item.price })), 
+                                total: cartTotal, 
+                                vendorId: cart[0].vendor_id, // Assuming same vendor for all items
+                                payment_reference: response.reference, 
+                                payment_method: 'paystack' 
+                              }).then(() => {
+                                setCart([]);
+                                setIsCartOpen(false);
+                                setActiveTab('tracking');
+                                refreshData();
+                              });
+                            }
+                          });
+                          handler.openIframe();
+                        }} className="py-4 bg-slate-900 text-white rounded-2xl font-black uppercase tracking-widest text-[10px] hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-2">
+                          <CreditCard size={14} /> Card/Momo
+                        </button>
+                        <button 
+                          disabled={user.balance < cartTotal}
+                          onClick={async () => {
+                            await axios.post('/api/orders', { 
+                              items: cart.map(item => ({ id: item.id, name: item.name, quantity: item.quantity, price: item.price })), 
+                              total: cartTotal, 
+                              vendorId: cart[0].vendor_id,
+                              payment_method: 'wallet' 
+                            });
+                            setCart([]);
+                            setIsCartOpen(false);
+                            setActiveTab('tracking');
+                            refreshData();
+                          }}
+                          className="py-4 bg-brand-blue text-white rounded-2xl font-black uppercase tracking-widest text-[10px] hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-2 disabled:opacity-30"
+                        >
+                          <ShoppingBag size={14} /> Wallet
+                        </button>
+                        <button 
+                          onClick={async () => {
+                            await axios.post('/api/orders', { 
+                              items: cart.map(item => ({ id: item.id, name: item.name, quantity: item.quantity, price: item.price })), 
+                              total: cartTotal, 
+                              vendorId: cart[0].vendor_id,
+                              payment_method: 'pay_on_delivery' 
+                            });
+                            setCart([]);
+                            setIsCartOpen(false);
+                            setActiveTab('tracking');
+                            refreshData();
+                          }}
+                          className="py-4 bg-brand-green text-white rounded-2xl font-black uppercase tracking-widest text-[10px] hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-2"
+                        >
+                          <Package size={14} /> Pay on Delivery
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </motion.div>
+              </>
+            )}
+          </AnimatePresence>
+        )}
       </div>
     </APIProvider>
   );
@@ -722,24 +922,10 @@ function LocationAutocompleteInput({ placeholder, icon: Icon, value, onChange, o
 
 // REST OF THE VIEW COMPONENTS (CustomerView, VendorView, etc.) 
 // UPDATED TO USE REAL DATA FROM PROPS AND API
-function CustomerView({ user, orders, products, vendors, riderLocations, paystackKey, setPaystackKey, onPlaceOrder, addNotification }: { user: AuthUser, orders: Order[], products: any[], vendors: any[], riderLocations: { [key: string]: { lat: number, lng: number } }, paystackKey: string, setPaystackKey: (k: string) => void, onPlaceOrder: (items: any[], total: number, vendorId?: string, extra?: any) => void, addNotification: (m: string, t?: 'info' | 'success' | 'warning') => void }) {
-  const [activeTab, setActiveTab] = useState<'menu' | 'courier' | 'tracking' | 'profile'>('menu');
+function CustomerView({ user, orders, products, vendors, riderLocations, paystackKey, setPaystackKey, onPlaceOrder, addNotification, cart, setCart, isCartOpen, setIsCartOpen, activeTab, setActiveTab }: { user: AuthUser, orders: Order[], products: any[], vendors: any[], riderLocations: { [key: string]: { lat: number, lng: number } }, paystackKey: string, setPaystackKey: (k: string) => void, onPlaceOrder: (items: any[], total: number, vendorId?: string, extra?: any) => void, addNotification: (m: string, t?: 'info' | 'success' | 'warning') => void, cart: any[], setCart: React.Dispatch<React.SetStateAction<any[]>>, isCartOpen: boolean, setIsCartOpen: (v: boolean) => void, activeTab: string, setActiveTab: (v: any) => void }) {
   const [selectedVendor, setSelectedVendor] = useState<any | null>(null);
   const [isTopUpOpen, setIsTopUpOpen] = useState(false);
   const [topUpAmount, setTopUpAmount] = useState('50');
-  const [cart, setCart] = useState<any[]>(() => {
-    try {
-      const saved = localStorage.getItem('bytzgo_cart');
-      return saved ? JSON.parse(saved) : [];
-    } catch (e) {
-      return [];
-    }
-  });
-
-  useEffect(() => {
-    localStorage.setItem('bytzgo_cart', JSON.stringify(cart));
-  }, [cart]);
-  const [isCartOpen, setIsCartOpen] = useState(false);
   const [orderToCancel, setOrderToCancel] = useState<Order | null>(null);
   const [walletTab, setWalletTab] = useState<'topup' | 'withdraw'>('topup');
   const [withdrawAmount, setWithdrawAmount] = useState('');
@@ -877,36 +1063,6 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
       </nav>
 
       {/* Modals and Cart Logic same as before */}
-       <button 
-        onClick={() => setIsCartOpen(true)}
-        className="fixed bottom-28 sm:bottom-8 right-4 sm:right-8 z-[60] bg-brand-blue text-white p-4 rounded-3xl shadow-2xl shadow-brand-blue/40 flex items-center gap-3 hover:scale-110 active:scale-95 transition-all"
-      >
-        <div className="relative">
-          <ShoppingBag size={24} />
-          {cart.length > 0 && (
-            <span className="absolute -top-2 -right-2 bg-brand-green text-white text-[10px] font-black w-5 h-5 rounded-full flex items-center justify-center border-2 border-brand-blue">
-              {cart.reduce((a, b) => a + b.quantity, 0)}
-            </span>
-          )}
-        </div>
-        <span className="font-black text-sm pr-2">GH₵{total.toFixed(2)}</span>
-      </button>
-
-      {/* Track Order floating pill - bottom left */}
-      {myOrders.filter(o => o.status !== 'delivered' && o.status !== 'cancelled').length > 0 && activeTab !== 'tracking' && (
-        <button
-          onClick={() => setActiveTab('tracking')}
-          className="fixed bottom-28 sm:bottom-8 left-4 sm:left-8 z-[60] bg-slate-900 text-white px-5 sm:px-6 py-3 sm:py-4 rounded-3xl shadow-2xl flex items-center gap-3 hover:scale-105 active:scale-95 transition-all group"
-        >
-          <div className="relative">
-            <Navigation size={20} className="animate-pulse" />
-            <span className="absolute -top-1 -right-1 w-3 h-3 bg-brand-green rounded-full border-2 border-slate-900 animate-ping" />
-            <span className="absolute -top-1 -right-1 w-3 h-3 bg-brand-green rounded-full border-2 border-slate-900" />
-          </div>
-          <span className="font-black text-xs uppercase tracking-widest">Track · {myOrders.filter(o => o.status !== 'delivered' && o.status !== 'cancelled').length}</span>
-        </button>
-      )}
-
       {/* Modals */}
       <AnimatePresence>
         {isTopUpOpen && (
@@ -1014,92 +1170,7 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
             </motion.div>
           </>
         )}
-        {isCartOpen && (
-          <>
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsCartOpen(false)} className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[70]" />
-            <motion.div 
-              initial={{ y: '100%' }} 
-              animate={{ y: 0 }} 
-              exit={{ y: '100%' }} 
-              transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-              className="fixed bottom-0 left-0 right-0 sm:inset-y-0 sm:right-0 sm:left-auto w-full sm:max-w-md h-auto sm:h-full max-h-[95vh] sm:max-h-none bg-white z-[80] shadow-2xl p-6 sm:p-8 pb-32 sm:pb-8 flex flex-col rounded-t-[3rem] sm:rounded-none"
-            >
-              <div className="w-12 h-1.5 bg-slate-100 rounded-full mx-auto mb-6 sm:hidden" />
-              <div className="flex justify-between items-center mb-8">
-                <h3 className="text-3xl font-black italic tracking-tighter">Your Bytz</h3>
-                <button onClick={() => setIsCartOpen(false)} className="p-2 hover:bg-slate-100 rounded-xl transition-colors">
-                  <X size={20} />
-                </button>
-              </div>
-
-              <div className="flex-1 overflow-y-auto space-y-4 pr-2">
-                {cart.length === 0 ? (
-                  <div className="text-center py-20">
-                    <ShoppingBag size={48} className="mx-auto text-slate-200 mb-4" />
-                    <p className="text-slate-400 font-bold italic uppercase tracking-tighter">Empty stomach, empty cart.</p>
-                  </div>
-                ) : (
-                  cart.map(item => (
-                    <div key={item.id} className="bg-slate-50 p-4 rounded-2xl flex items-center justify-between border border-slate-100">
-                      <div className="flex items-center gap-4">
-                        <div className="w-12 h-12 bg-white rounded-xl shadow-sm flex items-center justify-center text-brand-blue font-black">
-                          {item.name[0]}
-                        </div>
-                        <div>
-                          <h4 className="font-black text-sm">{item.name}</h4>
-                          <p className="text-xs font-mono text-brand-blue">GH₵{Number(item.price).toFixed(2)}</p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <button onClick={() => updateQuantity(item.id, -1)} className="w-8 h-8 rounded-lg bg-white border border-slate-200 flex items-center justify-center font-black">-</button>
-                        <span className="font-mono font-black text-sm">{item.quantity}</span>
-                        <button onClick={() => updateQuantity(item.id, 1)} className="w-8 h-8 rounded-lg bg-white border border-slate-200 flex items-center justify-center font-black">+</button>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-
-              {cart.length > 0 && (
-                <div className="mt-8 pt-8 border-t border-slate-100 space-y-6">
-                  <div className="flex justify-between items-end">
-                    <span className="text-slate-400 font-black uppercase tracking-widest text-xs">Total Bill</span>
-                    <span className="text-3xl font-black tracking-tighter text-brand-blue italic">GH₵{total.toFixed(2)}</span>
-                  </div>
-                  
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                    <button onClick={handlePay} className="py-4 bg-slate-900 text-white rounded-2xl font-black uppercase tracking-widest text-[10px] hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-2">
-                      <CreditCard size={14} /> Card/Momo
-                    </button>
-                    <button 
-                      disabled={user.balance < total}
-                      onClick={() => {
-                        onPlaceOrder(cart.map(item => ({ id: item.id, name: item.name, quantity: item.quantity, price: item.price })), total, selectedVendor?.id, { payment_method: 'wallet' });
-                        setCart([]);
-                        setIsCartOpen(false);
-                        setActiveTab('tracking');
-                      }}
-                      className="py-4 bg-brand-blue text-white rounded-2xl font-black uppercase tracking-widest text-[10px] hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-2 disabled:opacity-30"
-                    >
-                      <ShoppingBag size={14} /> Wallet
-                    </button>
-                    <button 
-                      onClick={() => {
-                        onPlaceOrder(cart.map(item => ({ id: item.id, name: item.name, quantity: item.quantity, price: item.price })), total, selectedVendor?.id, { payment_method: 'pay_on_delivery' });
-                        setCart([]);
-                        setIsCartOpen(false);
-                        setActiveTab('tracking');
-                      }}
-                      className="py-4 bg-brand-green text-white rounded-2xl font-black uppercase tracking-widest text-[10px] hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-2"
-                    >
-                      <Package size={14} /> Pay on Delivery
-                    </button>
-                  </div>
-                </div>
-              )}
-            </motion.div>
-          </>
-        )}
+        {isCartOpen && null}
       </AnimatePresence>
 
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
