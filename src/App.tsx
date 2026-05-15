@@ -159,7 +159,7 @@ function MainApp() {
     return 'customer';
   };
 
-  const forcedRole = getExpectedRole() === 'customer' ? undefined : getExpectedRole();
+  const forcedRole = getExpectedRole() as Role;
   const [user, setUser] = useState<AuthUser | null>(null);
   const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
   const [vendors, setVendors] = useState<any[]>([]);
@@ -254,10 +254,16 @@ function MainApp() {
             credential: idToken,
             role: savedRole
           });
+          localStorage.removeItem('google_login_role');
+          // Block login if role doesn't match the expected role for this path
+          const expected = getExpectedRole();
+          if (res.data.user.role !== expected) {
+            console.warn(`Role mismatch: got ${res.data.user.role}, expected ${expected}`);
+            return; // Silently reject — user stays on login screen
+          }
           setUser(res.data.user);
           setToken(res.data.token);
           localStorage.setItem('user', JSON.stringify(res.data.user));
-          localStorage.removeItem('google_login_role');
         }
       } catch (err) {
         console.error('Redirect result failed', err);
@@ -349,9 +355,15 @@ function MainApp() {
   }, [user?.region]);
 
   const handleLogin = (userData: AuthUser, authToken: string) => {
+    // Block login if user role doesn't match the expected role for this path
+    const expected = getExpectedRole();
+    if (userData.role !== expected) {
+      return false; // Signal rejection to AuthScreen
+    }
     setUser(userData);
     setToken(authToken);
     localStorage.setItem('user', JSON.stringify(userData));
+    return true;
   };
 
   const handleLogout = () => {
@@ -390,26 +402,11 @@ function MainApp() {
     );
   }
 
-  // If user is logged in but role doesn't match the path (for non-customers)
+  // Safety net: if somehow a mismatched role gets through, auto-logout
   const currentExpectedRole = getExpectedRole();
-  if (user.role !== currentExpectedRole && currentExpectedRole !== 'customer') {
-    return (
-      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4">
-        <div className="bg-white p-8 rounded-[2.5rem] shadow-xl border border-slate-100 text-center max-w-md">
-          <div className="w-20 h-20 bg-red-50 text-red-500 rounded-3xl flex items-center justify-center mx-auto mb-6">
-            <Shield size={40} />
-          </div>
-          <h2 className="text-2xl font-black mb-2">Access Restricted</h2>
-          <p className="text-slate-500 mb-8 font-medium">Your account type ({user.role}) does not have permission to access the {currentExpectedRole} dashboard.</p>
-          <button 
-            onClick={() => navigate('/')}
-            className="w-full py-4 bg-slate-900 text-white rounded-2xl font-black uppercase tracking-widest text-xs transition-all"
-          >
-            Go to My Dashboard
-          </button>
-        </div>
-      </div>
-    );
+  if (user.role !== currentExpectedRole) {
+    handleLogout();
+    return null;
   }
 
   return (
@@ -778,7 +775,7 @@ function MainApp() {
   );
 }
 
-function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: string) => void, forcedRole?: Role }) {
+function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: string) => boolean | void, forcedRole?: Role }) {
   const [isLogin, setIsLogin] = useState(true);
   const [role, setRole] = useState<Role>(forcedRole || 'customer');
 
@@ -802,7 +799,11 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
       const payload = isLogin ? { email, password } : { name, email, password, role };
       
       const res = await axios.post(endpoint, payload);
-      onLogin(res.data.user, res.data.token);
+      const accepted = onLogin(res.data.user, res.data.token);
+      if (accepted === false) {
+        // Role mismatch — show generic error, don't reveal the real reason
+        setError('Authentication failed. Please check your credentials.');
+      }
     } catch (err: any) {
       setError('Authentication failed. Please check your credentials.');
     } finally {
@@ -960,7 +961,10 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
                         credential: idToken,
                         role: role
                       });
-                      onLogin(res.data.user, res.data.token);
+                      const accepted = onLogin(res.data.user, res.data.token);
+                      if (accepted === false) {
+                        setError('Authentication failed. Please check your credentials.');
+                      }
                     }
                   } catch (err: any) {
                     setError('Authentication failed. Please try again.');
