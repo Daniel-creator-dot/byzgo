@@ -346,15 +346,15 @@ function MainApp() {
       if (user?.role === 'vendor' && order.vendor_id === user.id) {
         addNotification('🔔 New order received!', 'success');
       }
-      if (user?.role === 'rider' && (order as any).order_type === 'courier') {
+      if (user?.role === 'rider' && user.status === 'active' && (order as any).order_type === 'courier') {
         addNotification('📦 New courier mission available!', 'info');
       }
     });
 
     socket.on('order:updated', (updatedOrder: Order) => {
       setOrders(prev => prev.map(o => o.id === updatedOrder.id ? updatedOrder : o));
-      if (user?.role === 'rider' && updatedOrder.status === 'ready' && !updatedOrder.rider_id) {
-        addNotification('ðŸ“¦ New order is ready for pickup!', 'info');
+      if (user?.role === 'rider' && user.status === 'active' && updatedOrder.status === 'ready' && !updatedOrder.rider_id) {
+        addNotification('📦 New order is ready for pickup!', 'info');
       }
       if (user?.role === 'customer' && updatedOrder.status === 'picked_up' && updatedOrder.customer_id === user.id) {
         addNotification('ðŸšš Your order has been picked up!', 'info');
