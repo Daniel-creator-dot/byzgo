@@ -343,8 +343,11 @@ function MainApp() {
 
     socket.on('order:new', (order: Order) => {
       setOrders(prev => [order, ...prev]);
-      if (user?.role === 'vendor') {
-        addNotification('ðŸ”” New order received!', 'success');
+      if (user?.role === 'vendor' && order.vendor_id === user.id) {
+        addNotification('🔔 New order received!', 'success');
+      }
+      if (user?.role === 'rider' && (order as any).order_type === 'courier') {
+        addNotification('📦 New courier mission available!', 'info');
       }
     });
 
