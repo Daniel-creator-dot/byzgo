@@ -21,6 +21,9 @@ export interface Order {
   rating_comment?: string;
   payment_status?: string;
   payment_method?: string;
+  scheduled_time?: string;
+  pickup_lat?: number;
+  pickup_lng?: number;
 }
 
 export interface Rider {

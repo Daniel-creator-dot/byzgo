@@ -1475,7 +1475,8 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
                pickup_lat: courierForm.pickup.lat,
                pickup_lng: courierForm.pickup.lng,
                delivery_fee: courierFee,
-               payment_method: 'pay_on_delivery'
+               payment_method: 'pay_on_delivery',
+               scheduled_time: courierForm.scheduledTime === 'later' ? `${courierForm.scheduleDate} ${courierForm.scheduleClock}` : null
             });
             setActiveTab('tracking');
           }} className="space-y-5 sm:space-y-6">
@@ -2684,6 +2685,16 @@ function RiderView({ user, orders, vendors, onUpdateStatus, activeTab, setActive
                     <span className={cn("font-mono font-black", isCourier ? "text-brand-green" : "text-brand-blue")}>₵{order.total}</span>
                  </div>
 
+                  {(order as any).scheduled_time && (
+                    <div className={cn(
+                      "flex items-center gap-2 mb-4 p-3 rounded-2xl border",
+                      isCourier ? "bg-white/10 border-white/20 text-white" : "bg-brand-blue/10 border-brand-blue/20 text-brand-blue"
+                    )}>
+                      <Clock size={14} />
+                      <span className="text-[10px] font-black uppercase tracking-widest">Scheduled: {(order as any).scheduled_time}</span>
+                    </div>
+                  )}
+
                  {vendor && (
                    <div className={cn("p-3 sm:p-4 rounded-xl mb-3 space-y-1", isCourier ? "bg-white/5" : "bg-brand-blue/5")}>
                      <p className={cn("text-[10px] font-black uppercase tracking-widest", isCourier ? "text-slate-400" : "text-brand-blue")}>Pickup from</p>
@@ -2729,8 +2740,15 @@ function RiderView({ user, orders, vendors, onUpdateStatus, activeTab, setActive
                          <PaymentStatusBadge order={order} />
                       </div>
                       {isCourier && <Send size={14} className="text-brand-blue" />}
-                    </div>
-                    <span className="px-3 py-1 bg-white/10 rounded-lg text-[10px] font-black uppercase tracking-widest">{order.status.replace('_', ' ')}</span>
+                      <span className="px-3 py-1 bg-white/10 rounded-lg text-[10px] font-black uppercase tracking-widest">{order.status.replace('_', ' ')}</span>
+                 </div>
+                 
+                 {(order as any).scheduled_time && (
+                   <div className="flex items-center gap-2 mb-4 p-3 rounded-2xl border bg-white/10 border-white/20 text-white">
+                     <Clock size={14} />
+                     <span className="text-[10px] font-black uppercase tracking-widest">Scheduled: {(order as any).scheduled_time}</span>
+                   </div>
+                 )}
                  </div>
 
                  <div className="space-y-3 mb-6">
