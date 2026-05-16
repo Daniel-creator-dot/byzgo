@@ -1003,7 +1003,7 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
               disabled={loading}
               className="w-full py-4 bg-brand-blue text-white rounded-2xl font-black uppercase tracking-widest text-xs hover:scale-[1.02] active:scale-[0.98] transition-all shadow-xl shadow-brand-blue/20 flex items-center justify-center gap-2"
             >
-              {loading ? <LoadingIndicator size="sm" /> : (isLogin ? 'Sign In' : 'Create Account')}
+              {loading ? <LoadingIndicator size="sm" variant="white" /> : (isLogin ? 'Sign In' : 'Create Account')}
             </button>
           </form>
 
@@ -1048,7 +1048,7 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
                 disabled={loading}
               >
                 {loading ? (
-                  <LoadingIndicator size="sm" />
+                  <LoadingIndicator size="sm" variant="white" />
                 ) : (
                   <>
                     <svg width="18" height="18" viewBox="0 0 24 24">
@@ -1144,7 +1144,7 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
   });
 
   const calculateCourierFee = () => {
-    if (!courierForm.pickup || !courierForm.destination) return 50;
+    if (!courierForm.pickup || !courierForm.destination) return 0;
     const distance = calculateDistance(
       courierForm.pickup.lat, courierForm.pickup.lng,
       courierForm.destination.lat, courierForm.destination.lng
@@ -1582,7 +1582,7 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
 
             <div className="pt-4 sm:pt-8">
               <button type="submit" className="w-full py-4 sm:py-5 bg-slate-900 text-white rounded-2xl sm:rounded-[2rem] font-black uppercase tracking-widest text-[11px] sm:text-sm hover:scale-[1.02] active:scale-[0.98] transition-all shadow-2xl flex items-center justify-center gap-3">
-                 <Package size={18} /> Request Courier â€¢ GHâ‚µ{courierFee.toFixed(2)}
+                 <Package size={18} /> Request Courier {courierFee > 0 && `â€¢ GHâ‚µ${courierFee.toFixed(2)}`}
               </button>
             </div>
           </form>

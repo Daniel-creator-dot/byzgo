@@ -122,13 +122,15 @@ interface LoadingIndicatorProps {
   className?: string;
   withText?: boolean;
   text?: string;
+  variant?: 'blue' | 'white' | 'green';
 }
 
 export const LoadingIndicator: React.FC<LoadingIndicatorProps> = ({ 
   size = 'md', 
   className = '', 
   withText = false,
-  text = 'Loading...'
+  text = 'Loading...',
+  variant = 'blue'
 }) => {
   const sizes = {
     sm: 'w-5 h-5 border-2',
@@ -137,11 +139,18 @@ export const LoadingIndicator: React.FC<LoadingIndicatorProps> = ({
     xl: 'w-24 h-24 border-4'
   };
 
+  const variants = {
+    blue: 'border-brand-blue/20 border-t-brand-blue',
+    white: 'border-white/20 border-t-white',
+    green: 'border-brand-green/20 border-t-brand-green'
+  };
+
   return (
     <div className={cn("flex flex-col items-center justify-center gap-4", className)}>
       <div 
         className={cn(
-          "rounded-full animate-spin border-brand-blue/20 border-t-brand-blue",
+          "rounded-full animate-spin",
+          variants[variant],
           sizes[size]
         )}
       />
