@@ -225,9 +225,10 @@ app.post('/api/auth/register', async (req, res) => {
   const { name, email, password, role } = req.body;
   try {
     const hashedPassword = await bcrypt.hash(password, 10);
+    const userStatus = (role === 'vendor' || role === 'rider') ? 'pending' : 'active';
     const result = await pool.query(
-      'INSERT INTO users (name, email, password, role) VALUES ($1, $2, $3, $4) RETURNING id, name, email, role, balance',
-      [name, email, hashedPassword, role]
+      'INSERT INTO users (name, email, password, role, status) VALUES ($1, $2, $3, $4, $5) RETURNING id, name, email, role, balance, status',
+      [name, email, hashedPassword, role, userStatus]
     );
     const user = result.rows[0];
     const token = jwt.sign(user, process.env.JWT_SECRET as string);
@@ -267,12 +268,11 @@ app.post('/api/auth/google', async (req, res) => {
     // Check if user exists
     let result = await pool.query('SELECT * FROM users WHERE email = $1', [payload.email]);
     let user = result.rows[0];
-    
     if (!user) {
-      // Register new user from Google
+      const userStatus = (role === 'vendor' || role === 'rider') ? 'pending' : 'active';
       result = await pool.query(
-        'INSERT INTO users (name, email, google_id, role) VALUES ($1, $2, $3, $4) RETURNING id, name, email, role, balance, phone',
-        [payload.name, payload.email, payload.sub, role || 'customer']
+        'INSERT INTO users (name, email, google_id, role, status) VALUES ($1, $2, $3, $4, $5) RETURNING id, name, email, role, balance, phone, status',
+        [payload.name, payload.email, payload.sub, role || 'customer', userStatus]
       );
       user = result.rows[0];
     } else {
@@ -356,6 +356,10 @@ app.post('/api/upload', authenticateToken, upload.single('image'), (req: any, re
 app.post('/api/wallet/topup', authenticateToken, async (req: any, res) => {
   const { reference } = req.body;
   try {
+    const userRes = await pool.query('SELECT status FROM users WHERE id = $1', [req.user.id]);
+    if (userRes.rows[0]?.status !== 'active') {
+      return res.status(403).json({ message: 'Your account is pending approval.' });
+    }
     const secretKey = await getSetting('paystack_secret_key');
     const response = await axios.get(`https://api.paystack.co/transaction/verify/${reference}`, {
       headers: {
@@ -397,11 +401,17 @@ app.get('/api/config/paystack', async (_req, res) => {
 });
 
 app.post('/api/wallet/withdraw', authenticateToken, async (req: any, res) => {
-  const { amount, phone, network } = req.body; // In a real app, you'd integrate Mobile Money API
+  const { amount, phone, network } = req.body;
   try {
+    const userRes = await pool.query('SELECT status, balance FROM users WHERE id = $1', [req.user.id]);
+    const userData = userRes.rows[0];
+    
+    if (userData?.status !== 'active') {
+      return res.status(403).json({ message: 'Your account is pending approval.' });
+    }
+    
     // Check if user has enough balance
-    const userRes = await pool.query('SELECT balance FROM users WHERE id = $1', [req.user.id]);
-    if (parseFloat(userRes.rows[0].balance) < amount) {
+    if (parseFloat(userData.balance) < amount) {
       return res.status(400).json({ message: 'Insufficient balance' });
     }
     
@@ -429,7 +439,7 @@ app.post('/api/wallet/withdraw', authenticateToken, async (req: any, res) => {
 app.get('/api/vendors', async (req, res) => {
   const { region } = req.query;
   try {
-    let query = 'SELECT id, name, email, phone, cover_image, address, lat, lng, region FROM users WHERE role = $1';
+    let query = 'SELECT id, name, email, phone, cover_image, address, lat, lng, region FROM users WHERE role = $1 AND status = \'active\'';
     const params: any[] = ['vendor'];
     
     if (region) {
@@ -477,6 +487,10 @@ app.post('/api/products', authenticateToken, async (req: any, res) => {
   if (req.user.role !== 'vendor' && req.user.role !== 'admin') return res.sendStatus(403);
   const { name, description, price, category, image_url } = req.body;
   try {
+    const userRes = await pool.query('SELECT status FROM users WHERE id = $1', [req.user.id]);
+    if (userRes.rows[0]?.status !== 'active' && req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Your account is pending approval.' });
+    }
     const result = await pool.query(
       'INSERT INTO products (vendor_id, name, description, price, category, image_url) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
       [req.user.id, name, description, price, category, image_url]
@@ -492,6 +506,10 @@ app.patch('/api/products/:id', authenticateToken, async (req: any, res) => {
   const { name, description, price, category, image_url, is_available } = req.body;
   const { id } = req.params;
   try {
+    const userRes = await pool.query('SELECT status FROM users WHERE id = $1', [req.user.id]);
+    if (userRes.rows[0]?.status !== 'active' && req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Your account is pending approval.' });
+    }
     const result = await pool.query(
       `UPDATE products SET 
         name = COALESCE($1, name),
@@ -518,8 +536,29 @@ app.patch('/api/products/:id', authenticateToken, async (req: any, res) => {
 app.get('/api/admin/users', authenticateToken, async (req: any, res) => {
   if (req.user.role !== 'admin') return res.sendStatus(403);
   try {
-    const result = await pool.query('SELECT id, name, email, role, balance, created_at FROM users');
+    const result = await pool.query('SELECT id, name, email, role, balance, created_at, status FROM users ORDER BY created_at DESC');
     res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.patch('/api/admin/users/:id/status', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'admin') return res.sendStatus(403);
+  const { status } = req.body;
+  const { id } = req.params;
+  try {
+    const result = await pool.query(
+      'UPDATE users SET status = $1 WHERE id = $2 RETURNING id, name, email, role, status',
+      [status, id]
+    );
+    if (result.rows[0]) {
+      res.json(result.rows[0]);
+      // Emit socket event to notify the user if they are connected
+      io.to(id).emit('status:updated', { status });
+    } else {
+      res.status(404).json({ message: 'User not found' });
+    }
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
   }
@@ -538,8 +577,11 @@ app.get('/api/orders', authenticateToken, async (req: any, res) => {
       query += " WHERE vendor_id = $1"; 
       params.push(req.user.id);
     } else if (req.user.role === 'rider') {
-      // Riders see orders that are ready and in their region, or orders they have already accepted
-      const userRes = await pool.query('SELECT region FROM users WHERE id = $1', [req.user.id]);
+      // Check if rider is active
+      const userRes = await pool.query('SELECT region, status FROM users WHERE id = $1', [req.user.id]);
+      if (userRes.rows[0]?.status !== 'active') {
+        return res.json([]); // Return no orders for pending/disabled riders
+      }
       const userRegion = userRes.rows[0]?.region;
       
       query += " WHERE (status = 'ready' AND (region = $2 OR region IS NULL)) OR rider_id = $1";
@@ -649,7 +691,15 @@ app.post('/api/orders', authenticateToken, async (req: any, res) => {
 app.patch('/api/orders/:id', authenticateToken, async (req: any, res) => {
   const { status, riderId } = req.body;
   const orderId = req.params.id;
+  
   try {
+    // Check if vendor/rider is active before allowing updates
+    if (req.user.role === 'vendor' || req.user.role === 'rider') {
+      const userRes = await pool.query('SELECT status FROM users WHERE id = $1', [req.user.id]);
+      if (userRes.rows[0]?.status !== 'active') {
+        return res.status(403).json({ message: 'Your account is pending approval.' });
+      }
+    }
     let updateQuery = 'UPDATE orders SET status = $1';
     const params: any[] = [status];
     
