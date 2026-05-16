@@ -461,7 +461,7 @@ function MainApp() {
           <div className="flex items-center gap-2 sm:gap-6">
             <div className="flex items-center gap-2 bg-slate-50 px-3 py-1.5 sm:px-4 sm:py-2 rounded-xl sm:rounded-2xl border border-slate-100 shadow-inner">
               <span className="text-[8px] sm:text-[10px] font-black uppercase tracking-widest text-slate-400 hidden xs:block">Balance</span>
-              <span className="font-mono font-black text-xs sm:text-base text-brand-blue">â‚µ{Number(user.balance || 0).toFixed(2)}</span>
+              <span className="font-mono font-black text-xs sm:text-base text-brand-blue">₵{Number(user.balance || 0).toFixed(2)}</span>
             </div>
             <div className="flex items-center gap-1 sm:gap-3">
               <div className="text-right hidden md:block">
@@ -671,7 +671,7 @@ function MainApp() {
                     </span>
                   )}
                 </div>
-                <span className="font-black text-sm pr-2">GHâ‚µ{subtotal.toFixed(2)}</span>
+                <span className="font-black text-sm pr-2">GH₵{subtotal.toFixed(2)}</span>
               </button>
             )}
 
@@ -686,7 +686,7 @@ function MainApp() {
                   <span className="absolute -top-1 -right-1 w-3 h-3 bg-brand-green rounded-full border-2 border-slate-900 animate-ping" />
                   <span className="absolute -top-1 -right-1 w-3 h-3 bg-brand-green rounded-full border-2 border-slate-900" />
                 </div>
-                <span className="font-black text-xs uppercase tracking-widest">Track Â· {orders.filter(o => o.customer_id === user.id && o.status !== 'delivered' && o.status !== 'cancelled').length}</span>
+                <span className="font-black text-xs uppercase tracking-widest">Track · {orders.filter(o => o.customer_id === user.id && o.status !== 'delivered' && o.status !== 'cancelled').length}</span>
               </button>
             )}
 
@@ -724,7 +724,7 @@ function MainApp() {
                             </div>
                             <div>
                               <h4 className="font-black text-sm">{item.name}</h4>
-                              <p className="text-xs font-mono text-brand-blue">GHâ‚µ{Number(item.price).toFixed(2)}</p>
+                              <p className="text-xs font-mono text-brand-blue">GH₵{Number(item.price).toFixed(2)}</p>
                             </div>
                           </div>
                           <div className="flex items-center gap-3">
@@ -747,15 +747,15 @@ function MainApp() {
                       <div className="mt-8 pt-8 border-t border-slate-100 space-y-4">
                         <div className="flex justify-between items-center text-slate-500">
                           <span className="text-[10px] font-black uppercase tracking-widest">Subtotal</span>
-                          <span className="font-mono font-bold">GHâ‚µ{subtotal.toFixed(2)}</span>
+                          <span className="font-mono font-bold">GH₵{subtotal.toFixed(2)}</span>
                         </div>
                         <div className="flex justify-between items-center text-brand-green bg-brand-green/5 p-3 rounded-2xl border border-brand-green/10">
                           <span className="text-[10px] font-black uppercase tracking-widest">Delivery Fee (Rider Payout)</span>
-                          <span className="font-mono font-bold">GHâ‚µ{deliveryFee.toFixed(2)}</span>
+                          <span className="font-mono font-bold">GH₵{deliveryFee.toFixed(2)}</span>
                         </div>
                         <div className="flex justify-between items-end pt-2">
                           <span className="text-slate-400 font-black uppercase tracking-widest text-xs">Total Bill</span>
-                          <span className="text-3xl font-black tracking-tighter text-brand-blue italic">GHâ‚µ{total.toFixed(2)}</span>
+                          <span className="text-3xl font-black tracking-tighter text-brand-blue italic">GH₵{total.toFixed(2)}</span>
                         </div>
                       
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -961,7 +961,7 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
                   required
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢"
+                  placeholder="••••••••"
                   className="w-full bg-slate-50 border border-slate-100 p-4 pl-12 rounded-2xl focus:outline-none focus:border-brand-blue font-bold text-sm"
                 />
                 <button 
@@ -1265,7 +1265,7 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
                    <h3 className="text-xl font-black italic tracking-tighter mb-4 text-slate-800">Top Up Wallet</h3>
                    <div className="grid grid-cols-2 gap-2 mb-6">
                       {['20', '50', '100', '200'].map(val => (
-                        <button key={val} onClick={() => setTopUpAmount(val)} className={cn("py-3 rounded-xl font-bold transition-all border text-sm", topUpAmount === val ? "bg-brand-blue text-white border-brand-blue shadow-lg" : "bg-slate-50 text-slate-500 border-slate-100")}>â‚µ{val}</button>
+                        <button key={val} onClick={() => setTopUpAmount(val)} className={cn("py-3 rounded-xl font-bold transition-all border text-sm", topUpAmount === val ? "bg-brand-blue text-white border-brand-blue shadow-lg" : "bg-slate-50 text-slate-500 border-slate-100")}>₵{val}</button>
                       ))}
                    </div>
                    <div className="mb-6">
@@ -1367,7 +1367,7 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
           </div>
           <div onClick={() => setIsTopUpOpen(true)} className="group cursor-pointer bg-brand-blue px-4 sm:px-6 py-2 sm:py-3 rounded-xl sm:rounded-2xl text-white shadow-xl shadow-brand-blue/20 flex flex-col items-start hover:scale-105 transition-all">
              <span className="text-[7px] sm:text-[8px] font-black uppercase tracking-widest opacity-60">Wallet</span>
-             <span className="text-xs sm:text-sm font-black font-mono">â‚µ{Number(user.balance || 0).toFixed(2)}</span>
+             <span className="text-xs sm:text-sm font-black font-mono">₵{Number(user.balance || 0).toFixed(2)}</span>
           </div>
         </div>
         <div className="flex p-1 bg-slate-200 rounded-2xl w-full sm:w-auto shadow-inner">
@@ -1407,7 +1407,7 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
                       <div className="flex items-center justify-between gap-3 sm:gap-4">
                         <div className="flex flex-col">
                           <span className="text-[8px] sm:text-[10px] font-black text-slate-300 uppercase tracking-widest">Price</span>
-                          <span className="font-mono font-black text-lg sm:text-xl text-brand-blue">â‚µ{Number(item.price).toFixed(2)}</span>
+                          <span className="font-mono font-black text-lg sm:text-xl text-brand-blue">₵{Number(item.price).toFixed(2)}</span>
                         </div>
                          <button onClick={() => addToCart(item)} className="flex-1 py-3 sm:py-4 bg-slate-900 text-white rounded-xl sm:rounded-2xl font-black text-[10px] sm:text-xs hover:bg-brand-blue transition-all uppercase tracking-widest shadow-lg">Add</button>
                       </div>
@@ -1582,7 +1582,7 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
 
             <div className="pt-4 sm:pt-8">
               <button type="submit" className="w-full py-4 sm:py-5 bg-slate-900 text-white rounded-2xl sm:rounded-[2rem] font-black uppercase tracking-widest text-[11px] sm:text-sm hover:scale-[1.02] active:scale-[0.98] transition-all shadow-2xl flex items-center justify-center gap-3">
-                 <Package size={18} /> Request Courier {courierFee > 0 && `â€¢ GHâ‚µ${courierFee.toFixed(2)}`}
+                 <Package size={18} /> Request Courier {courierFee > 0 && ` · GH₵${courierFee.toFixed(2)}`}
               </button>
             </div>
           </form>
@@ -2028,7 +2028,7 @@ function VendorView({ user, orders, products, riderLocations, onUpdateStatus, on
                       <h4 className="font-black text-lg sm:text-2xl tracking-tighter">Order #{order.id.slice(-4)}</h4>
                       <p className="text-brand-green font-mono text-xs uppercase tracking-widest mt-1">{order.customerName}</p>
                     </div>
-                    <div className="font-mono font-black text-base sm:text-xl text-slate-800">GHâ‚µ{order.total}</div>
+                    <div className="font-mono font-black text-base sm:text-xl text-slate-800">GH₵{order.total}</div>
                   </div>
 
                   {isTrackingActive && (
@@ -2054,7 +2054,7 @@ function VendorView({ user, orders, products, riderLocations, onUpdateStatus, on
                     {order.items.map((item, idx) => (
                       <div key={idx} className="flex justify-between text-xs sm:text-sm font-bold">
                         <span className="text-slate-600">{item.quantity}x {item.name}</span>
-                        <span className="text-slate-400">GHâ‚µ{item.price}</span>
+                        <span className="text-slate-400">GH₵{item.price}</span>
                       </div>
                     ))}
                   </div>
@@ -2093,7 +2093,7 @@ function VendorView({ user, orders, products, riderLocations, onUpdateStatus, on
                      </div>
                    )}
                    <div className="absolute top-4 right-4 bg-white/90 backdrop-blur px-3 py-1 rounded-lg text-xs font-black text-brand-blue">
-                     GHâ‚µ{product.price}
+                     GH₵{product.price}
                    </div>
                  </div>
                  <div className="p-6">
@@ -2140,7 +2140,7 @@ function VendorView({ user, orders, products, riderLocations, onUpdateStatus, on
                      </div>
 
                      <div className="flex gap-4">
-                        <input type="number" step="0.01" placeholder="Price (GHâ‚µ)" required className="flex-1 bg-slate-50 border border-slate-100 p-4 rounded-xl focus:outline-none focus:border-brand-blue font-bold text-sm" value={newProduct.price} onChange={(e) => setNewProduct({...newProduct, price: e.target.value})} />
+                        <input type="number" step="0.01" placeholder="Price (GH₵)" required className="flex-1 bg-slate-50 border border-slate-100 p-4 rounded-xl focus:outline-none focus:border-brand-blue font-bold text-sm" value={newProduct.price} onChange={(e) => setNewProduct({...newProduct, price: e.target.value})} />
                         <select className="flex-1 bg-slate-50 border border-slate-100 p-4 rounded-xl focus:outline-none focus:border-brand-blue font-bold text-sm" value={newProduct.category} onChange={(e) => setNewProduct({...newProduct, category: e.target.value})}>
                            <option>Food</option>
                            <option>Drinks</option>
@@ -2275,7 +2275,7 @@ function VendorView({ user, orders, products, riderLocations, onUpdateStatus, on
               <CreditCard size={24} className="sm:w-8 sm:h-8" />
             </div>
             <h3 className="font-black uppercase tracking-widest text-slate-800 text-sm sm:text-lg">Available Balance</h3>
-            <p className="text-4xl sm:text-5xl font-black tracking-tighter text-brand-green mt-1 sm:mt-2">â‚µ{Number(user.balance || 0).toFixed(2)}</p>
+            <p className="text-4xl sm:text-5xl font-black tracking-tighter text-brand-green mt-1 sm:mt-2">₵{Number(user.balance || 0).toFixed(2)}</p>
           </div>
           
           <form onSubmit={handleWithdraw} className="space-y-4 bg-slate-50 p-4 sm:p-8 rounded-[1.5rem] sm:rounded-[2rem] border border-slate-100">
@@ -2369,7 +2369,7 @@ function VendorView({ user, orders, products, riderLocations, onUpdateStatus, on
 
             {/* Amount */}
             <div>
-              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2 ml-2 sm:ml-4">Withdraw Amount (â‚µ)</label>
+              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2 ml-2 sm:ml-4">Withdraw Amount (₵)</label>
               <input 
                 type="number" 
                 required 
@@ -2563,7 +2563,7 @@ function RiderView({ user, orders, vendors, onUpdateStatus, activeTab, setActive
         
         <div className="flex flex-col gap-3 md:gap-4 items-end w-full md:w-auto">
           <div className="flex gap-2 md:gap-4 w-full md:w-auto overflow-x-auto pb-1 md:pb-0 no-scrollbar">
-             <StatBox label="Earnings" value={`â‚µ${Number(user.balance || 0).toFixed(2)}`} color="green" />
+             <StatBox label="Earnings" value={`₵${Number(user.balance || 0).toFixed(2)}`} color="green" />
              <StatBox label="Delivered" value={orders.filter(o => o.rider_id === user.id && o.status === 'delivered').length} color="blue" />
           </div>
           <div className="hidden md:flex gap-2 bg-slate-100 p-1 rounded-2xl w-full md:w-auto items-center">
@@ -2681,7 +2681,7 @@ function RiderView({ user, orders, vendors, onUpdateStatus, activeTab, setActive
                         <h4 className="font-black text-lg sm:text-xl tracking-tighter">#{order.id.slice(-4)}</h4>
                         <PaymentStatusBadge order={order} />
                      </div>
-                    <span className={cn("font-mono font-black", isCourier ? "text-brand-green" : "text-brand-blue")}>â‚µ{order.total}</span>
+                    <span className={cn("font-mono font-black", isCourier ? "text-brand-green" : "text-brand-blue")}>₵{order.total}</span>
                  </div>
 
                  {vendor && (
@@ -2790,13 +2790,13 @@ function RiderView({ user, orders, vendors, onUpdateStatus, activeTab, setActive
                     <div>
                       <div className="flex items-center gap-2 mb-1">
                         <p className="text-xs font-black text-slate-400">Order #{order.id.slice(-4)}</p>
-                        <span className="text-[10px] font-mono text-slate-300 uppercase tracking-widest">â€¢ {new Date((order as any).created_at || order.createdAt).toDateString()}</span>
+                        <span className="text-[10px] font-mono text-slate-300 uppercase tracking-widest">• {new Date((order as any).created_at || order.createdAt).toDateString()}</span>
                       </div>
                       <p className="text-sm font-bold text-slate-700">{vendor?.name || 'Unknown Vendor'} âž” {order.address}</p>
                     </div>
                     <div className="text-right">
                       <p className="text-xs font-black uppercase tracking-widest text-brand-green mb-1">Delivered</p>
-                      <p className="font-mono font-black text-brand-blue">â‚µ{order.total}</p>
+                      <p className="font-mono font-black text-brand-blue">₵{order.total}</p>
                       {(order as any).rating && (
                         <div className="flex items-center justify-end gap-1 mt-1">
                           {[1, 2, 3, 4, 5].map(star => (
@@ -2818,7 +2818,7 @@ function RiderView({ user, orders, vendors, onUpdateStatus, activeTab, setActive
               <CreditCard size={24} className="sm:w-8 sm:h-8" />
             </div>
             <h3 className="font-black uppercase tracking-widest text-slate-800 text-sm sm:text-lg">Available Balance</h3>
-            <p className="text-4xl sm:text-5xl font-black tracking-tighter text-brand-green mt-1 sm:mt-2">â‚µ{Number(user.balance || 0).toFixed(2)}</p>
+            <p className="text-4xl sm:text-5xl font-black tracking-tighter text-brand-green mt-1 sm:mt-2">₵{Number(user.balance || 0).toFixed(2)}</p>
           </div>
           
           <form onSubmit={handleWithdraw} className="space-y-4 bg-slate-50 p-4 sm:p-8 rounded-[1.5rem] sm:rounded-[2rem] border border-slate-100">
@@ -2912,7 +2912,7 @@ function RiderView({ user, orders, vendors, onUpdateStatus, activeTab, setActive
 
             {/* Amount */}
             <div>
-              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2 ml-2 sm:ml-4">Withdraw Amount (â‚µ)</label>
+              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2 ml-2 sm:ml-4">Withdraw Amount (₵)</label>
               <input 
                 type="number" 
                 required 
@@ -3082,7 +3082,7 @@ function AdminView({ user, orders, addNotification, activeTab, setActiveTab }: {
 
        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-6">
           <StatBox label="Total Orders" value={orders.length} color="blue" />
-          <StatBox label="Revenue" value={`â‚µ${orders.reduce((a,b) => a + Number(b.total), 0).toFixed(2)}`} color="green" />
+          <StatBox label="Revenue" value={`₵${orders.reduce((a,b) => a + Number(b.total), 0).toFixed(2)}`} color="green" />
           <StatBox label="Total Users" value={allUsers.length || '...'} color="blue" />
        </div>
 
@@ -3105,7 +3105,7 @@ function AdminView({ user, orders, addNotification, activeTab, setActiveTab }: {
                         <td className="px-8 py-6 font-mono font-black text-sm">#{o.id.slice(-4)}</td>
                         <td className="px-8 py-6"><span className="px-3 py-1 bg-slate-100 rounded-lg text-[10px] font-black uppercase">{o.status}</span></td>
                         <td className="px-8 py-6 text-sm font-bold text-slate-600">{o.customerName}</td>
-                        <td className="px-8 py-6 font-mono font-black text-brand-blue">â‚µ{o.total}</td>
+                        <td className="px-8 py-6 font-mono font-black text-brand-blue">₵{o.total}</td>
                         <td className="px-8 py-6"><PaymentStatusBadge order={o} /></td>
                       </tr>
                     ))}
@@ -3118,7 +3118,7 @@ function AdminView({ user, orders, addNotification, activeTab, setActiveTab }: {
                  <div key={o.id} className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm">
                     <div className="flex justify-between items-start mb-4">
                        <h4 className="font-black text-lg tracking-tighter italic uppercase underline decoration-brand-blue/50">#{o.id.slice(-4)}</h4>
-                       <span className="font-mono font-black text-brand-blue">â‚µ{o.total}</span>
+                       <span className="font-mono font-black text-brand-blue">₵{o.total}</span>
                     </div>
                     <div className="flex justify-between items-center">
                        <div className="flex flex-col gap-1">
@@ -3151,7 +3151,7 @@ function AdminView({ user, orders, addNotification, activeTab, setActiveTab }: {
                         <td className="px-8 py-6 font-bold text-sm">{u.name}</td>
                         <td className="px-8 py-6"><span className={cn("px-3 py-1 rounded-lg text-[10px] font-black uppercase", u.role === 'admin' ? "bg-red-50 text-red-500" : "bg-slate-100 text-slate-500")}>{u.role}</span></td>
                         <td className="px-8 py-6 text-sm text-slate-500">{u.email}</td>
-                        <td className="px-8 py-6 font-mono font-black text-brand-green">â‚µ{Number(u.balance).toFixed(2)}</td>
+                        <td className="px-8 py-6 font-mono font-black text-brand-green">₵{Number(u.balance).toFixed(2)}</td>
                          <td className="px-8 py-6">
                            <span className={cn(
                              "px-3 py-1 rounded-lg text-[10px] font-black uppercase",
@@ -3205,7 +3205,7 @@ function AdminView({ user, orders, addNotification, activeTab, setActiveTab }: {
                     <div className="flex justify-between items-center">
                        <div className="flex flex-col">
                           <span className="text-[8px] font-black text-slate-300 uppercase tracking-widest">Status</span>
-                          <span className="font-mono font-black text-brand-green text-sm">â‚µ{Number(u.balance).toFixed(2)}</span>
+                          <span className="font-mono font-black text-brand-green text-sm">₵{Number(u.balance).toFixed(2)}</span>
                        </div>
                        <div className="flex gap-2">
                            {u.status === 'pending' && (
@@ -3256,7 +3256,7 @@ function AdminView({ user, orders, addNotification, activeTab, setActiveTab }: {
                          <p className="text-slate-500 text-xs line-clamp-2 mb-6">{p.description}</p>
                       </div>
                       <div className="flex items-center justify-between gap-4">
-                         <span className="font-mono font-black text-brand-blue">â‚µ{p.price}</span>
+                         <span className="font-mono font-black text-brand-blue">₵{p.price}</span>
                          <button 
                            onClick={async () => {
                              await axios.patch(`/api/admin/products/${p.id}/approve`);
@@ -3280,11 +3280,11 @@ function AdminView({ user, orders, addNotification, activeTab, setActiveTab }: {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
                    <div className="bg-slate-900 p-10 rounded-[3rem] text-white">
                       <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">Gross Revenue</p>
-                      <h3 className="text-5xl font-black tracking-tighter italic">â‚µ{Number(revenueData.summary.gross_revenue || 0).toFixed(2)}</h3>
+                      <h3 className="text-5xl font-black tracking-tighter italic">₵{Number(revenueData.summary.gross_revenue || 0).toFixed(2)}</h3>
                    </div>
                    <div className="bg-brand-blue p-10 rounded-[3rem] text-white">
                       <p className="text-[10px] font-black uppercase tracking-widest text-white/50 mb-2">System Earnings (10%)</p>
-                      <h3 className="text-5xl font-black tracking-tighter italic">â‚µ{Number(revenueData.summary.system_earnings || 0).toFixed(2)}</h3>
+                      <h3 className="text-5xl font-black tracking-tighter italic">₵{Number(revenueData.summary.system_earnings || 0).toFixed(2)}</h3>
                    </div>
                 </div>
 
@@ -3324,7 +3324,7 @@ function AdminView({ user, orders, addNotification, activeTab, setActiveTab }: {
                                   </td>
                                   <td className="px-10 py-6">
                                      <span className={cn("font-mono font-black", t.type === 'withdrawal' ? "text-red-500" : "text-brand-green")}>
-                                       {t.type === 'withdrawal' ? '-' : '+'}â‚µ{Number(t.amount).toFixed(2)}
+                                       {t.type === 'withdrawal' ? '-' : '+'}₵{Number(t.amount).toFixed(2)}
                                      </span>
                                   </td>
                                   <td className="px-10 py-6">
@@ -3361,19 +3361,19 @@ function AdminView({ user, orders, addNotification, activeTab, setActiveTab }: {
                    </select>
                  </div>
                  <div className="space-y-1.5">
-                   <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Base Price (â‚µ)</label>
+                   <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Base Price (₵)</label>
                    <input type="number" step="0.01" placeholder="10.00" value={zoneForm.base_price} onChange={e => setZoneForm({...zoneForm, base_price: e.target.value})} className="w-full bg-slate-50 border border-slate-100 rounded-xl py-3 px-4 font-bold text-sm focus:outline-none focus:border-brand-blue focus:ring-4 focus:ring-brand-blue/10 transition-all" />
                  </div>
                  <div className="space-y-1.5">
-                   <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Price per KM (â‚µ)</label>
+                   <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Price per KM (₵)</label>
                    <input type="number" step="0.01" placeholder="2.00" value={zoneForm.price_per_km} onChange={e => setZoneForm({...zoneForm, price_per_km: e.target.value})} className="w-full bg-slate-50 border border-slate-100 rounded-xl py-3 px-4 font-bold text-sm focus:outline-none focus:border-brand-blue focus:ring-4 focus:ring-brand-blue/10 transition-all" />
                  </div>
                  <div className="space-y-1.5">
-                   <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Minimum Price (â‚µ)</label>
+                   <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Minimum Price (₵)</label>
                    <input type="number" step="0.01" placeholder="5.00" value={zoneForm.min_price} onChange={e => setZoneForm({...zoneForm, min_price: e.target.value})} className="w-full bg-slate-50 border border-slate-100 rounded-xl py-3 px-4 font-bold text-sm focus:outline-none focus:border-brand-blue focus:ring-4 focus:ring-brand-blue/10 transition-all" />
                  </div>
                  <div className="space-y-1.5">
-                   <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Maximum Price (â‚µ) <span className="text-slate-300">â€¢ optional</span></label>
+                   <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Maximum Price (₵) <span className="text-slate-300">• optional</span></label>
                    <input type="number" step="0.01" placeholder="No limit" value={zoneForm.max_price} onChange={e => setZoneForm({...zoneForm, max_price: e.target.value})} className="w-full bg-slate-50 border border-slate-100 rounded-xl py-3 px-4 font-bold text-sm focus:outline-none focus:border-brand-blue focus:ring-4 focus:ring-brand-blue/10 transition-all" />
                  </div>
                </div>
@@ -3417,19 +3417,19 @@ function AdminView({ user, orders, addNotification, activeTab, setActiveTab }: {
                      <div className="grid grid-cols-2 gap-3 mt-4">
                        <div className="bg-slate-50 rounded-xl p-3">
                          <span className="text-[8px] font-black uppercase tracking-widest text-slate-400 block">Base</span>
-                         <span className="font-mono font-black text-brand-blue text-sm">â‚µ{Number(zone.base_price).toFixed(2)}</span>
+                         <span className="font-mono font-black text-brand-blue text-sm">₵{Number(zone.base_price).toFixed(2)}</span>
                        </div>
                        <div className="bg-slate-50 rounded-xl p-3">
                          <span className="text-[8px] font-black uppercase tracking-widest text-slate-400 block">Per KM</span>
-                         <span className="font-mono font-black text-brand-blue text-sm">â‚µ{Number(zone.price_per_km).toFixed(2)}</span>
+                         <span className="font-mono font-black text-brand-blue text-sm">₵{Number(zone.price_per_km).toFixed(2)}</span>
                        </div>
                        <div className="bg-slate-50 rounded-xl p-3">
                          <span className="text-[8px] font-black uppercase tracking-widest text-slate-400 block">Min</span>
-                         <span className="font-mono font-black text-slate-600 text-sm">â‚µ{Number(zone.min_price).toFixed(2)}</span>
+                         <span className="font-mono font-black text-slate-600 text-sm">₵{Number(zone.min_price).toFixed(2)}</span>
                        </div>
                        <div className="bg-slate-50 rounded-xl p-3">
                          <span className="text-[8px] font-black uppercase tracking-widest text-slate-400 block">Max</span>
-                         <span className="font-mono font-black text-slate-600 text-sm">{zone.max_price ? `â‚µ${Number(zone.max_price).toFixed(2)}` : 'âˆž'}</span>
+                         <span className="font-mono font-black text-slate-600 text-sm">{zone.max_price ? `₵${Number(zone.max_price).toFixed(2)}` : 'âˆž'}</span>
                        </div>
                      </div>
                    </div>
