@@ -1160,6 +1160,7 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
 
   const [profileSaving, setProfileSaving] = useState(false);
   const [profileMsg, setProfileMsg] = useState('');
+  const [vendorConflict, setVendorConflict] = useState<any>(null);
 
   const myOrders = orders.filter(o => o.customer_id === user.id);
 
@@ -1170,6 +1171,10 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
   const marketplace = selectedVendor ? vendorProducts : vendors;
 
   const addToCart = (item: any) => {
+    if (cart.length > 0 && cart[0].vendor_id !== item.vendor_id) {
+      setVendorConflict(item);
+      return;
+    }
     setCart(prev => {
       const existing = prev.find(i => i.id === item.id);
       if (existing) {
@@ -1716,6 +1721,20 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
           })}
         </div>
       )}
+
+      <ConfirmationModal 
+        isOpen={!!vendorConflict}
+        onClose={() => setVendorConflict(null)}
+        onConfirm={() => {
+          setCart([{ ...vendorConflict, quantity: 1 }]);
+          setVendorConflict(null);
+          setIsCartOpen(true);
+        }}
+        title="Switch Vendor?"
+        message="Your cart contains items from another vendor. Would you like to clear your cart and start a new order from this vendor?"
+        confirmLabel="Clear Cart & Switch"
+        type="danger"
+      />
 
       <ConfirmationModal 
         isOpen={!!orderToCancel}
