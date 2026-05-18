@@ -15,8 +15,11 @@ import axios from 'axios';
 
 dotenv.config();
 
+const serviceAccountPath = path.join(__dirname, 'bytzgo-72f1c-firebase-adminsdk-fbsvc-51cd0be35b.json');
+const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, 'utf8'));
+
 admin.initializeApp({
-  projectId: "bytzgo-72f1c"
+  credential: admin.credential.cert(serviceAccount)
 });
 
 const app = express();
