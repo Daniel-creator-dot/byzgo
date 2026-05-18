@@ -190,7 +190,15 @@ function MainApp() {
   const [vendors, setVendors] = useState<any[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [products, setProducts] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => {
+    try {
+      const cachedToken = localStorage.getItem('token');
+      const cachedUser = localStorage.getItem('user');
+      return !(cachedToken && cachedUser);
+    } catch (e) {
+      return true;
+    }
+  });
   const [isLogoutModalOpen, setIsLogoutModalOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<string>('menu');
   const [zones, setZones] = useState<any[]>([]);
@@ -233,14 +241,37 @@ function MainApp() {
     setRefreshing(true);
     try {
       const storedUser = JSON.parse(localStorage.getItem('user') || '{}');
+      const role = user?.role || storedUser.role;
+      const region = user?.region || storedUser.region;
+
+      // Always fetch wallet and paystack config
+      const walletPromise = axios.get('/api/wallet');
+      const paystackPromise = axios.get('/api/config/paystack').catch(() => ({ data: { publicKey: '' } }));
+
+      // Conditional promises based on role
+      const ordersPromise = axios.get('/api/orders'); // Everyone needs orders
+      
+      const productsPromise = (role === 'customer' || role === 'vendor') 
+        ? axios.get('/api/products') 
+        : Promise.resolve({ data: [] });
+
+      const vendorsPromise = (role === 'customer') 
+        ? axios.get('/api/vendors', { params: { region } }) 
+        : Promise.resolve({ data: [] });
+
+      const zonesPromise = (role === 'customer' || role === 'rider' || role === 'admin') 
+        ? axios.get('/api/delivery-zones').catch(() => ({ data: [] })) 
+        : Promise.resolve({ data: [] });
+
       const [profileRes, ordersRes, productsRes, vendorsRes, configRes, zonesRes] = await Promise.all([
-        axios.get('/api/wallet'),
-        axios.get('/api/orders'),
-        axios.get('/api/products'),
-        axios.get('/api/vendors', { params: { region: user?.region || storedUser.region } }),
-        axios.get('/api/config/paystack').catch(() => ({ data: { publicKey: '' } })),
-        axios.get('/api/delivery-zones').catch(() => ({ data: [] }))
+        walletPromise,
+        ordersPromise,
+        productsPromise,
+        vendorsPromise,
+        paystackPromise,
+        zonesPromise
       ]);
+
       setPaystackKey(configRes.data.publicKey);
       setUser(prev => prev ? { ...prev, balance: profileRes.data.balance } : { ...storedUser, balance: profileRes.data.balance });
       setOrders(ordersRes.data);
