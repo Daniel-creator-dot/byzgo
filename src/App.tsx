@@ -178,7 +178,14 @@ function MainApp() {
   };
 
   const forcedRole = getExpectedRole() as Role;
-  const [user, setUser] = useState<AuthUser | null>(null);
+  const [user, setUser] = useState<AuthUser | null>(() => {
+    try {
+      const saved = localStorage.getItem('user');
+      return saved ? JSON.parse(saved) : null;
+    } catch (e) {
+      return null;
+    }
+  });
   const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
   const [vendors, setVendors] = useState<any[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
@@ -277,6 +284,23 @@ function MainApp() {
     }
   }, [token]);
 
+  // Set up response interceptor to handle 401/403 (unauthorized/forbidden) and automatically logout
+  useEffect(() => {
+    const interceptor = axios.interceptors.response.use(
+      (response) => response,
+      (error) => {
+        if (error.response && (error.response.status === 401 || error.response.status === 403)) {
+          console.warn('Session expired or unauthorized. Logging out.');
+          handleLogout();
+        }
+        return Promise.reject(error);
+      }
+    );
+    return () => {
+      axios.interceptors.response.eject(interceptor);
+    };
+  }, []);
+
   // Fetch initial data and setup sockets
   useEffect(() => {
     // Handle Google Redirect Result
@@ -331,9 +355,11 @@ function MainApp() {
 
         socket.connect();
         socket.emit('join', storedUser.id);
-      } catch (err) {
+      } catch (err: any) {
         console.error('Initialization failed', err);
-        setToken(null);
+        if (err.response && (err.response.status === 401 || err.response.status === 403)) {
+          handleLogout();
+        }
       } finally {
         setLoading(false);
       }
@@ -421,6 +447,22 @@ function MainApp() {
     }
   };
 
+  // Redirect logged-in users to their correct dashboard paths if they land elsewhere
+  useEffect(() => {
+    if (user) {
+      const path = location.pathname;
+      if (user.role === 'rider' && !path.startsWith('/motor')) {
+        navigate('/motor');
+      } else if (user.role === 'vendor' && !path.startsWith('/vendor')) {
+        navigate('/vendor');
+      } else if (user.role === 'admin' && !path.startsWith('/admin')) {
+        navigate('/admin');
+      } else if (user.role === 'customer' && (path.startsWith('/motor') || path.startsWith('/vendor') || path.startsWith('/admin'))) {
+        navigate('/');
+      }
+    }
+  }, [user, location.pathname, navigate]);
+
   if (loading) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 gap-8">
@@ -439,13 +481,6 @@ function MainApp() {
     return (
       <AuthScreen onLogin={handleLogin} forcedRole={forcedRole} />
     );
-  }
-
-  // Safety net: if somehow a mismatched role gets through, auto-logout
-  const currentExpectedRole = getExpectedRole();
-  if (user.role !== currentExpectedRole) {
-    handleLogout();
-    return null;
   }
 
   return (
