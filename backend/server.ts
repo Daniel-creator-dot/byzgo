@@ -240,7 +240,7 @@ app.post('/api/auth/register', async (req, res) => {
   const { name, email, password, role } = req.body;
   try {
     const hashedPassword = await bcrypt.hash(password, 10);
-    const userStatus = (role === 'vendor' || role === 'rider') ? 'pending' : 'active';
+    const userStatus = (role === 'vendor') ? 'pending' : 'active';
     const result = await pool.query(
       'INSERT INTO users (name, email, password, role, status) VALUES ($1, $2, $3, $4, $5) RETURNING id, name, email, role, balance, status',
       [name, email, hashedPassword, role, userStatus]
@@ -337,7 +337,7 @@ app.post('/api/auth/supabase', async (req, res) => {
     let result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
     let user = result.rows[0];
     if (!user) {
-      const userStatus = (role === 'vendor' || role === 'rider') ? 'pending' : 'active';
+      const userStatus = (role === 'vendor') ? 'pending' : 'active';
       result = await pool.query(
         'INSERT INTO users (name, email, google_id, role, status) VALUES ($1, $2, $3, $4, $5) RETURNING id, name, email, role, balance, phone, status',
         [name, email, googleId, role || 'customer', userStatus]
