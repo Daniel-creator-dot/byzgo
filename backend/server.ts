@@ -15,12 +15,24 @@ import axios from 'axios';
 
 dotenv.config();
 
-const serviceAccountPath = path.join(__dirname, 'bytzgo-72f1c-firebase-adminsdk-fbsvc-51cd0be35b.json');
-const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, 'utf8'));
-
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount)
-});
+try {
+  const serviceAccountPath = path.join(__dirname, 'bytzgo-72f1c-firebase-adminsdk-fbsvc-51cd0be35b.json');
+  if (fs.existsSync(serviceAccountPath)) {
+    const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, 'utf8'));
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount)
+    });
+    console.log('Firebase Admin initialized successfully with service account certificate.');
+  } else {
+    // Fallback for hosting platforms where secrets are gitignored
+    admin.initializeApp({
+      projectId: "bytzgo-72f1c"
+    });
+    console.warn('Firebase Admin initialized with fallback projectId (private key file missing).');
+  }
+} catch (err) {
+  console.error('Failed to initialize Firebase Admin:', err);
+}
 
 const app = express();
 const httpServer = createServer(app);
