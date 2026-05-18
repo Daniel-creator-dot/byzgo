@@ -652,7 +652,7 @@ app.get('/api/orders', authenticateToken, async (req: any, res) => {
       }
       const userRegion = userRes.rows[0]?.region;
       
-      query += " WHERE (status = 'ready' AND (region = $2 OR region IS NULL)) OR rider_id = $1";
+      query += " WHERE (status = 'ready' AND ($2::text IS NULL OR $2 = '' OR region = $2 OR region IS NULL)) OR rider_id = $1";
       params.push(req.user.id);
       params.push(userRegion);
     }
@@ -743,9 +743,11 @@ app.post('/api/orders', authenticateToken, async (req: any, res) => {
       finalRegion = customerRes.rows[0]?.region;
     }
 
+    const initialStatus = (finalOrderType === 'courier') ? 'ready' : 'pending';
+
     const result = await pool.query(
-      'INSERT INTO orders (customer_id, vendor_id, items, total, address, pickup_address, order_type, scheduled_time, lat, lng, pickup_lat, pickup_lng, region, payment_status, payment_method, delivery_fee) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING *',
-      [req.user.id, vendorId, JSON.stringify(items), total, address || 'Customer Address', pickup || 'Vendor Address', orderType || order_type || 'food', scheduledTime || null, lat, lng, 0, 0, providedRegion || req.user.region, paymentStatus, finalPaymentMethod, delivery_fee || 0]
+      'INSERT INTO orders (customer_id, vendor_id, items, total, status, address, pickup_address, order_type, scheduled_time, lat, lng, pickup_lat, pickup_lng, region, payment_status, payment_method, delivery_fee) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) RETURNING *',
+      [req.user.id, vendorId, JSON.stringify(items), total, initialStatus, address || 'Customer Address', pickup || 'Vendor Address', finalOrderType, scheduledTime || null, lat, lng, 0, 0, providedRegion || req.user.region, paymentStatus, finalPaymentMethod, delivery_fee || 0]
     );
     const order = result.rows[0];
     res.json(order);
