@@ -295,6 +295,59 @@ app.post('/api/auth/google', async (req, res) => {
   }
 });
 
+// Supabase Auth
+app.post('/api/auth/supabase', async (req, res) => {
+  const { accessToken, role } = req.body;
+  try {
+    // Verify token with Supabase Auth API
+    const supabaseUrl = process.env.SUPABASE_URL || 'https://ypmiurbtmfiyzmrygonh.supabase.co';
+    const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || '';
+    
+    const headers: any = {
+      'Authorization': `Bearer ${accessToken}`
+    };
+    if (supabaseAnonKey) {
+      headers['apikey'] = supabaseAnonKey;
+    }
+
+    const response = await axios.get(`${supabaseUrl}/auth/v1/user`, { headers });
+    const payload = response.data;
+    
+    if (!payload || !payload.email) {
+      return res.status(400).json({ message: 'Invalid Supabase token' });
+    }
+
+    const email = payload.email;
+    const name = payload.user_metadata?.full_name || payload.email.split('@')[0];
+    const googleId = payload.id; // Use Supabase user ID as google_id / external ID
+
+    // Check if user exists in database
+    let result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+    let user = result.rows[0];
+    if (!user) {
+      const userStatus = (role === 'vendor' || role === 'rider') ? 'pending' : 'active';
+      result = await pool.query(
+        'INSERT INTO users (name, email, google_id, role, status) VALUES ($1, $2, $3, $4, $5) RETURNING id, name, email, role, balance, phone, status',
+        [name, email, googleId, role || 'customer', userStatus]
+      );
+      user = result.rows[0];
+    } else {
+      // Update google_id if not set
+      if (!user.google_id) {
+        await pool.query('UPDATE users SET google_id = $1 WHERE id = $2', [googleId, user.id]);
+      }
+      const { password, ...u } = user;
+      user = u;
+    }
+
+    const token = jwt.sign({ id: user.id, name: user.name, email: user.email, role: user.role, balance: user.balance }, process.env.JWT_SECRET as string);
+    res.json({ user, token });
+  } catch (err: any) {
+    console.error('Supabase auth error:', err.response?.data || err.message);
+    res.status(500).json({ message: 'Supabase authentication failed' });
+  }
+});
+
 // Profile Update
 app.patch('/api/auth/profile', authenticateToken, async (req: any, res) => {
   const { email, phone, cover_image, address, lat, lng, region } = req.body;

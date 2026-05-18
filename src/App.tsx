@@ -11,6 +11,7 @@ import { APIProvider, Map, Marker, useMap, useMapsLibrary } from '@vis.gl/react-
 import { Modal, ConfirmationModal, LoadingIndicator } from './components/UI';
 import { auth, googleProvider } from './lib/firebase';
 import { signInWithPopup, signInWithRedirect, getRedirectResult } from 'firebase/auth';
+import { supabase } from './lib/supabase';
 
 // Helper for Tailwind classes
 function cn(...inputs: ClassValue[]) {
@@ -337,6 +338,31 @@ function MainApp() {
     // Handle Google Redirect Result
     const initAuth = async () => {
       try {
+        // 1. Check Supabase Auth redirect session
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session && session.access_token) {
+          const savedRole = localStorage.getItem('google_login_role') || 'customer';
+          const res = await axios.post('/api/auth/supabase', {
+            accessToken: session.access_token,
+            role: savedRole
+          });
+          localStorage.removeItem('google_login_role');
+          
+          // Sign out of Supabase locally to keep local storage clean
+          await supabase.auth.signOut();
+
+          const expected = getExpectedRole();
+          if (res.data.user.role !== expected) {
+            console.warn(`Role mismatch: got ${res.data.user.role}, expected ${expected}`);
+            return;
+          }
+          setUser(res.data.user);
+          setToken(res.data.token);
+          localStorage.setItem('user', JSON.stringify(res.data.user));
+          return;
+        }
+
+        // 2. Check Firebase Redirect result
         const result = await getRedirectResult(auth);
         if (result) {
           const idToken = await result.user.getIdToken();
@@ -346,11 +372,11 @@ function MainApp() {
             role: savedRole
           });
           localStorage.removeItem('google_login_role');
-          // Block login if role doesn't match the expected role for this path
+          
           const expected = getExpectedRole();
           if (res.data.user.role !== expected) {
             console.warn(`Role mismatch: got ${res.data.user.role}, expected ${expected}`);
-            return; // Silently reject â€” user stays on login screen
+            return;
           }
           setUser(res.data.user);
           setToken(res.data.token);
@@ -1091,25 +1117,17 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
                     // Store role in localStorage before redirect
                     localStorage.setItem('google_login_role', role);
                     
-                    // For mobile WebViews, redirect is more reliable than popups
-                    const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-                    if (isMobile) {
-                      await signInWithRedirect(auth, googleProvider);
-                    } else {
-                      const result = await signInWithPopup(auth, googleProvider);
-                      const idToken = await result.user.getIdToken();
-                      const res = await axios.post('/api/auth/google', {
-                        credential: idToken,
-                        role: role
-                      });
-                      const accepted = onLogin(res.data.user, res.data.token);
-                      if (accepted === false) {
-                        setError('Authentication failed. Please check your credentials.');
+                    // Supabase Google OAuth Login
+                    const { error } = await supabase.auth.signInWithOAuth({
+                      provider: 'google',
+                      options: {
+                        redirectTo: window.location.origin
                       }
-                    }
+                    });
+                    if (error) throw error;
                   } catch (err: any) {
+                    console.error('Supabase Google OAuth failed:', err);
                     setError('Authentication failed. Please try again.');
-                  } finally {
                     setLoading(false);
                   }
                 }}
