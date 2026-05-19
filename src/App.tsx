@@ -234,8 +234,28 @@ function MainApp() {
   const total = subtotal + deliveryFee;
   const [riderLocations, setRiderLocations] = useState<{ [key: string]: { lat: number, lng: number } }>({});
   const [notifications, setNotifications] = useState<{ id: string, message: string, type: 'info' | 'success' | 'warning' }[]>([]);
+  const [incomingRideOffer, setIncomingRideOffer] = useState<Order | null>(null);
   const [paystackKey, setPaystackKey] = useState<string>('');
   const [refreshing, setRefreshing] = useState(false);
+  const userRef = useRef(user);
+  useEffect(() => { userRef.current = user; }, [user]);
+
+  const isOfferableToRider = (order: Order) =>
+    order.status === 'ready' && !order.rider_id && !(order as any).riderId;
+
+  const triggerIncomingRideCall = useCallback((order: Order) => {
+    const u = userRef.current;
+    if (!u || u.role !== 'rider' || u.status !== 'active' || !isOfferableToRider(order)) return;
+    setIncomingRideOffer(order);
+    setActiveTab('dashboard');
+    if (navigator.vibrate) navigator.vibrate([400, 200, 400, 200, 400]);
+    if (Notification.permission === 'granted') {
+      new Notification('BytzGo — Incoming ride', {
+        body: `₵${order.total} · ${order.address || 'New pickup request'}`,
+        requireInteraction: true,
+      });
+    }
+  }, []);
 
   const refreshData = async () => {
     if (!token) return;
@@ -426,25 +446,30 @@ function MainApp() {
 
     socket.on('order:new', (order: Order) => {
       setOrders(prev => [order, ...prev]);
-      if (user?.role === 'vendor' && order.vendor_id === user.id) {
-        addNotification('ðŸ”” New order received!', 'success');
+      const u = userRef.current;
+      if (u?.role === 'vendor' && order.vendor_id === u.id) {
+        addNotification('New order received!', 'success');
       }
-      if (user?.role === 'rider' && user.status === 'active' && (order as any).order_type === 'courier') {
-        addNotification('ðŸ“¦ New courier mission available!', 'info');
+      if (u?.role === 'rider' && u.status === 'active' && isOfferableToRider(order)) {
+        triggerIncomingRideCall(order);
       }
     });
 
     socket.on('order:updated', (updatedOrder: Order) => {
       setOrders(prev => prev.map(o => o.id === updatedOrder.id ? updatedOrder : o));
-      if (user?.role === 'rider' && user.status === 'active' && updatedOrder.status === 'ready' && !updatedOrder.rider_id) {
-        addNotification('ðŸ“¦ New order is ready for pickup!', 'info');
+      const u = userRef.current;
+      if (u?.role === 'rider' && u.status === 'active' && isOfferableToRider(updatedOrder)) {
+        triggerIncomingRideCall(updatedOrder);
       }
-      if (user?.role === 'customer' && updatedOrder.status === 'picked_up' && updatedOrder.customer_id === user.id) {
-        addNotification('Ã°Å¸Å¡Å¡ Your order has been picked up!', 'info');
+      if (u?.role === 'customer' && updatedOrder.status === 'picked_up' && updatedOrder.customer_id === u.id) {
+        addNotification('Your order has been picked up!', 'info');
       }
-      if (user?.role === 'customer' && updatedOrder.status === 'delivered' && updatedOrder.customer_id === user.id) {
-        addNotification('Ã¢Å“â€¦ Your order has been delivered!', 'success');
+      if (u?.role === 'customer' && updatedOrder.status === 'delivered' && updatedOrder.customer_id === u.id) {
+        addNotification('Your order has been delivered!', 'success');
       }
+      setIncomingRideOffer(prev =>
+        prev?.id === updatedOrder.id && updatedOrder.rider_id ? null : prev
+      );
     });
 
     socket.on('location:updated', ({ riderId, lat, lng }) => {
@@ -673,7 +698,21 @@ function MainApp() {
                   console.error('Delete product failed', err);
                 }
               }} activeTab={activeTab} setActiveTab={setActiveTab} />}
-              {user.role === 'rider' && <RiderView user={user} orders={orders} vendors={vendors} onUpdateStatus={updateOrderStatus} activeTab={activeTab} setActiveTab={setActiveTab} />}
+              {user.role === 'rider' && (
+                <>
+                  <IncomingRideCallModal
+                    order={incomingRideOffer}
+                    vendors={vendors}
+                    onAccept={async (orderId, status) => {
+                      await updateOrderStatus(orderId, status, { riderId: user.id });
+                      setIncomingRideOffer(null);
+                      addNotification('Ride accepted! Head to pickup.', 'success');
+                    }}
+                    onDecline={() => setIncomingRideOffer(null)}
+                  />
+                  <RiderView user={user} orders={orders} vendors={vendors} onUpdateStatus={updateOrderStatus} activeTab={activeTab} setActiveTab={setActiveTab} />
+                </>
+              )}
               {user.role === 'admin' && <AdminView user={user} orders={orders} addNotification={addNotification} activeTab={activeTab} setActiveTab={setActiveTab} />}
             </AnimatePresence>
           </main>
@@ -2878,6 +2917,219 @@ function Directions({ origin, destination, onETAUpdate }: { origin: google.maps.
   }, [directionsService, directionsRenderer, origin, destination]);
 
   return null;
+}
+
+const INCOMING_RIDE_TIMEOUT_SEC = 30;
+
+function IncomingRideCallModal({
+  order,
+  vendors,
+  onAccept,
+  onDecline,
+}: {
+  order: Order | null;
+  vendors: any[];
+  onAccept: (orderId: string, status: OrderStatus) => Promise<void>;
+  onDecline: () => void;
+}) {
+  const [secondsLeft, setSecondsLeft] = useState(INCOMING_RIDE_TIMEOUT_SEC);
+  const [accepting, setAccepting] = useState(false);
+  const ringStopRef = useRef(false);
+  const ringCleanupRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    if (!order) {
+      ringStopRef.current = true;
+      ringCleanupRef.current?.();
+      ringCleanupRef.current = null;
+      return;
+    }
+
+    ringStopRef.current = false;
+    setSecondsLeft(INCOMING_RIDE_TIMEOUT_SEC);
+
+    let audioCtx: AudioContext | null = null;
+    try {
+      audioCtx = new AudioContext();
+    } catch {
+      /* audio unavailable */
+    }
+
+    const playPulse = () => {
+      if (!audioCtx || ringStopRef.current) return;
+      const t = audioCtx.currentTime;
+      [523.25, 659.25].forEach((freq, i) => {
+        const osc = audioCtx!.createOscillator();
+        const gain = audioCtx!.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0.0001, t + i * 0.22);
+        gain.gain.exponentialRampToValueAtTime(0.35, t + i * 0.22 + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t + i * 0.22 + 0.18);
+        osc.connect(gain);
+        gain.connect(audioCtx!.destination);
+        osc.start(t + i * 0.22);
+        osc.stop(t + i * 0.22 + 0.2);
+      });
+    };
+
+    playPulse();
+    const ringInterval = setInterval(() => {
+      playPulse();
+      if (navigator.vibrate) navigator.vibrate([300, 150, 300]);
+    }, 1400);
+
+    const countdown = setInterval(() => {
+      setSecondsLeft(prev => {
+        if (prev <= 1) {
+          onDecline();
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    ringCleanupRef.current = () => {
+      ringStopRef.current = true;
+      clearInterval(ringInterval);
+      clearInterval(countdown);
+      audioCtx?.close().catch(() => {});
+    };
+
+    return ringCleanupRef.current;
+  }, [order?.id, onDecline]);
+
+  if (!order) return null;
+
+  const isCourier = (order as any).order_type === 'courier' || order.orderType === 'courier';
+  const vendor = vendors.find(v => v.id === order.vendor_id);
+  const pickupLabel = isCourier
+    ? ((order as any).pickup_address || 'Pickup location')
+    : (vendor?.name || vendor?.address || 'Vendor pickup');
+  const earnings = (order as any).delivery_fee ?? order.total;
+
+  return (
+    <AnimatePresence>
+      <motion.div
+        key={order.id}
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        className="fixed inset-0 z-[20000] flex items-center justify-center bg-slate-950/95 backdrop-blur-md p-4"
+      >
+        <div className="absolute inset-0 overflow-hidden pointer-events-none">
+          {[0, 1, 2].map(i => (
+            <motion.div
+              key={i}
+              className="absolute left-1/2 top-1/3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-brand-green/40"
+              initial={{ width: 120, height: 120, opacity: 0.6 }}
+              animate={{ width: 320 + i * 80, height: 320 + i * 80, opacity: 0 }}
+              transition={{ duration: 2, repeat: Infinity, delay: i * 0.5, ease: 'easeOut' }}
+            />
+          ))}
+        </div>
+
+        <motion.div
+          initial={{ scale: 0.9, y: 24 }}
+          animate={{ scale: 1, y: 0 }}
+          exit={{ scale: 0.9, y: 24 }}
+          className="relative w-full max-w-md bg-gradient-to-b from-slate-900 to-slate-950 rounded-[2.5rem] border border-white/10 shadow-2xl overflow-hidden"
+        >
+          <motion.div
+            className="absolute top-0 left-0 right-0 h-1 bg-brand-green origin-left"
+            initial={{ scaleX: 1 }}
+            animate={{ scaleX: secondsLeft / INCOMING_RIDE_TIMEOUT_SEC }}
+            transition={{ duration: 1, ease: 'linear' }}
+          />
+
+          <motion.div
+            className="mx-auto mt-10 w-24 h-24 rounded-full bg-brand-green/20 border-4 border-brand-green flex items-center justify-center shadow-[0_0_40px_rgba(34,197,94,0.4)]"
+            animate={{ scale: [1, 1.06, 1] }}
+            transition={{ duration: 1.2, repeat: Infinity }}
+          >
+            <Phone size={40} className="text-brand-green" />
+          </motion.div>
+
+          <div className="text-center px-6 mt-6">
+            <p className="text-[10px] font-black uppercase tracking-[0.3em] text-brand-green animate-pulse">
+              Incoming ride request
+            </p>
+            <h2 className="text-2xl font-black text-white mt-2 tracking-tight">
+              {isCourier ? 'Courier mission' : 'Delivery pickup'}
+            </h2>
+            <p className="text-slate-400 text-sm font-bold mt-1">
+              #{order.id.slice(-6).toUpperCase()} · {secondsLeft}s to respond
+            </p>
+          </div>
+
+          <motion.div
+            className="mx-6 mt-8 p-5 rounded-3xl bg-white/5 border border-white/10 space-y-4"
+            animate={{ opacity: [0.85, 1, 0.85] }}
+            transition={{ duration: 2, repeat: Infinity }}
+          >
+            <motion.div
+              className="text-center"
+              animate={{ scale: [1, 1.02, 1] }}
+              transition={{ duration: 1.5, repeat: Infinity }}
+            >
+              <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">You earn</p>
+              <p className="text-4xl font-black text-brand-green font-mono">₵{Number(earnings).toFixed(2)}</p>
+            </motion.div>
+            <motion.div className="flex items-start gap-3" initial={{ x: -8, opacity: 0.8 }} animate={{ x: 0, opacity: 1 }}>
+              <div className="w-9 h-9 rounded-xl bg-brand-blue/20 flex items-center justify-center shrink-0">
+                <MapPin size={16} className="text-brand-blue" />
+              </div>
+              <motion.div animate={{ opacity: [0.7, 1, 0.7] }} transition={{ duration: 1.8, repeat: Infinity }}>
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Pickup</p>
+                <p className="text-sm font-bold text-white">{pickupLabel}</p>
+              </motion.div>
+            </motion.div>
+            <motion.div className="flex items-start gap-3" initial={{ x: 8, opacity: 0.8 }} animate={{ x: 0, opacity: 1 }}>
+              <motion.div
+                className="w-9 h-9 rounded-xl bg-brand-green/20 flex items-center justify-center shrink-0"
+                animate={{ scale: [1, 1.1, 1] }}
+                transition={{ duration: 1, repeat: Infinity }}
+              >
+                <Navigation size={16} className="text-brand-green" />
+              </motion.div>
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Drop-off</p>
+                <p className="text-sm font-bold text-white">{order.address || 'Destination'}</p>
+              </div>
+            </motion.div>
+          </motion.div>
+
+          <div className="grid grid-cols-2 gap-3 p-6 mt-4">
+            <button
+              type="button"
+              onClick={onDecline}
+              disabled={accepting}
+              className="py-4 rounded-2xl bg-white/10 text-white font-black uppercase tracking-widest text-xs hover:bg-white/15 transition-all flex flex-col items-center gap-1"
+            >
+              <X size={22} />
+              Decline
+            </button>
+            <button
+              type="button"
+              disabled={accepting}
+              onClick={async () => {
+                setAccepting(true);
+                try {
+                  await onAccept(order.id, order.status);
+                } finally {
+                  setAccepting(false);
+                }
+              }}
+              className="py-4 rounded-2xl bg-brand-green text-white font-black uppercase tracking-widest text-xs hover:bg-brand-green/90 transition-all shadow-lg shadow-brand-green/30 flex flex-col items-center gap-1 disabled:opacity-60"
+            >
+              <Check size={22} />
+              {accepting ? 'Accepting…' : 'Accept ride'}
+            </button>
+          </div>
+        </motion.div>
+      </motion.div>
+    </AnimatePresence>
+  );
 }
 
 function RiderView({ user, orders, vendors, onUpdateStatus, activeTab, setActiveTab }: { user: AuthUser, orders: Order[], vendors: any[], onUpdateStatus: (id: string, s: OrderStatus, extra?: any) => void, activeTab: any, setActiveTab: (v: any) => void }) {
