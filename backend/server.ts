@@ -2792,6 +2792,31 @@ io.on('connection', (socket) => {
   });
 });
 
+/** Production: serve Vite build so bytzgo.net serves web + /api (Flutter uses same host). */
+function attachWebApp() {
+  const shouldServe =
+    process.env.SERVE_WEB === 'true' || process.env.NODE_ENV === 'production';
+  if (!shouldServe) return;
+
+  const distDir = path.join(__dirname, '..', 'dist');
+  const indexHtml = path.join(distDir, 'index.html');
+  if (!fs.existsSync(indexHtml)) {
+    console.warn('BytzGo: dist/index.html missing — API-only mode');
+    return;
+  }
+
+  console.log(`BytzGo: serving web app from ${distDir}`);
+  app.use(express.static(distDir, { maxAge: '1h', index: false }));
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api') || req.path.startsWith('/socket.io')) {
+      return next();
+    }
+    res.sendFile(indexHtml);
+  });
+}
+
+attachWebApp();
+
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
 httpServer.listen(PORT, HOST, () => {

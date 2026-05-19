@@ -10,6 +10,8 @@
     "flutter:chrome": "cd mobile && ..\\.flutter-sdk\\bin\\flutter run -d chrome --dart-define-from-file=dart_defines.json",
     "flutter:android": "cd mobile && ..\\.flutter-sdk\\bin\\flutter run -d emulator-5554 --dart-define-from-file=dart_defines.json --dart-define=API_URL=http://10.0.2.2:3000",
     "flutter:build:apk": "powershell -ExecutionPolicy Bypass -File mobile/scripts/build_apk.ps1",
+    "build:render": "npm install && npm run build && npm install --prefix backend",
+    "start:render": "npm --prefix backend run start",
     "start": "vite",
     "build": "vite build",
     "preview": "vite preview",

@@ -32,16 +32,9 @@ if (-not $ApiUrl) {
 if (-not $ApiUrl) {
   $ApiUrl = Read-EnvValue "VITE_API_URL"
 }
+# Production default — same host as Render web+API (bytzgo.net)
 if (-not $ApiUrl) {
-  Write-Host ""
-  Write-Host "ERROR: No API URL for the phone APK." -ForegroundColor Red
-  Write-Host "  Add to repo .env.local:" -ForegroundColor Yellow
-  Write-Host "    MOBILE_API_URL=https://your-public-api-host" -ForegroundColor Yellow
-  Write-Host "  Or same Wi-Fi dev server:" -ForegroundColor Yellow
-  Write-Host "    MOBILE_API_URL=http://192.168.1.10:3000" -ForegroundColor Yellow
-  Write-Host "  Or pass: .\scripts\build_apk.ps1 -ApiUrl https://..." -ForegroundColor Yellow
-  Write-Host ""
-  exit 1
+  $ApiUrl = "https://bytzgo.net"
 }
 
 $ApiUrl = $ApiUrl.TrimEnd("/")

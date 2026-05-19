@@ -91,7 +91,7 @@ Write-Host "Updated lib/core/maps_key.dart"
 
 # dart_defines.json (merge maps key; preserve API_URL + Google OAuth client)
 $definesFile = Join-Path $mobileRoot "dart_defines.json"
-$defaultApiUrl = "http://10.0.2.2:3000"
+$defaultApiUrl = "https://bytzgo.net"
 foreach ($line in (Get-Content $envFile -ErrorAction SilentlyContinue)) {
     $t = $line.Trim()
     if ($t -match '^\s*MOBILE_API_URL\s*=\s*(.+)$') {
@@ -100,7 +100,10 @@ foreach ($line in (Get-Content $envFile -ErrorAction SilentlyContinue)) {
     }
     if ($t -match '^\s*VITE_API_URL\s*=\s*(.+)$') {
         $v = $Matches[1].Trim().Trim('"').Trim("'").TrimEnd('/')
-        if ($v) { $defaultApiUrl = $v }
+        # Web dev URLs (localhost / 127.0.0.1) do not work on Android emulator.
+        if ($v -and $v -notmatch '^(https?://)?(localhost|127\.0\.0\.1)(:\d+)?') {
+            $defaultApiUrl = $v
+        }
     }
 }
 
