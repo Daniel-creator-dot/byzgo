@@ -194,7 +194,24 @@ const initDb = async () => {
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
 
-      -- Paystack keys are now managed via DB directly or Admin UI
+      CREATE TABLE IF NOT EXISTS otps (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        phone TEXT NOT NULL,
+        otp TEXT NOT NULL,
+        purpose TEXT NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        expires_at TIMESTAMP WITH TIME ZONE NOT NULL
+      );
+    `);
+
+    // Seed SMS gateway configurations
+    await pool.query(`
+      INSERT INTO system_settings (key, value)
+      VALUES 
+        ('sms_base_url', 'https://www.inteksms.top/api/v1'),
+        ('sms_api_key', 'INTEK_0E3012.cb48045dfaa3384211cdcbf82516d36fff101a23da78f1dd'),
+        ('sms_sender_id', 'bytzee')
+      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
     `);
     // Fix existing courier orders that were mislabeled as food
     await pool.query(`
@@ -235,21 +252,261 @@ const authenticateToken = (req: any, res: any, next: any) => {
   });
 };
 
+// SMS Gateway Helper function
+async function sendSMS(phone: string, message: string) {
+  try {
+    const apiKey = await getSetting('sms_api_key') || 'INTEK_0E3012.cb48045dfaa3384211cdcbf82516d36fff101a23da78f1dd';
+    const baseUrl = await getSetting('sms_base_url') || 'https://www.inteksms.top/api/v1';
+    const senderId = await getSetting('sms_sender_id') || 'bytzee';
+
+    // Format phone number to international Ghanaian standard (233) if it starts with 0
+    let formattedPhone = phone.trim();
+    if (formattedPhone.startsWith('0')) {
+      formattedPhone = '233' + formattedPhone.substring(1);
+    } else if (!formattedPhone.startsWith('233') && formattedPhone.length === 9) {
+      formattedPhone = '233' + formattedPhone;
+    }
+
+    console.log(`Sending SMS OTP to ${formattedPhone} using INTEK SMS...`);
+
+    // We send payload parameters supporting standard variations to be bulletproof
+    const response = await axios.post(`${baseUrl}/sms/send`, {
+      recipient: [formattedPhone],
+      sender: senderId,
+      message: message,
+      key: apiKey,
+      api_key: apiKey,
+      apikey: apiKey,
+      to: formattedPhone,
+      from: senderId
+    }, {
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'apikey': apiKey,
+        'api-key': apiKey,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      timeout: 10000
+    });
+
+    console.log('INTEK SMS API response:', response.data);
+    return response.data;
+  } catch (err: any) {
+    console.error('INTEK SMS /sms/send failed, trying /send fallback:', err.response?.data || err.message);
+    try {
+      const apiKey = await getSetting('sms_api_key') || 'INTEK_0E3012.cb48045dfaa3384211cdcbf82516d36fff101a23da78f1dd';
+      const baseUrl = await getSetting('sms_base_url') || 'https://www.inteksms.top/api/v1';
+      const senderId = await getSetting('sms_sender_id') || 'bytzee';
+
+      let formattedPhone = phone.trim();
+      if (formattedPhone.startsWith('0')) {
+        formattedPhone = '233' + formattedPhone.substring(1);
+      }
+
+      const response = await axios.post(`${baseUrl}/send`, {
+        recipient: [formattedPhone],
+        sender: senderId,
+        message: message,
+        key: apiKey,
+        api_key: apiKey,
+        apikey: apiKey,
+        to: formattedPhone,
+        from: senderId
+      }, {
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'apikey': apiKey,
+          'api-key': apiKey,
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        timeout: 10000
+      });
+
+      console.log('INTEK SMS fallback response:', response.data);
+      return response.data;
+    } catch (fallbackErr: any) {
+      console.error('Failed to send SMS OTP via fallback:', fallbackErr.response?.data || fallbackErr.message);
+      return null;
+    }
+  }
+}
+
 // Auth Routes
+
+// Send Sign-Up OTP Endpoint
+app.post('/api/auth/send-signup-otp', async (req, res) => {
+  const { phone, email } = req.body;
+  if (!phone) {
+    return res.status(400).json({ message: 'Phone number is required' });
+  }
+
+  try {
+    // Validate uniqueness of email and phone
+    const checkUser = await pool.query(
+      'SELECT id FROM users WHERE email = $1 OR phone = $2',
+      [email, phone]
+    );
+    if (checkUser.rowCount > 0) {
+      return res.status(400).json({ message: 'Email or Phone number is already registered' });
+    }
+
+    // Generate random 6-digit OTP
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+
+    // Save to DB
+    await pool.query(
+      "INSERT INTO otps (phone, otp, purpose, expires_at) VALUES ($1, $2, 'signup_verify', NOW() + INTERVAL '10 minutes')",
+      [phone, otp]
+    );
+
+    // Send SMS
+    await sendSMS(phone, `Your BytzGo verification code is: ${otp}. Valid for 10 minutes.`);
+
+    res.json({ success: true, message: 'Verification code sent successfully' });
+  } catch (err: any) {
+    console.error('Error sending signup OTP:', err);
+    res.status(500).json({ message: 'Failed to send verification code' });
+  }
+});
+
+// Send Forgot Password OTP Endpoint
+app.post('/api/auth/send-forgot-otp', async (req, res) => {
+  const { phone } = req.body;
+  if (!phone) {
+    return res.status(400).json({ message: 'Phone number is required' });
+  }
+
+  try {
+    // Standardize phone number formatting for query lookup
+    let lookups = [phone];
+    if (phone.startsWith('0')) {
+      lookups.push('233' + phone.substring(1));
+    } else if (phone.startsWith('233')) {
+      lookups.push('0' + phone.substring(3));
+    }
+
+    // Check if user exists with this phone number
+    const checkUser = await pool.query(
+      'SELECT id FROM users WHERE phone = ANY($1)',
+      [lookups]
+    );
+    if (checkUser.rowCount === 0) {
+      return res.status(404).json({ message: 'Phone number is not registered' });
+    }
+
+    // Generate random 6-digit OTP
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+
+    // Save to DB
+    await pool.query(
+      "INSERT INTO otps (phone, otp, purpose, expires_at) VALUES ($1, $2, 'forgot_password', NOW() + INTERVAL '10 minutes')",
+      [phone, otp]
+    );
+
+    // Send SMS
+    await sendSMS(phone, `Your BytzGo password reset code is: ${otp}. Valid for 10 minutes.`);
+
+    res.json({ success: true, message: 'Reset code sent successfully' });
+  } catch (err: any) {
+    console.error('Error sending forgot password OTP:', err);
+    res.status(500).json({ message: 'Failed to send reset code' });
+  }
+});
+
+// Verify OTP Endpoint
+app.post('/api/auth/verify-otp', async (req, res) => {
+  const { phone, otp, purpose } = req.body;
+  if (!phone || !otp || !purpose) {
+    return res.status(400).json({ message: 'Phone, OTP code, and purpose are required' });
+  }
+
+  try {
+    // Find valid, non-expired OTP record
+    const result = await pool.query(
+      'SELECT id FROM otps WHERE phone = $1 AND otp = $2 AND purpose = $3 AND expires_at > NOW() ORDER BY created_at DESC LIMIT 1',
+      [phone, otp, purpose]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(400).json({ message: 'Invalid or expired OTP code' });
+    }
+
+    res.json({ success: true, message: 'OTP verified successfully' });
+  } catch (err: any) {
+    console.error('Error verifying OTP:', err);
+    res.status(500).json({ message: 'Failed to verify OTP' });
+  }
+});
+
+// Reset Password with OTP Endpoint
+app.post('/api/auth/reset-password-otp', async (req, res) => {
+  const { phone, otp, newPassword } = req.body;
+  if (!phone || !otp || !newPassword) {
+    return res.status(400).json({ message: 'Phone, OTP code, and new password are required' });
+  }
+
+  try {
+    // Verify OTP first
+    const verifyResult = await pool.query(
+      "SELECT id FROM otps WHERE phone = $1 AND otp = $2 AND purpose = 'forgot_password' AND expires_at > NOW() ORDER BY created_at DESC LIMIT 1",
+      [phone, otp]
+    );
+
+    if (verifyResult.rowCount === 0) {
+      return res.status(400).json({ message: 'Invalid or expired OTP code' });
+    }
+
+    // Hash the new password
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    // Standardize phone list for password updates
+    let lookups = [phone];
+    if (phone.startsWith('0')) {
+      lookups.push('233' + phone.substring(1));
+    } else if (phone.startsWith('233')) {
+      lookups.push('0' + phone.substring(3));
+    }
+
+    // Update user's password
+    const updateResult = await pool.query(
+      'UPDATE users SET password = $1 WHERE phone = ANY($2) RETURNING id',
+      [hashedPassword, lookups]
+    );
+
+    if (updateResult.rowCount === 0) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    // Clean up used OTP
+    await pool.query(
+      "DELETE FROM otps WHERE phone = $1 AND purpose = 'forgot_password'",
+      [phone]
+    );
+
+    res.json({ success: true, message: 'Password reset successful' });
+  } catch (err: any) {
+    console.error('Error resetting password with OTP:', err);
+    res.status(500).json({ message: 'Failed to reset password' });
+  }
+});
+
 app.post('/api/auth/register', async (req, res) => {
-  const { name, email, password, role } = req.body;
+  const { name, email, password, role, phone } = req.body;
   try {
     const hashedPassword = await bcrypt.hash(password, 10);
     const userStatus = (role === 'vendor') ? 'pending' : 'active';
     const result = await pool.query(
-      'INSERT INTO users (name, email, password, role, status) VALUES ($1, $2, $3, $4, $5) RETURNING id, name, email, role, balance, status',
-      [name, email, hashedPassword, role, userStatus]
+      'INSERT INTO users (name, email, password, role, status, phone) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, name, email, role, balance, phone, status',
+      [name, email, hashedPassword, role, userStatus, phone]
     );
     const user = result.rows[0];
     const token = jwt.sign(user, process.env.JWT_SECRET as string);
     res.json({ user, token });
   } catch (err) {
-    res.status(400).json({ message: 'Email already exists' });
+    console.error('Registration failed:', err);
+    res.status(400).json({ message: 'Email or Phone number already exists' });
   }
 });
 

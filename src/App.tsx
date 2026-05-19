@@ -949,30 +949,146 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
   useEffect(() => {
     if (forcedRole) setRole(forcedRole);
   }, [forcedRole]);
+
+  // Auth fields
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
+  const [phone, setPhone] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
+  // OTP Verification state
+  const [otp, setOtp] = useState('');
+  const [isOtpModalOpen, setIsOtpModalOpen] = useState(false);
+  const [otpPurpose, setOtpPurpose] = useState<'signup_verify' | 'forgot_password'>('signup_verify');
+  const [otpError, setOtpError] = useState('');
+  const [otpLoading, setOtpLoading] = useState(false);
+
+  // Forgot Password state
+  const [isForgotPassword, setIsForgotPassword] = useState(false);
+  const [forgotStep, setForgotStep] = useState(1); // 1 = enter phone, 2 = enter otp + new password
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showNewPassword, setShowNewPassword] = useState(false);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    setLoading(true);
 
+    // If joining/signing up as customer, send SMS OTP first
+    if (!isLogin && role === 'customer') {
+      if (!phone) {
+        setError('Phone number is required for verification.');
+        return;
+      }
+      setLoading(true);
+      try {
+        await axios.post('/api/auth/send-signup-otp', { phone, email });
+        setOtpPurpose('signup_verify');
+        setOtpError('');
+        setOtp('');
+        setIsOtpModalOpen(true);
+      } catch (err: any) {
+        setError(err.response?.data?.message || 'Failed to send verification code. Please check your details.');
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+
+    // Standard Login / Non-customer signup flow
+    setLoading(true);
     try {
       const endpoint = isLogin ? '/api/auth/login' : '/api/auth/register';
-      const payload = isLogin ? { email, password } : { name, email, password, role };
+      const payload = isLogin ? { email, password } : { name, email, password, role, phone };
       
       const res = await axios.post(endpoint, payload);
       const accepted = onLogin(res.data.user, res.data.token);
       if (accepted === false) {
-        // Role mismatch â€” show generic error, don't reveal the real reason
         setError('Authentication failed. Please check your credentials.');
       }
     } catch (err: any) {
-      setError('Authentication failed. Please check your credentials.');
+      setError(err.response?.data?.message || 'Authentication failed. Please check your credentials.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleVerifySignupOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setOtpError('');
+    setOtpLoading(true);
+
+    try {
+      // 1. Verify OTP first
+      await axios.post('/api/auth/verify-otp', { phone, otp, purpose: 'signup_verify' });
+      
+      // 2. Verified successfully! complete the registration
+      setIsOtpModalOpen(false);
+      setLoading(true);
+      
+      const res = await axios.post('/api/auth/register', { name, email, password, role, phone });
+      const accepted = onLogin(res.data.user, res.data.token);
+      if (accepted === false) {
+        setError('Registration succeeded, but signing in failed. Please try logging in manually.');
+      }
+    } catch (err: any) {
+      setOtpError(err.response?.data?.message || 'Invalid or expired verification code. Please try again.');
+    } finally {
+      setOtpLoading(false);
+      setLoading(false);
+    }
+  };
+
+  const handleSendForgotOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    if (!phone) {
+      setError('Registered phone number is required.');
+      return;
+    }
+    setLoading(true);
+    try {
+      await axios.post('/api/auth/send-forgot-otp', { phone });
+      setForgotStep(2);
+      setOtp('');
+      setNewPassword('');
+      setConfirmPassword('');
+    } catch (err: any) {
+      setError(err.response?.data?.message || 'Failed to send recovery code. Phone number might not be registered.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleResetPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    if (!otp) {
+      setError('Verification code is required.');
+      return;
+    }
+    if (newPassword.length < 6) {
+      setError('Password must be at least 6 characters.');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setError('Passwords do not match.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      await axios.post('/api/auth/reset-password-otp', { phone, otp, newPassword });
+      setIsForgotPassword(false);
+      setIsLogin(true);
+      setForgotStep(1);
+      setError('');
+      alert('Password updated successfully! Please log in with your new password.');
+    } catch (err: any) {
+      setError(err.response?.data?.message || 'Failed to update password. Code may be invalid or expired.');
     } finally {
       setLoading(false);
     }
@@ -999,159 +1115,364 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
         </div>
 
         <div className="bg-white p-8 rounded-[2.5rem] shadow-xl shadow-slate-200/50 border border-slate-100">
-          <div className="flex p-1 bg-slate-100 rounded-2xl mb-8">
-            <button 
-              onClick={() => setIsLogin(true)}
-              className={cn("flex-1 py-3 text-sm font-black rounded-xl transition-all uppercase tracking-widest", isLogin ? "bg-white text-brand-blue shadow-sm" : "text-slate-500")}
-            >
-              Login
-            </button>
-            <button 
-              onClick={() => setIsLogin(false)}
-              className={cn("flex-1 py-3 text-sm font-black rounded-xl transition-all uppercase tracking-widest", !isLogin ? "bg-white text-brand-blue shadow-sm" : "text-slate-500")}
-            >
-              Join
-            </button>
-          </div>
-
-          <form onSubmit={handleSubmit} className="space-y-6">
-            {!isLogin && (
-              <div className="space-y-2">
-                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-4">Full Name</label>
-                <div className="relative">
-                  <UserIcon className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" size={18} />
-                  <input 
-                    type="text" 
-                    required
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    placeholder="Enter your name"
-                    className="w-full bg-slate-50 border border-slate-100 p-4 pl-12 rounded-2xl focus:outline-none focus:border-brand-blue font-bold text-sm"
-                  />
-                </div>
+          {isForgotPassword ? (
+            // Forgot Password Flow
+            <div className="space-y-6">
+              <div className="text-center mb-4">
+                <h3 className="text-xl font-black italic tracking-tighter text-slate-800 uppercase">Recover Password</h3>
+                <p className="text-xs font-medium text-slate-400 mt-1 uppercase tracking-widest">Via INTEK SMS OTP Verification</p>
               </div>
-            )}
 
-            <div className="space-y-2">
-              <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-4">Email Address</label>
-              <div className="relative">
-                <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" size={18} />
-                <input 
-                  type="email" 
-                  required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="name@example.com"
-                  className="w-full bg-slate-50 border border-slate-100 p-4 pl-12 rounded-2xl focus:outline-none focus:border-brand-blue font-bold text-sm"
-                />
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-4">Password</label>
-              <div className="relative">
-                <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" size={18} />
-                <input 
-                  type={showPassword ? "text" : "password"} 
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="w-full bg-slate-50 border border-slate-100 p-4 pl-12 rounded-2xl focus:outline-none focus:border-brand-blue font-bold text-sm"
-                />
-                <button 
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-500 transition-colors"
-                >
-                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                </button>
-              </div>
-            </div>
-
-
-
-            <Modal 
-              isOpen={!!error} 
-              onClose={() => setError('')} 
-              title="Authentication Issue"
-            >
-              <div className="space-y-6">
-                <div className="flex gap-4 items-start">
-                  <div className="w-12 h-12 rounded-2xl bg-red-50 text-red-500 flex items-center justify-center shrink-0">
-                    <AlertCircle size={24} />
+              {forgotStep === 1 ? (
+                <form onSubmit={handleSendForgotOtp} className="space-y-6">
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-4">Registered Phone Number</label>
+                    <div className="relative">
+                      <Phone className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" size={18} />
+                      <input 
+                        type="tel" 
+                        required
+                        value={phone}
+                        onChange={(e) => setPhone(e.target.value)}
+                        placeholder="e.g. 024XXXXXXX"
+                        className="w-full bg-slate-50 border border-slate-100 p-4 pl-12 rounded-2xl focus:outline-none focus:border-brand-blue font-bold text-sm"
+                      />
+                    </div>
                   </div>
-                  <p className="text-slate-500 font-medium leading-relaxed">{error}</p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setError('')}
-                  className="w-full py-4 bg-slate-900 text-white rounded-2xl font-black uppercase tracking-widest text-xs hover:scale-[1.02] active:scale-[0.98] transition-all"
+
+                  <button 
+                    type="submit"
+                    disabled={loading}
+                    className="w-full py-4 bg-brand-blue text-white rounded-2xl font-black uppercase tracking-widest text-xs hover:scale-[1.02] active:scale-[0.98] transition-all shadow-xl shadow-brand-blue/20 flex items-center justify-center gap-2"
+                  >
+                    {loading ? <LoadingIndicator size="sm" variant="white" /> : 'Send Verification Code'}
+                  </button>
+                </form>
+              ) : (
+                <form onSubmit={handleResetPassword} className="space-y-6">
+                  <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100 flex items-center justify-between">
+                    <div>
+                      <p className="text-[8px] font-black uppercase tracking-widest text-slate-400">Sending Code To</p>
+                      <p className="font-bold text-sm text-slate-700">{phone}</p>
+                    </div>
+                    <button type="button" onClick={() => setForgotStep(1)} className="text-[8px] font-black uppercase tracking-widest text-brand-blue hover:underline">Change</button>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-4">6-Digit Code (SMS OTP)</label>
+                    <input 
+                      type="text" 
+                      required
+                      maxLength={6}
+                      value={otp}
+                      onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))}
+                      placeholder="Enter 6-digit OTP"
+                      className="w-full bg-slate-50 border border-slate-100 p-4 text-center rounded-2xl focus:outline-none focus:border-brand-blue font-mono font-black text-xl tracking-[0.5em]"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-4">New Password</label>
+                    <div className="relative">
+                      <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" size={18} />
+                      <input 
+                        type={showNewPassword ? "text" : "password"} 
+                        required
+                        value={newPassword}
+                        onChange={(e) => setNewPassword(e.target.value)}
+                        placeholder="New password (min 6 chars)"
+                        className="w-full bg-slate-50 border border-slate-100 p-4 pl-12 pr-12 rounded-2xl focus:outline-none focus:border-brand-blue font-bold text-sm"
+                      />
+                      <button 
+                        type="button"
+                        onClick={() => setShowNewPassword(!showNewPassword)}
+                        className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-500 transition-colors"
+                      >
+                        {showNewPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-4">Confirm Password</label>
+                    <div className="relative">
+                      <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" size={18} />
+                      <input 
+                        type={showNewPassword ? "text" : "password"} 
+                        required
+                        value={confirmPassword}
+                        onChange={(e) => setConfirmPassword(e.target.value)}
+                        placeholder="Re-enter new password"
+                        className="w-full bg-slate-50 border border-slate-100 p-4 pl-12 rounded-2xl focus:outline-none focus:border-brand-blue font-bold text-sm"
+                      />
+                    </div>
+                  </div>
+
+                  <button 
+                    type="submit"
+                    disabled={loading}
+                    className="w-full py-4 bg-brand-green text-white rounded-2xl font-black uppercase tracking-widest text-xs hover:scale-[1.02] active:scale-[0.98] transition-all shadow-xl shadow-brand-green/20 flex items-center justify-center gap-2"
+                  >
+                    {loading ? <LoadingIndicator size="sm" variant="white" /> : 'Reset Password'}
+                  </button>
+                </form>
+              )}
+
+              <div className="text-center mt-6">
+                <button 
+                  type="button" 
+                  onClick={() => {
+                    setIsForgotPassword(false);
+                    setForgotStep(1);
+                    setError('');
+                  }} 
+                  className="text-[10px] font-black uppercase tracking-widest text-slate-400 hover:text-slate-600 hover:underline"
                 >
-                  Understood
+                  ← Back to Login
                 </button>
               </div>
-            </Modal>
-
-            <button 
-              type="submit"
-              disabled={loading}
-              className="w-full py-4 bg-brand-blue text-white rounded-2xl font-black uppercase tracking-widest text-xs hover:scale-[1.02] active:scale-[0.98] transition-all shadow-xl shadow-brand-blue/20 flex items-center justify-center gap-2"
-            >
-              {loading ? <LoadingIndicator size="sm" variant="white" /> : (isLogin ? 'Sign In' : 'Create Account')}
-            </button>
-          </form>
-
-          <div className="mt-6">
-            <div className="flex items-center gap-4 mb-5">
-              <div className="flex-1 h-px bg-slate-200"></div>
-              <span className="text-[10px] font-black uppercase tracking-widest text-slate-300">or</span>
-              <div className="flex-1 h-px bg-slate-200"></div>
             </div>
-            <div className="flex justify-center">
-              <button
-                onClick={async () => {
-                  setLoading(true);
-                  setError('');
-                  try {
-                    // Store role in localStorage before redirect
-                    localStorage.setItem('google_login_role', role);
-                    
-                    // Supabase Google OAuth Login
-                    const { error } = await supabase.auth.signInWithOAuth({
-                      provider: 'google',
-                      options: {
-                        redirectTo: window.location.origin
-                      }
-                    });
-                    if (error) throw error;
-                  } catch (err: any) {
-                    console.error('Supabase Google OAuth failed:', err);
-                    setError('Authentication failed. Please try again.');
-                    setLoading(false);
-                  }
-                }}
-                className="w-full max-w-[320px] py-4 bg-white border border-slate-200 rounded-full font-black uppercase tracking-widest text-[10px] flex items-center justify-center gap-3 hover:bg-slate-50 transition-all shadow-sm disabled:opacity-50"
-                disabled={loading}
-              >
-                {loading ? (
-                  <LoadingIndicator size="sm" variant="white" />
-                ) : (
-                  <>
-                    <svg width="18" height="18" viewBox="0 0 24 24">
-                      <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
-                      <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
-                      <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" fill="#FBBC05"/>
-                      <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
-                    </svg>
-                    {isLogin ? 'Sign in with Google' : 'Sign up with Google'}
-                  </>
+          ) : (
+            // Regular Login/Signup Flows
+            <>
+              <div className="flex p-1 bg-slate-100 rounded-2xl mb-8">
+                <button 
+                  onClick={() => {
+                    setIsLogin(true);
+                    setError('');
+                  }}
+                  className={cn("flex-1 py-3 text-sm font-black rounded-xl transition-all uppercase tracking-widest", isLogin ? "bg-white text-brand-blue shadow-sm" : "text-slate-500")}
+                >
+                  Login
+                </button>
+                <button 
+                  onClick={() => {
+                    setIsLogin(false);
+                    setError('');
+                  }}
+                  className={cn("flex-1 py-3 text-sm font-black rounded-xl transition-all uppercase tracking-widest", !isLogin ? "bg-white text-brand-blue shadow-sm" : "text-slate-500")}
+                >
+                  Join
+                </button>
+              </div>
+
+              <form onSubmit={handleSubmit} className="space-y-6">
+                {!isLogin && (
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-4">Full Name</label>
+                    <div className="relative">
+                      <UserIcon className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" size={18} />
+                      <input 
+                        type="text" 
+                        required
+                        value={name}
+                        onChange={(e) => setName(e.target.value)}
+                        placeholder="Enter your name"
+                        className="w-full bg-slate-50 border border-slate-100 p-4 pl-12 rounded-2xl focus:outline-none focus:border-brand-blue font-bold text-sm"
+                      />
+                    </div>
+                  </div>
                 )}
-              </button>
-            </div>
-          </div>
+
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-4">Email Address</label>
+                  <div className="relative">
+                    <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" size={18} />
+                    <input 
+                      type="email" 
+                      required
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      placeholder="name@example.com"
+                      className="w-full bg-slate-50 border border-slate-100 p-4 pl-12 rounded-2xl focus:outline-none focus:border-brand-blue font-bold text-sm"
+                    />
+                  </div>
+                </div>
+
+                {!isLogin && (
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-4">Phone Number</label>
+                    <div className="relative">
+                      <Phone className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" size={18} />
+                      <input 
+                        type="tel" 
+                        required
+                        value={phone}
+                        onChange={(e) => setPhone(e.target.value)}
+                        placeholder="e.g. 024XXXXXXX"
+                        className="w-full bg-slate-50 border border-slate-100 p-4 pl-12 rounded-2xl focus:outline-none focus:border-brand-blue font-bold text-sm"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                <div className="space-y-2">
+                  <div className="flex justify-between items-center px-4">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">Password</label>
+                    {isLogin && (
+                      <button 
+                        type="button" 
+                        onClick={() => {
+                          setIsForgotPassword(true);
+                          setForgotStep(1);
+                          setError('');
+                        }} 
+                        className="text-[9px] font-black uppercase tracking-widest text-brand-blue hover:underline"
+                      >
+                        Forgot?
+                      </button>
+                    )}
+                  </div>
+                  <div className="relative">
+                    <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" size={18} />
+                    <input 
+                      type={showPassword ? "text" : "password"} 
+                      required
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      placeholder="••••••••"
+                      className="w-full bg-slate-50 border border-slate-100 p-4 pl-12 rounded-2xl focus:outline-none focus:border-brand-blue font-bold text-sm"
+                    />
+                    <button 
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-500 transition-colors"
+                    >
+                      {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                    </button>
+                  </div>
+                </div>
+
+                <button 
+                  type="submit"
+                  disabled={loading}
+                  className="w-full py-4 bg-brand-blue text-white rounded-2xl font-black uppercase tracking-widest text-xs hover:scale-[1.02] active:scale-[0.98] transition-all shadow-xl shadow-brand-blue/20 flex items-center justify-center gap-2"
+                >
+                  {loading ? <LoadingIndicator size="sm" variant="white" /> : (isLogin ? 'Sign In' : 'Create Account')}
+                </button>
+              </form>
+
+              <div className="mt-6">
+                <div className="flex items-center gap-4 mb-5">
+                  <div className="flex-1 h-px bg-slate-200"></div>
+                  <span className="text-[10px] font-black uppercase tracking-widest text-slate-300">or</span>
+                  <div className="flex-1 h-px bg-slate-200"></div>
+                </div>
+                <div className="flex justify-center">
+                  <button
+                    onClick={async () => {
+                      setLoading(true);
+                      setError('');
+                      try {
+                        localStorage.setItem('google_login_role', role);
+                        const { error } = await supabase.auth.signInWithOAuth({
+                          provider: 'google',
+                          options: {
+                            redirectTo: window.location.origin
+                          }
+                        });
+                        if (error) throw error;
+                      } catch (err: any) {
+                        console.error('Supabase Google OAuth failed:', err);
+                        setError('Authentication failed. Please try again.');
+                        setLoading(false);
+                      }
+                    }}
+                    className="w-full max-w-[320px] py-4 bg-white border border-slate-200 rounded-full font-black uppercase tracking-widest text-[10px] flex items-center justify-center gap-3 hover:bg-slate-50 transition-all shadow-sm disabled:opacity-50"
+                    disabled={loading}
+                  >
+                    {loading ? (
+                      <LoadingIndicator size="sm" variant="white" />
+                    ) : (
+                      <>
+                        <svg width="18" height="18" viewBox="0 0 24 24">
+                          <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+                          <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+                          <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" fill="#FBBC05"/>
+                          <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+                        </svg>
+                        {isLogin ? 'Sign in with Google' : 'Sign up with Google'}
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
         </div>
       </motion.div>
+
+      {/* Global Error Modal */}
+      <Modal 
+        isOpen={!!error} 
+        onClose={() => setError('')} 
+        title="Authentication Issue"
+      >
+        <div className="space-y-6">
+          <div className="flex gap-4 items-start">
+            <div className="w-12 h-12 rounded-2xl bg-red-50 text-red-500 flex items-center justify-center shrink-0">
+              <AlertCircle size={24} />
+            </div>
+            <p className="text-slate-500 font-medium leading-relaxed">{error}</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setError('')}
+            className="w-full py-4 bg-slate-900 text-white rounded-2xl font-black uppercase tracking-widest text-xs hover:scale-[1.02] active:scale-[0.98] transition-all"
+          >
+            Understood
+          </button>
+        </div>
+      </Modal>
+
+      {/* Signup OTP Verification Modal */}
+      <Modal
+        isOpen={isOtpModalOpen}
+        onClose={() => setIsOtpModalOpen(false)}
+        title="Phone Verification"
+      >
+        <form onSubmit={handleVerifySignupOtp} className="space-y-6">
+          <div className="text-center">
+            <div className="w-12 h-12 rounded-2xl bg-brand-blue/10 text-brand-blue flex items-center justify-center mx-auto mb-4">
+              <Phone size={24} />
+            </div>
+            <p className="text-slate-600 font-medium text-sm leading-relaxed">
+              We sent a 6-digit verification code to <span className="font-bold text-slate-800">{phone}</span> via SMS.
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Verification Code (6 Digits)</label>
+            <input 
+              type="text" 
+              required
+              maxLength={6}
+              value={otp}
+              onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))}
+              placeholder="e.g. 123456"
+              className="w-full bg-slate-50 border border-slate-100 p-4 text-center rounded-2xl focus:outline-none focus:border-brand-blue font-mono font-black text-xl tracking-[0.5em]"
+            />
+            {otpError && <p className="text-[10px] font-black text-red-500 uppercase tracking-widest ml-2">{otpError}</p>}
+          </div>
+
+          <div className="flex gap-3">
+            <button
+              type="button"
+              onClick={() => setIsOtpModalOpen(false)}
+              className="flex-1 py-4 bg-slate-100 text-slate-500 rounded-2xl font-black uppercase tracking-widest text-xs hover:bg-slate-200 transition-all"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={otpLoading}
+              className="flex-1 py-4 bg-brand-blue text-white rounded-2xl font-black uppercase tracking-widest text-xs hover:scale-[1.02] active:scale-[0.98] transition-all shadow-lg shadow-brand-blue/20 flex items-center justify-center gap-2"
+            >
+              {otpLoading ? <LoadingIndicator size="sm" variant="white" /> : 'Verify & Join'}
+            </button>
+          </div>
+        </form>
+      </Modal>
     </div>
   );
 }
