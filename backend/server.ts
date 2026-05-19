@@ -12,8 +12,27 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 import axios from 'axios';
+import { OAuth2Client } from 'google-auth-library';
 
-dotenv.config();
+dotenv.config({ path: path.join(__dirname, '.env') });
+dotenv.config({ path: path.join(__dirname, '..', '.env.local') });
+
+const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || 'bytzgo-72f1c';
+const googleOAuthClient = new OAuth2Client();
+
+async function verifyGoogleIdToken(idToken: string) {
+  try {
+    return await admin.auth().verifyIdToken(idToken);
+  } catch {
+    const ticket = await googleOAuthClient.verifyIdToken({
+      idToken,
+      audience: FIREBASE_PROJECT_ID,
+    });
+    const payload = ticket.getPayload();
+    if (!payload?.email) throw new Error('Invalid Google token');
+    return payload;
+  }
+}
 
 try {
   const serviceAccountPath = path.join(__dirname, 'bytzgo-72f1c-firebase-adminsdk-fbsvc-51cd0be35b.json');
@@ -531,11 +550,13 @@ app.post('/api/auth/login', async (req, res) => {
 app.post('/api/auth/google', async (req, res) => {
   const { credential, role } = req.body;
   try {
-    const decodedToken = await admin.auth().verifyIdToken(credential);
-    const payload = decodedToken;
+    const payload = await verifyGoogleIdToken(credential);
     if (!payload || !payload.email) {
       return res.status(400).json({ message: 'Invalid Google token' });
     }
+
+    const googleId = payload.sub || (payload as { user_id?: string }).user_id;
+    const displayName = payload.name || payload.email.split('@')[0];
     
     // Check if user exists
     let result = await pool.query('SELECT * FROM users WHERE email = $1', [payload.email]);
@@ -544,13 +565,13 @@ app.post('/api/auth/google', async (req, res) => {
       const userStatus = (role === 'vendor' || role === 'rider') ? 'pending' : 'active';
       result = await pool.query(
         'INSERT INTO users (name, email, google_id, role, status) VALUES ($1, $2, $3, $4, $5) RETURNING id, name, email, role, balance, phone, status',
-        [payload.name, payload.email, payload.sub, role || 'customer', userStatus]
+        [displayName, payload.email, googleId, role || 'customer', userStatus]
       );
       user = result.rows[0];
     } else {
       // Update google_id if not set
-      if (!user.google_id) {
-        await pool.query('UPDATE users SET google_id = $1 WHERE id = $2', [payload.sub, user.id]);
+      if (!user.google_id && googleId) {
+        await pool.query('UPDATE users SET google_id = $1 WHERE id = $2', [googleId, user.id]);
       }
       const { password, ...u } = user;
       user = u;
