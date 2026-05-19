@@ -1,0 +1,182 @@
+# BytzGo Mobile (Flutter)
+
+Cross-platform iOS and Android client for **BytzGo** — **Bolt / Uber–style** bike delivery UI (full-screen map, white bottom sheet, green accent). Uses the same **Express API** and **Socket.IO** events as the React web app in the repo root.
+
+## What's included
+
+| Layer | Status |
+|-------|--------|
+| Email/password login → `POST /api/auth/login` | Done |
+| Google sign-in → `POST /api/auth/google` | Optional (`GOOGLE_WEB_CLIENT_ID` + FlutterFire) |
+| JWT in secure storage | Done |
+| Socket.IO (`join`, `order:updated`, `ride:incoming`, …) | Done |
+| Role routing (customer / rider / vendor / admin) | Done |
+| Google Maps (or painted fallback) | Done |
+| Customer book courier → `POST /api/orders` | Done |
+| Rider go online → `PATCH /api/auth/status` | Done |
+| Rider accept / decline → `PATCH` / `POST decline` | Done |
+| Live location while online → Socket `location:update` | Done |
+| Vendor / admin | Map shell stubs |
+
+## Prerequisites
+
+1. [Flutter SDK](https://docs.flutter.dev/get-started/install/windows) (stable, 3.24+) — add `flutter\bin` to **PATH**
+2. Android Studio (Android SDK) and/or Xcode on macOS for iOS
+3. Backend: `npm run backend` from repo root (port **3000**)
+4. Env: root `.env.example` and `backend/.env`
+
+## First-time setup
+
+```powershell
+cd mobile
+.\scripts\setup_platform.ps1   # runs flutter create . if Flutter is on PATH
+flutter pub get
+```
+
+If `android/` was created manually, copy `android\local.properties.example` → `android\local.properties` and set:
+
+```properties
+flutter.sdk=C:\\path\\to\\flutter
+sdk.dir=C:\\Users\\YOU\\AppData\\Local\\Android\\Sdk
+GOOGLE_MAPS_API_KEY=your-maps-sdk-key
+```
+
+### Google Maps
+
+Your web app key in **repo root** [`.env.local`](../.env.local) (`GOOGLE_MAPS_API_KEY` or `VITE_GOOGLE_MAPS_API_KEY`) is used for mobile too.
+
+**One-time sync** (copies key into Android, iOS, and Dart):
+
+```powershell
+cd mobile
+.\scripts\sync_maps_key.ps1
+```
+
+In [Google Cloud Console](https://console.cloud.google.com/), enable for the same project:
+
+- **Maps SDK for Android**
+- **Maps SDK for iOS**
+- (Web already uses Maps JavaScript API)
+
+Then rebuild (use the repo **`.flutter-sdk`** so Gradle and CLI match):
+
+```powershell
+# from repo root — recommended
+npm run backend          # terminal 1
+npm run flutter:android  # terminal 2 (emulator or device)
+
+# or from mobile/
+..\.flutter-sdk\bin\flutter clean
+..\.flutter-sdk\bin\flutter pub get
+..\.flutter-sdk\bin\flutter run --dart-define-from-file=dart_defines.json --dart-define=API_URL=http://10.0.2.2:3000
+```
+
+Android also reads `../../.env.local` at build time if `local.properties` has no key.
+
+**If the map is gray or blank:** In Google Cloud, enable **Maps SDK for Android** (not only JavaScript API). For restricted keys, add an **Android** restriction with package `com.bytzgo.bytzgo_mobile` and your debug SHA-1 fingerprint.
+
+### API URL (`--dart-define`)
+
+| Environment | `API_URL` |
+|-------------|-----------|
+| Android emulator → PC | `http://10.0.2.2:3000` |
+| iOS simulator → PC | `http://127.0.0.1:3000` |
+| Physical device (same Wi‑Fi) | `http://<PC-LAN-IP>:3000` |
+| Production | `https://your-api.onrender.com` |
+
+Default (no define): `http://10.0.2.2:3000`.
+
+## Run locally
+
+```powershell
+# Terminal 1 — API (repo root)
+npm run backend
+
+# Terminal 2 — Flutter
+cd mobile
+flutter run ^
+  --dart-define=API_URL=http://10.0.2.2:3000 ^
+  --dart-define=GOOGLE_MAPS_API_KEY=your_key_here
+```
+
+### End-to-end smoke test
+
+1. Start backend: `npm run backend` (repo root).
+2. Log in as **customer** on mobile → allow location → set drop-off (tap map) → **Request bike**.
+3. Log in as **rider** (second device/emulator) → **Go online** → accept incoming job.
+4. Customer should see “Your rider is on the way” via socket `order:updated`.
+
+## App icon
+
+Branding lives in [`assets/branding/`](assets/branding/). Icons are generated with a **squircle** mask and Android **adaptive** foreground layers.
+
+Regenerate after replacing `app_icon_source.png`:
+
+```powershell
+npm run icons
+# or: python mobile/scripts/generate_app_icon.py
+```
+
+Updates Android mipmaps, Flutter web PWA icons, and `public/rider-icon.png` for the web app map marker.
+
+## Analyze & test
+
+```powershell
+cd mobile
+flutter analyze
+flutter test
+```
+
+## Google Sign-In (optional)
+
+Email login works **without** Firebase.
+
+1. Install FlutterFire CLI:
+   ```powershell
+   dart pub global activate flutterfire_cli
+   ```
+2. From `mobile/`:
+   ```powershell
+   flutterfire configure
+   ```
+   This replaces [`lib/firebase_options.dart`](lib/firebase_options.dart). Set `isConfigured = true` in the generated file (or remove the stub flag per FlutterFire output).
+3. Add `google-services.json` (Android) and `GoogleService-Info.plist` (iOS).
+4. Run with web client ID:
+   ```powershell
+   flutter run ^
+     --dart-define=API_URL=http://10.0.2.2:3000 ^
+     --dart-define=GOOGLE_WEB_CLIENT_ID=YOUR_WEB_CLIENT_ID.apps.googleusercontent.com
+   ```
+
+Until `GOOGLE_WEB_CLIENT_ID` is set, the Google button is hidden on the login screen.
+
+## Project layout
+
+```text
+mobile/lib/
+  main.dart
+  firebase_bootstrap.dart
+  firebase_options.dart      # stub until flutterfire configure
+  app.dart
+  core/                      # api, session, socket, env
+  models/
+  features/
+  routing/
+  shared/
+```
+
+## Troubleshooting
+
+| Issue | Fix |
+|-------|-----|
+| `flutter` not recognized | Install Flutter and add to PATH; restart terminal |
+| No `android/` / incomplete `ios/` | Run `.\scripts\setup_platform.ps1` or `flutter create . --org com.bytzgo --project-name bytzgo_mobile` |
+| `flutter.sdk not set` | Create `android/local.properties` from example |
+| Connection refused (emulator) | Use `10.0.2.2:3000`, not `localhost` |
+| CardTheme / analyzer errors | Run `flutter pub get` after pulling |
+| Google button missing | Expected until `GOOGLE_WEB_CLIENT_ID` is passed |
+
+## Related
+
+- Web app: repo root
+- Backend: [`backend/server.ts`](../backend/server.ts)

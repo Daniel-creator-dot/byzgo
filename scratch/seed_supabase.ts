@@ -19,17 +19,18 @@ async function seed() {
     console.log(`Total: ${tablesResult.rows.length} tables\n`);
 
     // Hash passwords
-    const password = await bcrypt.hash('Test@1234', 10);
+    const defaultPassword = await bcrypt.hash('Test@1234', 10);
+    const customerPassword = await bcrypt.hash('Customer@1234', 10);
 
     // Seed users for each role
     const users = [
-      { name: 'Kofi Mensah', email: 'customer@bytzgo.com', role: 'customer', region: 'Greater Accra' },
-      { name: 'Ama Serwaa', email: 'customer2@bytzgo.com', role: 'customer', region: 'Ashanti' },
-      { name: 'Kwame Bistro', email: 'vendor@bytzgo.com', role: 'vendor', region: 'Greater Accra', address: 'Osu, Accra', lat: 5.5560, lng: -0.1820 },
-      { name: 'Accra Eats Kitchen', email: 'vendor2@bytzgo.com', role: 'vendor', region: 'Greater Accra', address: 'East Legon, Accra', lat: 5.6350, lng: -0.1570 },
-      { name: 'Yaw Speed', email: 'rider@bytzgo.com', role: 'rider', region: 'Greater Accra' },
-      { name: 'Kwesi Flash', email: 'rider2@bytzgo.com', role: 'rider', region: 'Greater Accra' },
-      { name: 'Admin BytzGo', email: 'admin@bytzgo.com', role: 'admin', region: 'Greater Accra' },
+      { name: 'Kofi Mensah', email: 'customer@bytzgo.net', role: 'customer', region: 'Greater Accra', password: customerPassword },
+      { name: 'Ama Serwaa', email: 'customer2@bytzgo.com', role: 'customer', region: 'Ashanti', password: defaultPassword },
+      { name: 'Kwame Bistro', email: 'vendor@bytzgo.com', role: 'vendor', region: 'Greater Accra', address: 'Osu, Accra', lat: 5.5560, lng: -0.1820, password: defaultPassword },
+      { name: 'Accra Eats Kitchen', email: 'vendor2@bytzgo.com', role: 'vendor', region: 'Greater Accra', address: 'East Legon, Accra', lat: 5.6350, lng: -0.1570, password: defaultPassword },
+      { name: 'Yaw Speed', email: 'rider@bytzgo.com', role: 'rider', region: 'Greater Accra', password: defaultPassword },
+      { name: 'Kwesi Flash', email: 'rider2@bytzgo.com', role: 'rider', region: 'Greater Accra', password: defaultPassword },
+      { name: 'Admin BytzGo', email: 'admin@bytzgo.com', role: 'admin', region: 'Greater Accra', password: defaultPassword },
     ];
 
     console.log('=== SEEDING USERS ===');
@@ -38,9 +39,9 @@ async function seed() {
         const result = await pool.query(
           `INSERT INTO users (name, email, password, role, region, address, lat, lng, balance, status) 
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) 
-           ON CONFLICT (email) DO UPDATE SET name = $1
+           ON CONFLICT (email) DO UPDATE SET name = $1, password = $3
            RETURNING id, name, email, role`,
-          [u.name, u.email, password, u.role, u.region || null, (u as any).address || null, (u as any).lat || null, (u as any).lng || null, 100.00, 'active']
+          [u.name, u.email, (u as any).password ?? defaultPassword, u.role, u.region || null, (u as any).address || null, (u as any).lat || null, (u as any).lng || null, 100.00, 'active']
         );
         console.log(` ✅ ${result.rows[0].role.padEnd(8)} | ${result.rows[0].name} (${result.rows[0].email})`);
       } catch (err: any) {
@@ -110,8 +111,8 @@ async function seed() {
     }
 
     console.log('\n=== LOGIN CREDENTIALS ===');
-    console.log(' All passwords: Test@1234');
-    console.log(' Customer:  customer@bytzgo.com');
+    console.log(' Customer:  customer@bytzgo.net / Customer@1234');
+    console.log(' Other roles: Test@1234');
     console.log(' Customer2: customer2@bytzgo.com');
     console.log(' Vendor:    vendor@bytzgo.com');
     console.log(' Vendor2:   vendor2@bytzgo.com');

@@ -1,0 +1,96 @@
+import 'dart:convert';
+
+import 'package:flutter/foundation.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+
+import '../models/auth_user.dart';
+import 'api_client.dart';
+import 'socket_service.dart';
+
+const _kToken = 'bytzgo_token';
+const _kUser = 'bytzgo_user';
+
+/// Holds JWT + user profile; persists across app restarts.
+class Session extends ChangeNotifier {
+  Session(this._api, this._socket);
+
+  final ApiClient _api;
+  final SocketService _socket;
+  final FlutterSecureStorage _storage = const FlutterSecureStorage();
+
+  String? _token;
+  AuthUser? _user;
+  bool _restoring = true;
+
+  String? get token => _token;
+  AuthUser? get user => _user;
+  bool get isAuthenticated => _token != null && _user != null;
+  bool get isRestoring => _restoring;
+
+  Future<void> restore() async {
+    _restoring = true;
+    notifyListeners();
+    try {
+      final token = await _storage.read(key: _kToken);
+      final userJson = await _storage.read(key: _kUser);
+      if (token != null && userJson != null) {
+        _token = token;
+        _user = AuthUser.fromJson(
+          jsonDecode(userJson) as Map<String, dynamic>,
+        );
+        _api.setToken(token);
+        await _connectSocket();
+      }
+    } catch (e) {
+      debugPrint('Session restore failed: $e');
+      await clear();
+    } finally {
+      _restoring = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> applyAuthResult({required String token, required AuthUser user}) async {
+    await setSession(token: token, user: user);
+  }
+
+  Future<void> setSession({
+    required String token,
+    required AuthUser user,
+  }) async {
+    _token = token;
+    _user = user;
+    _api.setToken(token);
+    await _storage.write(key: _kToken, value: token);
+    await _storage.write(key: _kUser, value: jsonEncode(user.toJson()));
+    await _connectSocket();
+    notifyListeners();
+  }
+
+  Future<void> clear() async {
+    _token = null;
+    _user = null;
+    _api.setToken(null);
+    _socket.disconnect();
+    await _storage.delete(key: _kToken);
+    await _storage.delete(key: _kUser);
+    notifyListeners();
+  }
+
+  void patchUser(AuthUser user) {
+    _user = user;
+    _storage.write(key: _kUser, value: jsonEncode(user.toJson()));
+    notifyListeners();
+  }
+
+  void patchBalance(double balance) {
+    if (_user == null) return;
+    patchUser(_user!.copyWith(balance: balance));
+  }
+
+  Future<void> _connectSocket() async {
+    final id = _user?.id;
+    if (id == null) return;
+    await _socket.connect(userId: id);
+  }
+}

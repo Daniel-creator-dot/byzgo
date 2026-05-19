@@ -1,0 +1,156 @@
+import 'package:flutter/foundation.dart';
+import 'package:socket_io_client/socket_io_client.dart' as io;
+
+import '../models/order.dart';
+import 'env.dart';
+import 'json_parse.dart';
+
+typedef OrderHandler = void Function(Order order);
+typedef OrderIdHandler = void Function(String orderId);
+typedef WalletHandler = void Function(double balance);
+typedef LocationHandler = void Function(String riderId, double lat, double lng);
+
+/// Real-time layer — mirrors `src/lib/socket.ts` and `App.tsx` listeners.
+class SocketService {
+  io.Socket? _socket;
+  String? _userId;
+
+  OrderHandler? onRideIncoming;
+  OrderIdHandler? onRideTaken;
+  OrderHandler? onOrderNew;
+  OrderHandler? onOrderUpdated;
+  WalletHandler? onWalletUpdated;
+  LocationHandler? onLocationUpdated;
+
+  bool get isConnected => _socket?.connected ?? false;
+
+  Future<void> connect({required String userId}) async {
+    if (_userId == userId && isConnected) return;
+    disconnect(clearCallbacks: false);
+    _userId = userId;
+
+    _socket = io.io(
+      Env.apiBaseUrl,
+      io.OptionBuilder()
+          .setTransports(['websocket', 'polling'])
+          .enableAutoConnect()
+          .enableReconnection()
+          .setReconnectionAttempts(999)
+          .setReconnectionDelay(1000)
+          .setReconnectionDelayMax(5000)
+          .build(),
+    );
+
+    _socket!
+      ..onConnect((_) {
+        debugPrint('[socket] connected');
+        _socket!.emit('join', userId);
+      })
+      ..on('ride:incoming', _onRideIncoming)
+      ..on('ride:taken', _onRideTaken)
+      ..on('order:new', _onOrderNew)
+      ..on('order:updated', _onOrderUpdated)
+      ..on('wallet:updated', _onWalletUpdated)
+      ..on('location:updated', _onLocationUpdated);
+  }
+
+  void _onRideIncoming(dynamic data) {
+    final order = _parseOrder(data);
+    if (order == null) return;
+    if (order.expiresAt != null) {
+      try {
+        if (DateTime.parse(order.expiresAt!).isBefore(DateTime.now())) return;
+      } catch (_) {
+        return;
+      }
+    }
+    onRideIncoming?.call(order);
+  }
+
+  void _onRideTaken(dynamic data) {
+    final map = _asMap(data);
+    if (map == null || map['orderId'] == null) return;
+    onRideTaken?.call(map['orderId'].toString());
+  }
+
+  void _onOrderNew(dynamic data) {
+    final order = _parseOrder(data);
+    if (order != null) onOrderNew?.call(order);
+  }
+
+  void _onOrderUpdated(dynamic data) {
+    final order = _parseOrder(data);
+    if (order != null) onOrderUpdated?.call(order);
+  }
+
+  void _onWalletUpdated(dynamic data) {
+    final map = _asMap(data);
+    if (map == null || map['balance'] == null) return;
+    final balance = parseJsonDouble(map['balance']);
+    if (balance == null) return;
+    onWalletUpdated?.call(balance);
+  }
+
+  void _onLocationUpdated(dynamic data) {
+    final map = _asMap(data);
+    if (map == null ||
+        map['riderId'] == null ||
+        map['lat'] == null ||
+        map['lng'] == null) {
+      return;
+    }
+    final lat = parseJsonDouble(map['lat']);
+    final lng = parseJsonDouble(map['lng']);
+    if (lat == null || lng == null) return;
+    onLocationUpdated?.call(map['riderId'].toString(), lat, lng);
+  }
+
+  Map<String, dynamic>? _asMap(dynamic data) {
+    if (data is! Map) return null;
+    try {
+      return Map<String, dynamic>.from(data);
+    } catch (e) {
+      debugPrint('[socket] bad map: $e');
+      return null;
+    }
+  }
+
+  Order? _parseOrder(dynamic data) {
+    final map = _asMap(data);
+    if (map == null) return null;
+    try {
+      return Order.fromJson(map);
+    } catch (e) {
+      debugPrint('[socket] bad order payload: $e');
+      return null;
+    }
+  }
+
+  void clearHandlers() {
+    onRideIncoming = null;
+    onRideTaken = null;
+    onOrderNew = null;
+    onOrderUpdated = null;
+    onWalletUpdated = null;
+    onLocationUpdated = null;
+  }
+
+  void emitLocationUpdate({
+    required String userId,
+    required double lat,
+    required double lng,
+  }) {
+    _socket?.emit('location:update', {
+      'userId': userId,
+      'lat': lat,
+      'lng': lng,
+    });
+  }
+
+  void disconnect({bool clearCallbacks = true}) {
+    _socket?.dispose();
+    _socket = null;
+    _userId = null;
+    if (clearCallbacks) clearHandlers();
+  }
+}

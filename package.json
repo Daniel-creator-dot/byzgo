@@ -6,6 +6,9 @@
   "scripts": {
     "dev": "vite",
     "backend": "npm --prefix backend run dev",
+    "icons": "python mobile/scripts/generate_app_icon.py",
+    "flutter:chrome": "cd mobile && ..\\.flutter-sdk\\bin\\flutter run -d chrome --dart-define-from-file=dart_defines.json",
+    "flutter:android": "cd mobile && ..\\.flutter-sdk\\bin\\flutter run -d emulator-5554 --dart-define-from-file=dart_defines.json --dart-define=API_URL=http://10.0.2.2:3000",
     "start": "vite",
     "build": "vite build",
     "preview": "vite preview",

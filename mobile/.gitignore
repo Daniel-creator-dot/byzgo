@@ -1,0 +1,30 @@
+# Flutter / Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+build/
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# Platform
+**/ios/Pods/
+**/ios/.symlinks/
+**/android/.gradle/
+**/android/local.properties
+**/android/key.properties
+**/android/app/debug
+**/android/app/profile
+**/android/app/release
+
+# Secrets
+.env
+dart_defines.json
+lib/core/maps_key.dart
+google-services.json
+GoogleService-Info.plist
+ios/Runner/MapsConfig.plist

@@ -1,0 +1,4 @@
+# Copy to local.properties and set your Flutter SDK path (Windows example):
+# flutter.sdk=C:\\src\\flutter
+# sdk.dir=C:\\Users\\YOUR_USER\\AppData\\Local\\Android\\Sdk
+# GOOGLE_MAPS_API_KEY=your-android-maps-sdk-key

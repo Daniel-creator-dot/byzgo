@@ -8,4 +8,9 @@ coverage/
 !.env.example
 backend/bytzgo-*.json
 backend/firebase-key*.json
+.flutter-sdk/
+mobile/.dart_tool/
+mobile/build/
+mobile/.idea/
+.idea/
 
