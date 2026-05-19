@@ -208,14 +208,20 @@ export function RiderApp({
   const toggleOnline = async () => {
     const next = isOnline ? 'offline' : 'active';
     try {
-      await axios.patch('/api/auth/status', { status: next });
+      const res = await axios.patch('/api/auth/status', { status: next });
+      const updated = res.data?.user;
       user.status = next;
       setIsOnline(!isOnline);
-      setUser((u) => (u ? { ...u, status: next } : u));
+      setUser((u) => (u ? { ...updated, ...u, status: next } : u));
       if (next === 'active') {
         unlockIncomingRideAudio();
+        socket.emit('join', user.id);
+        socket.emit('location:update', { userId: user.id, lat: riderPos.lat, lng: riderPos.lng });
         await subscribeRiderPush();
-      } else await unsubscribeRiderPush();
+        await refreshData?.();
+      } else {
+        await unsubscribeRiderPush();
+      }
     } catch (e) {
       console.error(e);
     }

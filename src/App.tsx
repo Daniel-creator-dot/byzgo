@@ -674,6 +674,12 @@ function MainApp() {
       setUser(prev => prev ? { ...prev, balance: data.balance } : null);
     });
 
+    socket.on('status:updated', ({ status }: { status: string }) => {
+      setUser(prev => (prev ? { ...prev, status } : null));
+      const stored = JSON.parse(localStorage.getItem('user') || '{}');
+      localStorage.setItem('user', JSON.stringify({ ...stored, status }));
+    });
+
     return () => {
       socket.off('connect', joinSocketRoom);
       socket.off('ride:incoming');
@@ -682,6 +688,7 @@ function MainApp() {
       socket.off('order:updated');
       socket.off('location:updated');
       socket.off('wallet:updated');
+      socket.off('status:updated');
     };
   }, [token, triggerIncomingRideCall]);
 

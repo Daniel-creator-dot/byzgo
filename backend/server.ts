@@ -518,14 +518,46 @@ function clearDispatchTimer(orderId: string) {
   }
 }
 
-async function getActiveRiderIds(region?: string | null) {
-  const result = await pool.query(
-    `SELECT id FROM users
-     WHERE role = 'rider' AND status = 'active'
-     AND ($1::text IS NULL OR $1 = '' OR region = $1 OR region IS NULL)`,
-    [region || null]
+function normalizeRegion(region?: string | null): string | null {
+  if (!region || typeof region !== 'string') return null;
+  const t = region.trim();
+  return t.length ? t.toLowerCase() : null;
+}
+
+/** Active online riders; widens to all riders if regional filter matches nobody. */
+async function getActiveRiderIds(region?: string | null): Promise<string[]> {
+  const norm = normalizeRegion(region);
+  if (norm) {
+    const regional = await pool.query(
+      `SELECT id FROM users
+       WHERE role = 'rider' AND status = 'active'
+       AND (
+         region IS NULL OR TRIM(region) = ''
+         OR LOWER(TRIM(region)) = $1
+       )`,
+      [norm]
+    );
+    if (regional.rows.length > 0) {
+      return regional.rows.map((r: { id: string }) => r.id);
+    }
+  }
+  const all = await pool.query(
+    `SELECT id FROM users WHERE role = 'rider' AND status = 'active'`
   );
-  return result.rows.map((r: { id: string }) => r.id);
+  return all.rows.map((r: { id: string }) => r.id);
+}
+
+async function seedRiderLocationFromProfile(riderId: string) {
+  const u = await pool.query('SELECT lat, lng FROM users WHERE id = $1', [riderId]);
+  const lat = parseFloat(u.rows[0]?.lat);
+  const lng = parseFloat(u.rows[0]?.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) < 0.001) return;
+  await pool.query(
+    `INSERT INTO rider_locations (rider_id, lat, lng, updated_at)
+     VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+     ON CONFLICT (rider_id) DO UPDATE SET lat = $2, lng = $3, updated_at = CURRENT_TIMESTAMP`,
+    [riderId, lat, lng]
+  );
 }
 
 async function getPickupPoint(order: any): Promise<{ lat: number; lng: number } | null> {
@@ -551,12 +583,26 @@ async function getOfferedRiderIds(orderId: string): Promise<string[]> {
   return r.rows.map((row: { rider_id: string }) => row.rider_id);
 }
 
-async function getNearestActiveRiders(
+async function queryNearestActiveRiders(
   pickup: { lat: number; lng: number },
   region: string | null,
   excludeRiderIds: string[],
-  limit: number
+  limit: number,
+  useRegionFilter: boolean
 ): Promise<string[]> {
+  const norm = normalizeRegion(region);
+  const regionClause = useRegionFilter && norm
+    ? `AND (u.region IS NULL OR TRIM(u.region) = '' OR LOWER(TRIM(u.region)) = $6)`
+    : '';
+  const params: unknown[] = [
+    pickup.lat,
+    pickup.lng,
+    excludeRiderIds.length ? excludeRiderIds : [],
+    limit,
+    LOCATION_MAX_AGE_MIN,
+  ];
+  if (useRegionFilter && norm) params.push(norm);
+
   const result = await pool.query(
     `SELECT u.id,
       (6371 * acos(
@@ -568,20 +614,34 @@ async function getNearestActiveRiders(
      FROM users u
      INNER JOIN rider_locations rl ON rl.rider_id = u.id
      WHERE u.role = 'rider' AND u.status = 'active'
-     AND rl.updated_at > NOW() - INTERVAL '1 minute' * $6
-     AND ($3::text IS NULL OR $3 = '' OR u.region = $3 OR u.region IS NULL)
-     AND (COALESCE(array_length($4::uuid[], 1), 0) = 0 OR NOT (u.id = ANY($4::uuid[])))
+     AND rl.updated_at > NOW() - INTERVAL '1 minute' * $5
+     AND (COALESCE(array_length($3::uuid[], 1), 0) = 0 OR NOT (u.id = ANY($3::uuid[])))
+     ${regionClause}
      ORDER BY distance_km ASC
-     LIMIT $5`,
-    [pickup.lat, pickup.lng, region || null, excludeRiderIds, limit, LOCATION_MAX_AGE_MIN]
+     LIMIT $4`,
+    params
   );
   return result.rows.map((row: { id: string }) => row.id);
 }
 
+async function getNearestActiveRiders(
+  pickup: { lat: number; lng: number },
+  region: string | null,
+  excludeRiderIds: string[],
+  limit: number
+): Promise<string[]> {
+  let ids = await queryNearestActiveRiders(pickup, region, excludeRiderIds, limit, true);
+  if (ids.length === 0 && normalizeRegion(region)) {
+    ids = await queryNearestActiveRiders(pickup, region, excludeRiderIds, limit, false);
+  }
+  return ids;
+}
+
 async function emitOffersToRiders(order: any, riderIds: string[], wave: number) {
-  if (!riderIds.length) return;
+  if (!riderIds.length) return 0;
 
   const expiresAt = new Date(Date.now() + OFFER_TTL_SEC * 1000);
+  const orderPayload = { ...order };
 
   for (const riderId of riderIds) {
     await pool.query(
@@ -595,12 +655,17 @@ async function emitOffersToRiders(order: any, riderIds: string[], wave: number) 
       [order.id, riderId, wave, expiresAt]
     );
     const payload = {
-      ...order,
+      ...orderPayload,
       expiresAt: expiresAt.toISOString(),
       dispatchWave: wave,
     };
-    io.to(riderId).emit('ride:incoming', payload);
+    io.to(String(riderId)).emit('ride:incoming', payload);
   }
+
+  console.info(
+    `[dispatch] order ${order.id} wave ${wave}: notified ${riderIds.length} rider(s)`,
+    riderIds
+  );
 
   await sendPushToRiders(order, riderIds);
   await pool.query(
@@ -613,6 +678,7 @@ async function emitOffersToRiders(order: any, riderIds: string[], wave: number) 
     void handleWaveExpired(order.id, wave);
   }, OFFER_TTL_SEC * 1000 + 500);
   dispatchWaveTimers.set(order.id, timer);
+  return riderIds.length;
 }
 
 async function handleWaveExpired(orderId: string, wave: number) {
@@ -655,7 +721,10 @@ async function advanceDispatchWave(order: any, wave: number) {
     riderIds = fallback.slice(0, RIDERS_PER_WAVE);
   }
 
-  if (riderIds.length === 0) return;
+  if (riderIds.length === 0) {
+    console.warn(`[dispatch] order ${order.id} wave ${wave}: no riders available to notify`);
+    return;
+  }
 
   await emitOffersToRiders(order, riderIds, wave);
 }
@@ -759,6 +828,7 @@ async function sendPushToRiders(order: any, riderIds: string[]) {
 
 async function broadcastRideOfferToRiders(order: any) {
   try {
+    if (!isOfferableOrder(order)) return;
     await startOrderDispatch(order);
   } catch (err) {
     console.error('[dispatch] start order dispatch failed:', err);
@@ -1298,8 +1368,12 @@ app.patch('/api/auth/status', authenticateToken, async (req: any, res) => {
       [status, req.user.id]
     );
     const user = result.rows[0];
+    if (user.role === 'rider' && status === 'active') {
+      await seedRiderLocationFromProfile(user.id);
+    }
     const token = jwt.sign({ id: user.id, name: user.name, email: user.email, role: user.role, balance: user.balance, status: user.status, region: user.region }, process.env.JWT_SECRET as string);
     res.json({ user, token });
+    io.to(String(user.id)).emit('status:updated', { status });
   } catch (err: any) {
     console.error('Status update error:', err);
     res.status(500).json({ message: 'Status update failed' });
@@ -1625,11 +1699,10 @@ app.get('/api/orders', authenticateToken, async (req: any, res) => {
       query += " WHERE vendor_id = $1"; 
       params.push(req.user.id);
     } else if (req.user.role === 'rider') {
-      const userRes = await pool.query('SELECT region, status FROM users WHERE id = $1', [req.user.id]);
+      const userRes = await pool.query('SELECT status FROM users WHERE id = $1', [req.user.id]);
       if (userRes.rows[0]?.status !== 'active') {
         return res.json([]);
       }
-      const userRegion = userRes.rows[0]?.region;
 
       query = `
         SELECT o.*, odo.expires_at AS rider_offer_expires_at, odo.wave AS rider_offer_wave
@@ -1644,10 +1717,9 @@ app.get('/api/orders', authenticateToken, async (req: any, res) => {
           o.status = 'ready'
           AND o.rider_id IS NULL
           AND odo.order_id IS NOT NULL
-          AND ($2::text IS NULL OR $2 = '' OR o.region = $2 OR o.region IS NULL)
         )
         ORDER BY o.created_at DESC`;
-      params.push(req.user.id, userRegion);
+      params.push(req.user.id);
     }
 
     if (req.user.role !== 'rider') {
@@ -1777,7 +1849,7 @@ app.post('/api/orders', authenticateToken, async (req: any, res) => {
     res.json(order);
     io.emit('order:new', order); // Notify vendors/admin
     if (isOfferableOrder(order)) {
-      broadcastRideOfferToRiders(order);
+      void broadcastRideOfferToRiders(order);
     }
   } catch (err) {
     console.error('Order creation error:', err);
@@ -2411,17 +2483,21 @@ io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
 
   socket.on('join', (userId) => {
-    socket.join(userId);
-    console.log(`User ${userId} joined their room`);
+    if (!userId) return;
+    const room = String(userId).trim();
+    socket.join(room);
+    console.log(`User ${room} joined their room`);
   });
 
   socket.on('location:update', async ({ userId, lat, lng }) => {
+    if (!userId || lat == null || lng == null) return;
+    const riderId = String(userId).trim();
     try {
       await pool.query(
         'INSERT INTO rider_locations (rider_id, lat, lng, updated_at) VALUES ($1, $2, $3, CURRENT_TIMESTAMP) ON CONFLICT (rider_id) DO UPDATE SET lat = $2, lng = $3, updated_at = CURRENT_TIMESTAMP',
-        [userId, lat, lng]
+        [riderId, lat, lng]
       );
-      io.emit('location:updated', { riderId: userId, lat, lng });
+      io.emit('location:updated', { riderId, lat, lng });
     } catch (err) {
       console.error('Location update failed', err);
     }
