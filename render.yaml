@@ -1,0 +1,71 @@
+# BytzGo on Render — API (Node) + web (Vite static site)
+# Apply: https://dashboard.render.com/blueprint/new?repo=https://github.com/Daniel-creator-dot/byzgo
+#
+# After deploy:
+# - Static site (byzgo): bytzgo.net / www.bytzgo.net
+# - API (bytzgo-api): https://bytzgo-api.onrender.com (add api.bytzgo.net in Dashboard if desired)
+# - Flutter APK: MOBILE_API_URL = API service URL
+
+services:
+  - type: web
+    name: bytzgo-api
+    runtime: node
+    plan: free
+    region: oregon
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: GOOGLE_MAPS_API_KEY
+        sync: false
+      - key: VITE_GOOGLE_MAPS_API_KEY
+        sync: false
+      - key: PAYSTACK_PUBLIC_KEY
+        sync: false
+      - key: PAYSTACK_SECRET_KEY
+        sync: false
+      - key: FIREBASE_PROJECT_ID
+        value: bytzgo-72f1c
+      - key: APP_URL
+        value: https://bytzgo.net
+      - key: PAYSTACK_CALLBACK_URL
+        value: https://bytzgo.net
+      - key: SMS_API_KEY
+        sync: false
+      - key: SMS_BASE_URL
+        value: https://www.inteksms.top/api/v1
+      - key: SMS_SENDER_ID
+        value: bytzee
+
+  - type: web
+    name: byzgo
+    runtime: static
+    plan: free
+    region: oregon
+    buildCommand: npm install && npm run build
+    staticPublishPath: ./dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: VITE_API_URL
+        fromService:
+          type: web
+          name: bytzgo-api
+          envVarKey: RENDER_EXTERNAL_URL
+      - key: GOOGLE_MAPS_API_KEY
+        sync: false
+      - key: VITE_GOOGLE_MAPS_API_KEY
+        sync: false
+      - key: VITE_GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_WEB_CLIENT_ID
+        sync: false

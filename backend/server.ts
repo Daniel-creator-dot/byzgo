@@ -84,6 +84,10 @@ const io = new Server(httpServer, {
 app.use(cors());
 app.use(express.json());
 
+app.get('/api/health', (_req, res) => {
+  res.json({ ok: true, service: 'bytzgo-api' });
+});
+
 
 
 // Multer config for in-memory processing (images stored in DB as Base64)
@@ -1603,6 +1607,43 @@ app.get('/api/config/pricing', async (_req, res) => {
   }
 });
 
+/** Nearby online riders for customer map (lat/lng only — no PII). */
+app.get('/api/riders/nearby', authenticateToken, async (req: any, res) => {
+  try {
+    const lat = parseFloat(String(req.query.lat ?? ''));
+    const lng = parseFloat(String(req.query.lng ?? ''));
+    const limit = Math.min(
+      Math.max(1, parseInt(String(req.query.limit ?? '8'), 10) || 8),
+      15
+    );
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      return res.status(400).json({ message: 'lat and lng are required' });
+    }
+    const region = req.user?.region ?? null;
+    const riderIds = await getNearestActiveRiders({ lat, lng }, region, [], limit);
+    if (!riderIds.length) {
+      return res.json({ riders: [] });
+    }
+    const locs = await pool.query(
+      `SELECT rl.lat, rl.lng
+       FROM rider_locations rl
+       WHERE rl.rider_id = ANY($1::uuid[])
+         AND rl.updated_at > NOW() - INTERVAL '1 minute' * $2`,
+      [riderIds, LOCATION_MAX_AGE_MIN]
+    );
+    const riders = locs.rows
+      .map((row: { lat: string; lng: string }) => ({
+        lat: parseFloat(row.lat),
+        lng: parseFloat(row.lng),
+      }))
+      .filter((r: { lat: number; lng: number }) => Number.isFinite(r.lat) && Number.isFinite(r.lng));
+    res.json({ riders });
+  } catch (err) {
+    console.error('[riders/nearby]', err);
+    res.status(500).json({ message: 'Failed to load nearby riders' });
+  }
+});
+
 app.get('/api/config/paystack', async (_req, res) => {
   try {
     const publicKey = await getPaystackPublicKey();
@@ -2751,7 +2792,8 @@ io.on('connection', (socket) => {
   });
 });
 
-const PORT = process.env.PORT || 3000;
-httpServer.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+const PORT = Number(process.env.PORT) || 3000;
+const HOST = process.env.HOST || '0.0.0.0';
+httpServer.listen(PORT, HOST, () => {
+  console.log(`Server running on http://${HOST}:${PORT}`);
 });

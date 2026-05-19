@@ -6,6 +6,9 @@
     "start": "tsx server.ts",
     "dev": "tsx --watch server.ts"
   },
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
     "@types/multer": "^2.1.0",
     "axios": "^1.6.7",

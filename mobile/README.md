@@ -207,3 +207,4 @@ Template for local defines: [`dart_defines.json.example`](dart_defines.json.exam
 
 - Web app: repo root
 - Backend: [`backend/server.ts`](../backend/server.ts)
+- **Production deploy:** [`docs/RENDER.md`](../docs/RENDER.md)
