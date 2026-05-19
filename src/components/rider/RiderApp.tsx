@@ -25,7 +25,19 @@ import { subscribeRiderPush, unsubscribeRiderPush } from '../../lib/pushNotifica
 import { useMapsAvailable } from '../MapsProvider';
 import { RiderDriveMap } from './RiderDriveMap';
 import { RiderMapPlaceholder } from './RiderMapPlaceholder';
+import { ActiveTripHud } from './ActiveTripHud';
+import { DeliveryPinModal } from './DeliveryPinModal';
+import type { RouteSummary } from './MapDirections';
 import { LoadingIndicator } from '../UI';
+import {
+  getDropoffCoords,
+  getNavigationTarget,
+  getPickupCoordsForOrder,
+  getTripPhase,
+  hasValidCoords,
+  openTurnByTurnNavigation,
+  type TripStop,
+} from '../../lib/riderTrip';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -70,6 +82,8 @@ export function RiderApp({
   onUpdateStatus,
   onLogout,
   pendingApproval,
+  addNotification,
+  refreshData,
 }: {
   user: AuthUser;
   setUser: Dispatch<SetStateAction<AuthUser | null>>;
@@ -78,16 +92,36 @@ export function RiderApp({
   onUpdateStatus: (id: string, status: OrderStatus, extra?: Record<string, unknown>) => void | Promise<boolean>;
   onLogout: () => void;
   pendingApproval?: boolean;
+  addNotification?: (m: string, t?: 'info' | 'success' | 'warning') => void;
+  refreshData?: () => void | Promise<void>;
 }) {
   const mapsAvailable = useMapsAvailable();
   const [tab, setTab] = useState<RiderTab>('drive');
   const [sheetTab, setSheetTab] = useState<'requests' | 'active'>('requests');
   const [isOnline, setIsOnline] = useState(user.status === 'active' || user.status === undefined);
   const [riderPos, setRiderPos] = useState({ lat: user.lat || 5.6037, lng: user.lng || -0.1870 });
+  const [riderHeading, setRiderHeading] = useState<number | null>(null);
   const [navigatingTo, setNavigatingTo] = useState<{ lat: number; lng: number } | null>(null);
-  const [eta, setEta] = useState('');
+  const [routeSummary, setRouteSummary] = useState<RouteSummary | null>(null);
+  const [focusedOrderId, setFocusedOrderId] = useState<string | null>(null);
+  const [pinModalOrder, setPinModalOrder] = useState<Order | null>(null);
 
-  const availableOrders = orders.filter((o) => o.status === 'ready' && !o.rider_id);
+  const [offerTick, setOfferTick] = useState(0);
+  const isActiveDispatchOffer = (o: Order) =>
+    !o.expiresAt || new Date(o.expiresAt).getTime() > Date.now();
+  const availableOrders = orders.filter((o) => {
+    void offerTick;
+    return o.status === 'ready' && !o.rider_id && isActiveDispatchOffer(o);
+  });
+
+  useEffect(() => {
+    const hasExpiringOffers = orders.some(
+      (o) => o.status === 'ready' && !o.rider_id && o.expiresAt && isActiveDispatchOffer(o)
+    );
+    if (!hasExpiringOffers) return;
+    const t = setInterval(() => setOfferTick((n) => n + 1), 1000);
+    return () => clearInterval(t);
+  }, [orders]);
   const activeOrders = orders.filter((o) => o.rider_id === user.id && o.status !== 'delivered');
   const completedTrips = orders.filter((o) => o.rider_id === user.id && o.status === 'delivered');
   const todayEarnings = completedTrips.length;
@@ -95,13 +129,31 @@ export function RiderApp({
   const getVendor = (order: Order) => vendors.find((v) => v.id === order.vendor_id);
 
   const getPickupCoords = (order: Order) => {
-    const isCourier = (order as Order & { order_type?: string }).order_type === 'courier';
-    if (isCourier && order.pickup_lat && order.pickup_lng) {
-      return { lat: order.pickup_lat, lng: order.pickup_lng };
+    const stop = getPickupCoordsForOrder(order, vendors);
+    if (!stop || !hasValidCoords(stop.lat, stop.lng)) return null;
+    return { lat: stop.lat, lng: stop.lng };
+  };
+
+  const primaryActiveOrder =
+    activeOrders.find((o) => o.id === focusedOrderId) ?? activeOrders[0] ?? null;
+
+  const beginTripNavigation = (order: Order) => {
+    const target = getNavigationTarget(order, vendors);
+    if (!target) {
+      window.alert('No pickup or drop-off location for this trip. Contact support.');
+      return;
     }
-    const vendor = getVendor(order);
-    if (vendor?.lat && vendor?.lng) return { lat: vendor.lat, lng: vendor.lng };
-    return null;
+    openTurnByTurnNavigation(target, riderPos);
+    setFocusedOrderId(order.id);
+    if (hasValidCoords(target.lat, target.lng)) {
+      setNavigatingTo({ lat: target.lat, lng: target.lng });
+      setRouteSummary(null);
+    } else {
+      setNavigatingTo(null);
+      setRouteSummary(null);
+    }
+    setTab('drive');
+    setSheetTab('active');
   };
 
   useEffect(() => {
@@ -109,17 +161,42 @@ export function RiderApp({
       (pos) => {
         const next = { lat: pos.coords.latitude, lng: pos.coords.longitude };
         setRiderPos(next);
+        if (pos.coords.heading != null && !Number.isNaN(pos.coords.heading)) {
+          setRiderHeading(pos.coords.heading);
+        }
         socket.emit('location:update', { userId: user.id, ...next });
       },
       () => {},
-      { enableHighAccuracy: true }
+      { enableHighAccuracy: true, maximumAge: 2000 }
     );
     return () => navigator.geolocation.clearWatch(id);
   }, [user.id]);
 
   useEffect(() => {
-    if (activeOrders.length > 0) setSheetTab('active');
-  }, [activeOrders.length]);
+    if (activeOrders.length > 0) {
+      setSheetTab('active');
+      if (!focusedOrderId || !activeOrders.some((o) => o.id === focusedOrderId)) {
+        setFocusedOrderId(activeOrders[0].id);
+      }
+    } else {
+      setFocusedOrderId(null);
+      setNavigatingTo(null);
+      setRouteSummary(null);
+    }
+  }, [activeOrders.length, activeOrders, focusedOrderId]);
+
+  useEffect(() => {
+    if (!primaryActiveOrder) return;
+    const target = getNavigationTarget(primaryActiveOrder, vendors);
+    if (!target || !hasValidCoords(target.lat, target.lng)) return;
+    setNavigatingTo({ lat: target.lat, lng: target.lng });
+  }, [primaryActiveOrder?.id, primaryActiveOrder?.status, vendors]);
+
+  useEffect(() => {
+    if (primaryActiveOrder && navigatingTo) {
+      setTab('drive');
+    }
+  }, [primaryActiveOrder?.id, navigatingTo]);
 
   const toggleOnline = async () => {
     const next = isOnline ? 'offline' : 'active';
@@ -135,10 +212,13 @@ export function RiderApp({
     }
   };
 
-  const startNav = (lat: number, lng: number) => {
-    setNavigatingTo({ lat, lng });
-    setTab('drive');
-  };
+  const tripPickup: TripStop | null = primaryActiveOrder
+    ? getPickupCoordsForOrder(primaryActiveOrder, vendors)
+    : null;
+  const tripDropoff = primaryActiveOrder ? getDropoffCoords(primaryActiveOrder) : null;
+  const tripPhase = primaryActiveOrder ? getTripPhase(primaryActiveOrder) : null;
+  const tripTarget = primaryActiveOrder ? getNavigationTarget(primaryActiveOrder, vendors) : null;
+  const isNavigating = Boolean(navigatingTo && primaryActiveOrder);
 
   // ——— Wallet state ———
   const [withdrawAmount, setWithdrawAmount] = useState('');
@@ -246,7 +326,7 @@ export function RiderApp({
             <p className="text-lg font-black">{activeOrders.length}</p>
           </motion.div>
           <motion.div className="p-3 rounded-2xl bg-slate-900/80 border border-slate-800">
-            <p className="text-[9px] font-black uppercase tracking-widest text-slate-500">Completed</p>
+            <p className="text-[9px] font-black uppercase tracking-widest text-slate-500">Trips today</p>
             <p className="text-lg font-black">{todayEarnings}</p>
           </motion.div>
         </motion.div>
@@ -263,37 +343,39 @@ export function RiderApp({
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
             >
-              <motion.div className="flex-1 relative min-h-[40vh] byzgo-map-shell">
+              <motion.div className="flex-1 relative min-h-[52vh] byzgo-map-shell">
                 {mapsAvailable ? (
                   <RiderDriveMap
                     riderPos={riderPos}
-                    navigatingTo={navigatingTo}
+                    riderHeading={riderHeading}
+                    navTarget={navigatingTo}
+                    tripPhase={tripPhase}
+                    pickup={tripPickup}
+                    dropoff={tripDropoff && hasValidCoords(tripDropoff.lat, tripDropoff.lng) ? tripDropoff : null}
+                    isNavigating={isNavigating}
                     isOnline={isOnline}
                     availableOrders={availableOrders}
                     getPickupCoords={getPickupCoords}
-                    onETAUpdate={setEta}
+                    onRouteUpdate={setRouteSummary}
                   />
                 ) : (
-                  <RiderMapPlaceholder riderPos={riderPos} navigatingTo={navigatingTo} eta={eta} />
+                  <RiderMapPlaceholder
+                    riderPos={riderPos}
+                    navigatingTo={navigatingTo}
+                    eta={routeSummary?.eta}
+                  />
                 )}
 
-                {navigatingTo && mapsAvailable && (
-                  <div className="absolute top-3 left-3 right-3 flex items-center justify-between gap-2 p-3 rounded-2xl bg-slate-900/95 backdrop-blur border border-slate-700 shadow-xl">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <Navigation className="text-brand-green shrink-0" size={18} />
-                      <motion.div className="min-w-0">
-                        <p className="text-[9px] font-black uppercase tracking-widest text-brand-green">Navigating</p>
-                        <p className="text-xs font-bold truncate">{eta || 'Calculating route…'}</p>
-                      </motion.div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setNavigatingTo(null)}
-                      className="p-2 rounded-xl bg-red-500/20 text-red-400"
-                    >
-                      <X size={16} />
-                    </button>
-                  </div>
+                {isNavigating && primaryActiveOrder && tripTarget && hasValidCoords(tripTarget.lat, tripTarget.lng) && (
+                  <ActiveTripHud
+                    order={primaryActiveOrder}
+                    phase={tripPhase!}
+                    targetLabel={tripTarget.label}
+                    navTarget={tripTarget}
+                    riderOrigin={riderPos}
+                    route={routeSummary}
+                    onStopNav={() => setNavigatingTo(null)}
+                  />
                 )}
 
                 {!isOnline && (
@@ -316,7 +398,12 @@ export function RiderApp({
               </motion.div>
 
               {/* Bottom sheet */}
-              <div className="shrink-0 bg-slate-900 rounded-t-[1.75rem] border-t border-slate-800 shadow-[0_-20px_60px_rgba(0,0,0,0.5)] max-h-[48vh] flex flex-col">
+              <div
+                className={cn(
+                  'shrink-0 bg-slate-900 rounded-t-[1.75rem] border-t border-slate-800 shadow-[0_-20px_60px_rgba(0,0,0,0.5)] flex flex-col transition-all',
+                  isNavigating ? 'max-h-[32vh]' : 'max-h-[48vh]'
+                )}
+              >
                 <div className="w-10 h-1 bg-slate-700 rounded-full mx-auto mt-2 mb-1" />
                 <div className="flex gap-1 p-2 mx-2 bg-slate-800/50 rounded-xl">
                   <button
@@ -389,25 +476,31 @@ export function RiderApp({
                                 <Navigation size={14} className="text-brand-green shrink-0 mt-0.5" />
                                 Drop-off: {order.address}
                               </p>
+                              {order.expiresAt && (
+                                <p className="text-[10px] font-black uppercase tracking-widest text-amber-400/90 mb-2">
+                                  Offer expires in{' '}
+                                  {Math.max(
+                                    0,
+                                    Math.ceil(
+                                      (new Date(order.expiresAt).getTime() - Date.now()) / 1000
+                                    )
+                                  )}
+                                  s
+                                  {order.dispatchWave != null ? ` · wave ${order.dispatchWave}` : ''}
+                                </p>
+                              )}
                               <div className="flex gap-2">
-                                {pickup && (
-                                  <button
-                                    type="button"
-                                    onClick={() => startNav(pickup.lat, pickup.lng)}
-                                    className="flex-1 py-3 rounded-xl bg-slate-700 font-black text-[10px] uppercase tracking-widest"
-                                  >
-                                    Navigate
-                                  </button>
-                                )}
                                 <button
                                   type="button"
                                   onClick={async () => {
-                                    const ok = await onUpdateStatus(order.id, order.status, { riderId: user.id });
-                                    if (ok) setSheetTab('active');
+                                    const ok = await onUpdateStatus(order.id, order.status, {
+                                      riderId: user.id,
+                                    });
+                                    if (ok) beginTripNavigation(order);
                                   }}
-                                  className="flex-1 py-3 rounded-xl bg-brand-green font-black text-[10px] uppercase tracking-widest text-slate-950"
+                                  className="w-full py-3.5 rounded-xl bg-brand-green font-black text-[10px] uppercase tracking-widest text-slate-950 shadow-lg shadow-brand-green/30"
                                 >
-                                  Accept
+                                  Accept & navigate
                                 </button>
                               </div>
                             </div>
@@ -429,7 +522,11 @@ export function RiderApp({
                             ? 1
                             : order.status === 'picked_up'
                               ? 2
-                              : 3;
+                              : order.status === 'arrived'
+                                ? 3
+                                : 4;
+                        const navTarget = getNavigationTarget(order, vendors);
+                        const tripLeg = getTripPhase(order);
                         return (
                           <div
                             key={order.id}
@@ -442,7 +539,7 @@ export function RiderApp({
                               </span>
                             </div>
                             <div className="flex gap-1 mb-4">
-                              {[1, 2, 3].map((s) => (
+                              {[1, 2, 3, 4].map((s) => (
                                 <motion.div
                                   key={s}
                                   className={cn(
@@ -458,39 +555,63 @@ export function RiderApp({
                                 Pickup: {vendor.name}
                               </p>
                             )}
-                            <p className="text-sm text-slate-300 mb-4">
-                              <Navigation size={12} className="inline mr-1 text-brand-green" />
-                              {order.address}
-                            </p>
+                            {navTarget ? (
+                              <p className="text-sm text-slate-300 mb-4 leading-snug">
+                                <Navigation size={12} className="inline mr-1 text-brand-green align-text-top" />
+                                <span className="text-[10px] font-black uppercase tracking-widest text-brand-green">
+                                  {tripLeg === 'to_pickup' ? 'Pickup' : 'Drop-off'}:{' '}
+                                </span>
+                                {navTarget.label}
+                              </p>
+                            ) : (
+                              <p className="text-xs text-amber-400 mb-4 font-bold">Location not available for navigation</p>
+                            )}
                             <div className="grid grid-cols-2 gap-2">
                               <button
                                 type="button"
-                                onClick={() => startNav(order.lat || riderPos.lat, order.lng || riderPos.lng)}
-                                className="py-3 rounded-xl bg-slate-700 font-black text-[10px] uppercase"
+                                onClick={() => beginTripNavigation(order)}
+                                disabled={!navTarget}
+                                className="py-3 rounded-xl bg-brand-green text-slate-950 font-black text-[10px] uppercase flex items-center justify-center gap-1.5 disabled:opacity-40"
                               >
-                                Directions
+                                <MapPin size={14} />
+                                Open maps
                               </button>
-                              {order.status !== 'picked_up' ? (
+                              {order.status === 'ready' ? (
                                 <button
                                   type="button"
-                                  onClick={() => {
-                                    onUpdateStatus(order.id, 'picked_up');
-                                    setNavigatingTo(null);
+                                  onClick={async () => {
+                                    const ok = await onUpdateStatus(order.id, 'picked_up');
+                                    if (ok) beginTripNavigation(order);
                                   }}
                                   className="py-3 rounded-xl bg-brand-blue font-black text-[10px] uppercase"
                                 >
                                   Picked up
                                 </button>
+                              ) : order.status === 'picked_up' ? (
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    try {
+                                      await axios.patch(`/api/orders/${order.id}/arrive`);
+                                      addNotification?.('Marked arrived — customer can pay & share PIN', 'success');
+                                      await refreshData?.();
+                                    } catch (err: unknown) {
+                                      const msg = (err as { response?: { data?: { message?: string } } })?.response
+                                        ?.data?.message;
+                                      addNotification?.(msg || 'Could not mark arrived', 'warning');
+                                    }
+                                  }}
+                                  className="py-3 rounded-xl bg-amber-500 font-black text-[10px] uppercase text-slate-950"
+                                >
+                                  I&apos;ve arrived
+                                </button>
                               ) : (
                                 <button
                                   type="button"
-                                  onClick={() => {
-                                    onUpdateStatus(order.id, 'delivered');
-                                    setNavigatingTo(null);
-                                  }}
+                                  onClick={() => setPinModalOrder(order)}
                                   className="py-3 rounded-xl bg-brand-green font-black text-[10px] uppercase text-slate-950"
                                 >
-                                  Delivered
+                                  Complete
                                 </button>
                               )}
                             </div>
@@ -777,6 +898,18 @@ export function RiderApp({
           ))}
         </div>
       </nav>
+
+      <DeliveryPinModal
+        order={pinModalOrder}
+        onClose={() => setPinModalOrder(null)}
+        onSuccess={() => {
+          setNavigatingTo(null);
+          setRouteSummary(null);
+          addNotification?.('Delivery completed!', 'success');
+          refreshData?.();
+        }}
+        onError={(msg) => addNotification?.(msg, 'warning')}
+      />
     </motion.div>
   );
 }

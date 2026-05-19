@@ -10,10 +10,17 @@
   --color-secondary-green: #22c55e;
   --color-brand-blue: #0ea5e9;
   --color-brand-green: #10b981;
+  --color-surface: #020617;
+  --color-surface-elevated: #0f172a;
+  --color-border-subtle: #1e293b;
 }
 
 body {
   @apply font-sans text-slate-900 bg-slate-50 antialiased;
+}
+
+body.dark-app {
+  @apply bg-slate-950 text-white;
 }
 
 .safe-area-inset-top {

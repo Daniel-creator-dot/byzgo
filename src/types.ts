@@ -1,4 +1,4 @@
-export type OrderStatus = 'pending' | 'preparing' | 'ready' | 'picked_up' | 'delivered' | 'cancelled';
+export type OrderStatus = 'pending' | 'preparing' | 'ready' | 'picked_up' | 'arrived' | 'delivered' | 'cancelled';
 
 export interface Order {
   id: string;
@@ -21,9 +21,19 @@ export interface Order {
   rating_comment?: string;
   payment_status?: string;
   payment_method?: string;
+  customer_payment_ack?: string;
+  delivery_code?: string;
+  delivery_code_created_at?: string;
+  arrived_at?: string;
   scheduled_time?: string;
   pickup_lat?: number;
   pickup_lng?: number;
+  created_at?: string;
+  order_type?: string;
+  delivery_fee?: number;
+  /** ISO timestamp — active dispatch offer for this rider */
+  expiresAt?: string;
+  dispatchWave?: number;
 }
 
 export interface Rider {

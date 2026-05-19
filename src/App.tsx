@@ -2,7 +2,7 @@
 import { BrowserRouter, Routes, Route, useLocation, useNavigate } from 'react-router-dom';
 import { socket } from './lib/socket';
 import { Role, Order, OrderStatus } from './types.ts';
-import { Layout, User as UserIcon, Store, Bike, Shield, ShoppingBag, MapPin, CreditCard, ChevronRight, CheckCircle2, Clock, Send, Navigation, Lock, Mail, Eye, EyeOff, LogOut, Package, Phone, Edit3, Save, X, Star, Home, Users, BarChart3, AlertCircle, AlertTriangle, Check, LocateFixed } from 'lucide-react';
+import { Layout, User as UserIcon, Store, Bike, Shield, ShoppingBag, MapPin, CreditCard, ChevronRight, CheckCircle2, Clock, Send, Navigation, Lock, Mail, Eye, EyeOff, LogOut, Package, Phone, Edit3, Save, X, Star, Home, Users, BarChart3, AlertCircle, AlertTriangle, Check, LocateFixed, Upload, Trash2, Settings } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import axios from 'axios';
 import { clsx, type ClassValue } from 'clsx';
@@ -21,30 +21,39 @@ import {
 import { needsDeviceSetup } from './lib/deviceSetup';
 import { InstallPermissionsOnboarding } from './components/InstallPermissionsOnboarding';
 import { RiderApp } from './components/rider/RiderApp';
+import { CustomerShell } from './components/customer/CustomerShell';
+import { CustomerDeliveryHome } from './components/customer/CustomerDeliveryHome';
+import { CustomerTripsView } from './components/customer/CustomerTripsView';
+import { LocationAutocompleteInput } from './components/LocationAutocompleteInput';
 import { GHANA_REGIONS } from './lib/constants';
 import {
   GHANA_CENTER,
   detectCurrentLocation,
   ghanaPlacesAutocompleteOptions,
   reverseGeocodeGhana,
+  resolveAddressLabel,
 } from './lib/ghanaLocation';
+import { openPaystackCheckout, paystackPaymentEmail } from './lib/paystackCheckout';
+import {
+  clearPendingWalletTopupRef,
+  formatWalletTopupError,
+  getPendingWalletTopupRef,
+  setPendingWalletTopupRef,
+  walletTopupReferenceHint,
+} from './lib/walletTopup';
+import { formatCedis } from './lib/format';
+import {
+  DEFAULT_DELIVERY_PRICE_PER_KM,
+  deliveryFeeFromDistanceKm,
+  haversineDistanceKm,
+} from './lib/deliveryPricing';
+import { getApiError } from './lib/api';
+import { DarkAppShell, type NavItem } from './components/shared/DarkAppShell';
+import { DarkCard, DarkButton, DarkInput, StatusBadge, EmptyState, ErrorBanner } from './components/shared/ui';
 
 // Helper for Tailwind classes
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
-}
-
-// Helper to calculate distance between two coordinates in km (Haversine formula)
-function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number) {
-  if (!lat1 || !lon1 || !lat2 || !lon2) return 0;
-  const R = 6371; // km
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLon = (lon2 - lon1) * Math.PI / 180;
-  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-            Math.sin(dLon / 2) * Math.sin(dLon / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c;
 }
 
 // Custom Motorbike Icon for better branding
@@ -77,13 +86,6 @@ const CLEAN_MAP_STYLE = [
 ];
  
 export { GHANA_REGIONS };
-
-// Paystack Window augmentation
-declare global {
-  interface Window {
-    PaystackPop: any;
-  }
-}
 
 // Types for Auth
 interface AuthUser {
@@ -213,8 +215,9 @@ function MainApp() {
     }
   });
   const [isLogoutModalOpen, setIsLogoutModalOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<string>('menu');
+  const [activeTab, setActiveTab] = useState<string>('courier');
   const [zones, setZones] = useState<any[]>([]);
+  const [deliveryPricePerKm, setDeliveryPricePerKm] = useState(DEFAULT_DELIVERY_PRICE_PER_KM);
   const [cart, setCart] = useState<any[]>(() => {
     try {
       const saved = localStorage.getItem('bytzgo_cart');
@@ -233,14 +236,15 @@ function MainApp() {
     if (cart.length === 0 || !user) return 0;
     const vendorId = cart[0].vendor_id;
     const vendor = vendors.find(v => v.id === vendorId);
-    if (!vendor || !vendor.lat || !vendor.lng || !user.lat || !user.lng) return 10;
-    const distance = calculateDistance(user.lat, user.lng, vendor.lat, vendor.lng);
     const zone = zones.find(z => z.region === user.region && z.is_active);
-    if (!zone) return 10;
-    const fee = Number(zone.base_price) + (distance * Number(zone.price_per_km));
-    const min = Number(zone.min_price);
-    const max = zone.max_price ? Number(zone.max_price) : Infinity;
-    return Math.max(min, Math.min(fee, max));
+    const bounds = zone
+      ? { min: Number(zone.min_price), max: zone.max_price ? Number(zone.max_price) : null }
+      : undefined;
+    if (!vendor?.lat || !vendor?.lng || !user.lat || !user.lng) {
+      return deliveryFeeFromDistanceKm(5, deliveryPricePerKm, bounds);
+    }
+    const distance = haversineDistanceKm(user.lat, user.lng, vendor.lat, vendor.lng);
+    return deliveryFeeFromDistanceKm(distance, deliveryPricePerKm, bounds);
   };
   const deliveryFee = calculateDeliveryFee();
   const total = subtotal + deliveryFee;
@@ -250,8 +254,12 @@ function MainApp() {
   const [paystackKey, setPaystackKey] = useState<string>('');
   const [refreshing, setRefreshing] = useState(false);
   const [showDeviceSetup, setShowDeviceSetup] = useState(false);
+  const [adminPendingCount, setAdminPendingCount] = useState(0);
   const userRef = useRef(user);
+  const ordersRef = useRef(orders);
+  const riderTrackingNotifiedRef = useRef(new Set<string>());
   useEffect(() => { userRef.current = user; }, [user]);
+  useEffect(() => { ordersRef.current = orders; }, [orders]);
 
   const isOfferableToRider = (order: Order) =>
     order.status === 'ready' && !order.rider_id && !(order as any).riderId;
@@ -259,7 +267,8 @@ function MainApp() {
   const triggerIncomingRideCall = useCallback((order: Order) => {
     const u = userRef.current;
     if (!u || u.role !== 'rider' || u.status !== 'active' || !isOfferableToRider(order)) return;
-    setIncomingRideOffer(prev => (prev?.id === order.id ? prev : order));
+    if (order.expiresAt && new Date(order.expiresAt).getTime() <= Date.now()) return;
+    setIncomingRideOffer(prev => (prev?.id === order.id ? { ...prev, ...order } : order));
     setActiveTab('dashboard');
     if (navigator.vibrate) navigator.vibrate([400, 200, 400, 200, 400]);
   }, []);
@@ -275,13 +284,16 @@ function MainApp() {
       // Always fetch wallet and paystack config
       const walletPromise = axios.get('/api/wallet');
       const paystackPromise = axios.get('/api/config/paystack').catch(() => ({ data: { publicKey: '' } }));
+      const pricingPromise = axios.get('/api/config/pricing').catch(() => ({ data: { price_per_km: DEFAULT_DELIVERY_PRICE_PER_KM } }));
 
       // Conditional promises based on role
       const ordersPromise = axios.get('/api/orders'); // Everyone needs orders
       
-      const productsPromise = (role === 'customer' || role === 'vendor') 
-        ? axios.get('/api/products') 
-        : Promise.resolve({ data: [] });
+      const productsPromise = role === 'vendor'
+        ? axios.get('/api/products', { params: { vendor_id: user?.id || storedUser.id } })
+        : role === 'customer'
+          ? axios.get('/api/products')
+          : Promise.resolve({ data: [] });
 
       const vendorsPromise = (role === 'customer' || role === 'rider') 
         ? axios.get('/api/vendors', { params: { region } }) 
@@ -291,16 +303,19 @@ function MainApp() {
         ? axios.get('/api/delivery-zones').catch(() => ({ data: [] })) 
         : Promise.resolve({ data: [] });
 
-      const [profileRes, ordersRes, productsRes, vendorsRes, configRes, zonesRes] = await Promise.all([
+      const [profileRes, ordersRes, productsRes, vendorsRes, configRes, pricingRes, zonesRes] = await Promise.all([
         walletPromise,
         ordersPromise,
         productsPromise,
         vendorsPromise,
         paystackPromise,
+        pricingPromise,
         zonesPromise
       ]);
 
       setPaystackKey(configRes.data.publicKey);
+      const rate = Number(pricingRes.data?.price_per_km);
+      setDeliveryPricePerKm(rate > 0 ? rate : DEFAULT_DELIVERY_PRICE_PER_KM);
       setUser(prev => prev ? { ...prev, balance: profileRes.data.balance } : { ...storedUser, balance: profileRes.data.balance });
       setOrders(ordersRes.data);
       setProducts(productsRes.data);
@@ -330,6 +345,11 @@ function MainApp() {
       setShowDeviceSetup(true);
     }
   }, [user?.id, user?.role, token]);
+
+  useEffect(() => {
+    if (user?.role !== 'admin' || !token) return;
+    axios.get('/api/admin/pending-products').then((res) => setAdminPendingCount(res.data?.length || 0)).catch(() => {});
+  }, [user?.role, token, orders.length]);
 
   const handleIncomingRideFromExternal = useCallback(
     async (orderId: string, action?: string) => {
@@ -385,8 +405,7 @@ function MainApp() {
     navigate(location.pathname, { replace: true });
   }, [location.search, user?.role, handleIncomingRideFromExternal, navigate, location.pathname]);
 
-  // Initialize Axios
-  axios.defaults.baseURL = import.meta.env.VITE_API_URL || '';
+  // Axios base URL configured in main.tsx via configureApiClient()
   useEffect(() => {
     if (token) {
       axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
@@ -489,7 +508,7 @@ function MainApp() {
         if (storedUser.role === 'vendor') setActiveTab('orders');
         else if (storedUser.role === 'rider') setActiveTab('dashboard');
         else if (storedUser.role === 'admin') setActiveTab('orders');
-        else setActiveTab('menu');
+        else setActiveTab('courier');
 
         socket.connect();
         socket.emit('join', storedUser.id);
@@ -506,13 +525,28 @@ function MainApp() {
     init();
 
     socket.on('ride:incoming', (order: Order) => {
+      if (order.expiresAt && new Date(order.expiresAt).getTime() <= Date.now()) return;
       setOrders(prev => {
         const exists = prev.some(o => o.id === order.id);
-        return exists ? prev.map(o => (o.id === order.id ? order : o)) : [order, ...prev];
+        return exists ? prev.map(o => (o.id === order.id ? { ...o, ...order } : o)) : [order, ...prev];
       });
       const u = userRef.current;
       if (u?.role === 'rider' && u.status === 'active' && isOfferableToRider(order)) {
         triggerIncomingRideCall(order);
+      }
+    });
+
+    socket.on('ride:taken', ({ orderId }: { orderId: string }) => {
+      const u = userRef.current;
+      setIncomingRideOffer(prev => (prev?.id === orderId ? null : prev));
+      setOrders(prev =>
+        prev.filter(o => {
+          if (o.id !== orderId) return true;
+          return u?.role === 'rider' && (o.rider_id === u.id || (o as Order & { riderId?: string }).riderId === u.id);
+        })
+      );
+      if (u?.role === 'rider' && u.status === 'active') {
+        addNotification('Another driver took this ride', 'info');
       }
     });
 
@@ -530,6 +564,10 @@ function MainApp() {
       if (u?.role === 'customer' && updatedOrder.status === 'picked_up' && updatedOrder.customer_id === u.id) {
         addNotification('Your order has been picked up!', 'info');
       }
+      if (u?.role === 'customer' && updatedOrder.status === 'arrived' && updatedOrder.customer_id === u.id) {
+        addNotification('Your driver has arrived ? complete payment to get your PIN', 'info');
+        setActiveTab('tracking');
+      }
       if (u?.role === 'customer' && updatedOrder.status === 'delivered' && updatedOrder.customer_id === u.id) {
         addNotification('Your order has been delivered!', 'success');
       }
@@ -539,12 +577,22 @@ function MainApp() {
     });
 
     socket.on('location:updated', ({ riderId, lat, lng }) => {
-      setRiderLocations(prev => {
-        if (!prev[riderId]) {
-          addNotification('Rider is now online and tracking!', 'success');
-        }
-        return { ...prev, [riderId]: { lat, lng } };
-      });
+      setRiderLocations((prev) => ({ ...prev, [riderId]: { lat, lng } }));
+
+      const u = userRef.current;
+      if (u?.role !== 'customer' || riderId === u.id) return;
+      if (riderTrackingNotifiedRef.current.has(riderId)) return;
+
+      const trackingMyOrder = ordersRef.current.some(
+        (o) =>
+          o.customer_id === u.id &&
+          (o.rider_id === riderId || (o as Order & { riderId?: string }).riderId === riderId) &&
+          !['delivered', 'cancelled'].includes(o.status)
+      );
+      if (!trackingMyOrder) return;
+
+      riderTrackingNotifiedRef.current.add(riderId);
+      addNotification('Your rider is sharing live location', 'success');
     });
 
     socket.on('wallet:updated', (data: { balance: number }) => {
@@ -553,8 +601,10 @@ function MainApp() {
 
     return () => {
       socket.off('ride:incoming');
+      socket.off('ride:taken');
       socket.off('order:new');
       socket.off('order:updated');
+      socket.off('location:updated');
       socket.off('wallet:updated');
       socket.disconnect();
     };
@@ -597,8 +647,16 @@ function MainApp() {
       setOrders(prev => prev.map(o => (o.id === orderId ? res.data : o)));
       return true;
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
-      addNotification(msg || 'Could not update order. Try again.', 'warning');
+      const axiosErr = err as { response?: { status?: number; data?: { message?: string } } };
+      const statusCode = axiosErr.response?.status;
+      const msg = axiosErr.response?.data?.message;
+      if (statusCode === 409) {
+        addNotification(msg || 'Another driver took this ride', 'warning');
+        setIncomingRideOffer(prev => (prev?.id === orderId ? null : prev));
+        setOrders(prev => prev.filter(o => o.id !== orderId || o.rider_id === userRef.current?.id));
+      } else {
+        addNotification(msg || 'Could not update order. Try again.', 'warning');
+      }
       console.error('Update failed', err);
       return false;
     }
@@ -699,7 +757,99 @@ function MainApp() {
             onUpdateStatus={updateOrderStatus}
             onLogout={() => setIsLogoutModalOpen(true)}
             pendingApproval={user.status === 'pending'}
+            addNotification={addNotification}
+            refreshData={refreshData}
           />
+        </PullToRefresh>
+      </MapsProvider>
+    );
+  }
+
+  if (user.role === 'customer') {
+    return (
+      <MapsProvider>
+        <InstallPermissionsOnboarding
+          open={showDeviceSetup}
+          role={user.role}
+          user={user}
+          onComplete={() => setShowDeviceSetup(false)}
+          onUserRefresh={(updatedUser, newToken) => {
+            setUser(updatedUser as AuthUser);
+            setToken(newToken);
+            localStorage.setItem('user', JSON.stringify(updatedUser));
+            localStorage.setItem('token', newToken);
+          }}
+        />
+        <ConfirmationModal
+          isOpen={isLogoutModalOpen}
+          onClose={() => setIsLogoutModalOpen(false)}
+          onConfirm={handleLogout}
+          title="Sign Out"
+          message="Are you sure you want to log out of BytzGo?"
+          confirmLabel="Sign Out"
+          type="danger"
+        />
+        <PullToRefresh onRefresh={refreshData} refreshing={refreshing}>
+          <CustomerShell
+            user={user}
+            activeTab={activeTab}
+            setActiveTab={setActiveTab}
+            cart={cart}
+            setCart={setCart}
+            isCartOpen={isCartOpen}
+            setIsCartOpen={setIsCartOpen}
+            subtotal={subtotal}
+            deliveryFee={deliveryFee}
+            total={total}
+            orders={orders}
+            notifications={notifications}
+            setNotifications={setNotifications}
+            onLogout={() => setIsLogoutModalOpen(true)}
+            paystackKey={paystackKey}
+            setPaystackKey={setPaystackKey}
+            addNotification={addNotification}
+            refreshData={refreshData}
+          >
+            <CustomerView
+              user={user}
+              orders={orders}
+              products={products}
+              vendors={vendors}
+              riderLocations={riderLocations}
+              paystackKey={paystackKey}
+              setPaystackKey={setPaystackKey}
+              addNotification={addNotification}
+              cart={cart}
+              setCart={setCart}
+              isCartOpen={isCartOpen}
+              setIsCartOpen={setIsCartOpen}
+              activeTab={activeTab}
+              setActiveTab={setActiveTab}
+              onPlaceOrder={async (items, totalAmt, vendorId, extra = {}) => {
+                try {
+                  await axios.post('/api/orders', {
+                    items,
+                    total: totalAmt,
+                    vendorId,
+                    address: extra.address || user.address || 'East Legon, Accra',
+                    lat: extra.lat || user.lat,
+                    lng: extra.lng || user.lng,
+                    ...extra,
+                  });
+                  await refreshData();
+                } catch (err) {
+                  console.error('Order failed', err);
+                  addNotification('Failed to place order', 'warning');
+                }
+              }}
+              zones={zones}
+              deliveryPricePerKm={deliveryPricePerKm}
+              subtotal={subtotal}
+              deliveryFee={deliveryFee}
+              total={total}
+              refreshData={refreshData}
+            />
+          </CustomerShell>
         </PullToRefresh>
       </MapsProvider>
     );
@@ -719,385 +869,62 @@ function MainApp() {
           localStorage.setItem('token', newToken);
         }}
       />
-      <div className="min-h-screen bg-slate-50">
-        <nav className="bg-white border-b border-slate-200 px-4 sm:px-6 py-4 flex items-center justify-between sticky top-0 z-50 shadow-sm">
-          <div className="flex items-center gap-2 cursor-pointer shrink-0">
-            <div className="text-brand-blue">
-              <MotorIcon size={28} className="transform -scale-x-100" />
-            </div>
-            <span className="font-black text-xl sm:text-2xl tracking-tighter">
-              <span className="text-brand-blue">bytz</span>
-              <span className="text-brand-green">go</span>
-            </span>
-          </div>
-          <div className="flex items-center gap-2 sm:gap-6">
-            <div className="flex items-center gap-2 bg-slate-50 px-3 py-1.5 sm:px-4 sm:py-2 rounded-xl sm:rounded-2xl border border-slate-100 shadow-inner">
-              <span className="text-[8px] sm:text-[10px] font-black uppercase tracking-widest text-slate-400 hidden xs:block">Balance</span>
-              <span className="font-mono font-black text-xs sm:text-base text-brand-blue">₵{Number(user.balance || 0).toFixed(2)}</span>
-            </div>
-            <div className="flex items-center gap-1 sm:gap-3">
-              <div className="text-right hidden md:block">
-                <p className="text-xs font-black text-slate-800 leading-none">{user.name}</p>
-                <p className="text-[10px] font-medium text-slate-400 mt-1 uppercase tracking-widest">{user.email}</p>
-              </div>
-              <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl sm:rounded-2xl bg-slate-100 flex items-center justify-center border border-slate-200 shadow-inner cursor-pointer hover:bg-brand-blue/10 transition-all" onClick={() => {
-                const el = document.getElementById('profile-toggle');
-                if (el) el.click();
-              }}>
-                <UserIcon size={16} sm:size={18} className="text-slate-500" />
-              </div>
-              <button 
-                onClick={() => setIsLogoutModalOpen(true)}
-                className="p-2 hover:bg-red-50 text-slate-400 hover:text-red-500 rounded-xl transition-all"
-                title="Logout"
-              >
-                <LogOut size={18} sm:size={20} />
-              </button>
-            </div>
-          </div>
-        </nav>
-
-        <ConfirmationModal 
-          isOpen={isLogoutModalOpen}
-          onClose={() => setIsLogoutModalOpen(false)}
-          onConfirm={handleLogout}
-          title="Sign Out"
-          message="Are you sure you want to log out of BytzGo? You'll need to sign in again to access your account."
-          confirmLabel="Sign Out"
-          type="danger"
-        />
-
+      <ConfirmationModal
+        isOpen={isLogoutModalOpen}
+        onClose={() => setIsLogoutModalOpen(false)}
+        onConfirm={handleLogout}
+        title="Sign Out"
+        message="Are you sure you want to log out of BytzGo?"
+        confirmLabel="Sign Out"
+        type="danger"
+      />
+      <DarkAppShell
+        title={user.role === 'vendor' ? 'Merchant' : 'Control Tower'}
+        subtitle={user.name}
+        userName={user.name}
+        balance={Number(user.balance || 0)}
+        onLogout={() => setIsLogoutModalOpen(true)}
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
+        notifications={notifications}
+        onDismissNotification={(id) => setNotifications((prev) => prev.filter((n) => n.id !== id))}
+        navItems={
+          user.role === 'vendor'
+            ? ([
+                { id: 'orders', label: 'Orders', icon: ShoppingBag },
+                { id: 'products', label: 'Menu', icon: Layout },
+                { id: 'store', label: 'Store', icon: Store },
+                { id: 'wallet', label: 'Wallet', icon: CreditCard },
+              ] as NavItem[])
+            : ([
+                { id: 'orders', label: 'Orders', icon: ShoppingBag },
+                { id: 'users', label: 'Users', icon: Users },
+                { id: 'products', label: 'Approve', icon: Package, badge: adminPendingCount },
+                { id: 'revenue', label: 'Revenue', icon: BarChart3 },
+                { id: 'zones', label: 'Zones', icon: MapPin },
+                { id: 'settings', label: 'Settings', icon: Settings },
+              ] as NavItem[])
+        }
+      >
         <PullToRefresh onRefresh={refreshData} refreshing={refreshing}>
-          <main className="p-4 sm:p-8 max-w-7xl mx-auto pb-24">
-            <AnimatePresence>
-              <div className="fixed top-4 right-4 z-[9999] space-y-2 pointer-events-none">
-                {notifications.map(n => (
-                  <motion.div 
-                    key={n.id} 
-                    initial={{ opacity: 0, x: 50, scale: 0.9 }} 
-                    animate={{ opacity: 1, x: 0, scale: 1 }} 
-                    exit={{ opacity: 0, x: 50, scale: 0.9 }}
-                    className={cn(
-                      "px-6 py-4 rounded-2xl shadow-2xl border flex items-center gap-3 pointer-events-auto",
-                      n.type === 'success' ? "bg-brand-green text-white border-brand-green/20" : 
-                      n.type === 'warning' ? "bg-red-500 text-white border-red-500/20" : 
-                      "bg-slate-900 text-white border-slate-700"
-                    )}
-                  >
-                    <span className="text-sm font-black uppercase tracking-widest">{n.message}</span>
-                    <button onClick={() => setNotifications(prev => prev.filter(nn => nn.id !== n.id))} className="ml-2 hover:opacity-50 transition-opacity">
-                      <X size={14} />
-                    </button>
-                  </motion.div>
-                ))}
+          <div className="max-w-7xl mx-auto">
+            {user.status === 'pending' && user.role === 'vendor' && (
+              <div className="mb-6 p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center gap-4">
+                <AlertCircle className="text-amber-400 shrink-0" size={24} />
+                <p className="text-sm text-amber-200">Account pending ? orders unlock after approval.</p>
               </div>
-            </AnimatePresence>
-  
-            {user && user.status === 'pending' && (user.role === 'vendor' || user.role === 'rider') && (
-              <motion.div 
-                initial={{ opacity: 0, y: -20 }} 
-                animate={{ opacity: 1, y: 0 }} 
-                className="mb-8 p-4 sm:p-6 bg-amber-50 border border-amber-200 rounded-[1.5rem] sm:rounded-[2.5rem] flex items-center gap-4 sm:gap-6 shadow-sm shadow-amber-500/5"
-              >
-                <div className="w-10 h-10 sm:w-12 sm:h-12 bg-amber-500 rounded-xl sm:rounded-2xl flex items-center justify-center text-white shrink-0 shadow-lg shadow-amber-500/20">
-                  <AlertCircle size={20} className="sm:w-6 sm:h-6" />
-                </div>
-                <div>
-                  <h4 className="text-sm sm:text-base font-black tracking-tight text-amber-900 uppercase italic">Account Pending Approval</h4>
-                  <p className="text-[10px] sm:text-xs font-bold text-amber-700/80 uppercase tracking-widest leading-relaxed">Our team is reviewing your details. You will be notified once you are cleared to start operations.</p>
-                </div>
-              </motion.div>
             )}
-
             <AnimatePresence mode="wait">
-              {user.role === 'customer' && <CustomerView 
-                user={user} orders={orders} products={products} vendors={vendors} 
-                riderLocations={riderLocations} paystackKey={paystackKey} setPaystackKey={setPaystackKey} 
-                addNotification={addNotification} 
-                cart={cart} setCart={setCart} isCartOpen={isCartOpen} setIsCartOpen={setIsCartOpen}
-                activeTab={activeTab} setActiveTab={setActiveTab}
-                onPlaceOrder={async (items, total, vendorId, extra = {}) => {
-                  try {
-                    await axios.post('/api/orders', { 
-                      items, 
-                      total, 
-                      vendorId,
-                      address: extra.address || user.address || 'East Legon, Accra', 
-                      lat: extra.lat || user.lat,
-                      lng: extra.lng || user.lng,
-                      ...extra
-                    });
-                    await refreshData();
-                  } catch (err) {
-                    console.error('Order failed', err);
-                    addNotification('Failed to place order', 'warning');
-                  }
-                }} 
-                zones={zones}
-                subtotal={subtotal}
-                deliveryFee={deliveryFee}
-                total={total}
-              />}
-              {user.role === 'vendor' && <VendorView user={user} orders={orders} products={products} riderLocations={riderLocations} onUpdateStatus={updateOrderStatus} addNotification={addNotification} onAddProduct={(p) => setProducts(prev => {
-                const exists = prev.find(item => item.id === p.id);
-                if (exists) return prev.map(item => item.id === p.id ? p : item);
-                return [...prev, p];
-              })} onDeleteProduct={async (id) => {
-                try {
-                  await axios.delete(`/api/products/${id}`);
-                  setProducts(prev => prev.filter(p => p.id !== id));
-                } catch (err) {
-                  console.error('Delete product failed', err);
-                }
-              }} activeTab={activeTab} setActiveTab={setActiveTab} />}
-              {user.role === 'admin' && <AdminView user={user} orders={orders} addNotification={addNotification} activeTab={activeTab} setActiveTab={setActiveTab} />}
+              {user.role === 'vendor' && (
+                <VendorView user={user} orders={orders} products={products} riderLocations={riderLocations} onUpdateStatus={updateOrderStatus} addNotification={addNotification} onBalanceUpdate={(bal) => setUser((prev) => (prev ? { ...prev, balance: bal } : prev))} onAddProduct={(p) => setProducts((prev) => { const exists = prev.find((item) => item.id === p.id); if (exists) return prev.map((item) => (item.id === p.id ? p : item)); return [...prev, p]; })} onDeleteProduct={async (id) => { await axios.delete(`/api/products/${id}`); setProducts((prev) => prev.filter((p) => p.id !== id)); }} activeTab={activeTab} setActiveTab={setActiveTab} refreshData={refreshData} />
+              )}
+              {user.role === 'admin' && (
+                <AdminView user={user} orders={orders} addNotification={addNotification} activeTab={activeTab} setActiveTab={setActiveTab} onPendingCountChange={setAdminPendingCount} />
+              )}
             </AnimatePresence>
-          </main>
+          </div>
         </PullToRefresh>
-
-        {/* Global Mobile Bottom Navigation - Moved outside PullToRefresh to fix "middle of screen" issue */}
-        {!loading && user && (
-          <nav className="fixed bottom-0 left-0 right-0 bg-white/80 backdrop-blur-xl border-t border-slate-100 flex sm:hidden z-[100] px-6 py-3 justify-around shadow-[0_-10px_30px_rgba(0,0,0,0.05)]">
-            {user.role === 'customer' && (
-              <>
-                <button onClick={() => setActiveTab('menu')} className={cn("flex flex-col items-center gap-1 transition-all", activeTab === 'menu' ? "text-brand-blue" : "text-slate-400")}>
-                  <Home size={20} className={activeTab === 'menu' ? "fill-brand-blue/10" : ""} />
-                  <span className="text-[8px] font-black uppercase tracking-widest">Home</span>
-                </button>
-                <button onClick={() => setActiveTab('tracking')} className={cn("flex flex-col items-center gap-1 transition-all", activeTab === 'tracking' ? "text-brand-blue" : "text-slate-400")}>
-                  <Navigation size={20} className={activeTab === 'tracking' ? "fill-brand-blue/10" : ""} />
-                  <span className="text-[8px] font-black uppercase tracking-widest">Orders</span>
-                </button>
-                <button onClick={() => setActiveTab('courier')} className={cn("flex flex-col items-center gap-1 transition-all", activeTab === 'courier' ? "text-brand-blue" : "text-slate-400")}>
-                  <Package size={20} className={activeTab === 'courier' ? "fill-brand-blue/10" : ""} />
-                  <span className="text-[8px] font-black uppercase tracking-widest">Courier</span>
-                </button>
-              </>
-            )}
-            {user.role === 'vendor' && (
-              <>
-                <button onClick={() => setActiveTab('orders')} className={cn("flex flex-col items-center gap-1 transition-all", activeTab === 'orders' ? "text-brand-blue" : "text-slate-400")}>
-                  <ShoppingBag size={20} className={activeTab === 'orders' ? "fill-brand-blue/10" : ""} />
-                  <span className="text-[8px] font-black uppercase tracking-widest">Orders</span>
-                </button>
-                <button onClick={() => setActiveTab('products')} className={cn("flex flex-col items-center gap-1 transition-all", activeTab === 'products' ? "text-brand-blue" : "text-slate-400")}>
-                  <Layout size={20} className={activeTab === 'products' ? "fill-brand-blue/10" : ""} />
-                  <span className="text-[8px] font-black uppercase tracking-widest">Menu</span>
-                </button>
-                <button onClick={() => setActiveTab('wallet')} className={cn("flex flex-col items-center gap-1 transition-all", activeTab === 'wallet' ? "text-brand-blue" : "text-slate-400")}>
-                  <CreditCard size={20} className={activeTab === 'wallet' ? "fill-brand-blue/10" : ""} />
-                  <span className="text-[8px] font-black uppercase tracking-widest">Wallet</span>
-                </button>
-              </>
-            )}
-            {user.role === 'admin' && (
-              <>
-                <button onClick={() => setActiveTab('orders')} className={cn("flex flex-col items-center gap-1 transition-all", activeTab === 'orders' ? "text-brand-blue" : "text-slate-400")}>
-                  <ShoppingBag size={20} className={activeTab === 'orders' ? "fill-brand-blue/10" : ""} />
-                  <span className="text-[8px] font-black uppercase tracking-widest">Orders</span>
-                </button>
-                <button onClick={() => setActiveTab('users')} className={cn("flex flex-col items-center gap-1 transition-all", activeTab === 'users' ? "text-brand-blue" : "text-slate-400")}>
-                  <Users size={20} className={activeTab === 'users' ? "fill-brand-blue/10" : ""} />
-                  <span className="text-[8px] font-black uppercase tracking-widest">Users</span>
-                </button>
-                <button onClick={() => setActiveTab('zones')} className={cn("flex flex-col items-center gap-1 transition-all", activeTab === 'zones' ? "text-brand-blue" : "text-slate-400")}>
-                  <MapPin size={20} className={activeTab === 'zones' ? "fill-brand-blue/10" : ""} />
-                  <span className="text-[8px] font-black uppercase tracking-widest">Zones</span>
-                </button>
-              </>
-            )}
-          </nav>
-        )}
-
-        {/* Global Floating Elements for Customer */}
-        {user?.role === 'customer' && (
-          <AnimatePresence>
-            {/* Cart Floating Button */}
-            {activeTab !== 'profile' && (
-              <button 
-                onClick={() => setIsCartOpen(true)}
-                className="fixed bottom-28 sm:bottom-8 right-4 sm:right-8 z-[60] bg-brand-blue text-white p-4 rounded-3xl shadow-2xl shadow-brand-blue/40 flex items-center gap-3 hover:scale-110 active:scale-95 transition-all"
-              >
-                <div className="relative">
-                  <ShoppingBag size={24} />
-                  {cart.length > 0 && (
-                    <span className="absolute -top-2 -right-2 bg-brand-green text-white text-[10px] font-black w-5 h-5 rounded-full flex items-center justify-center border-2 border-brand-blue">
-                      {cart.reduce((a, b) => a + b.quantity, 0)}
-                    </span>
-                  )}
-                </div>
-                <span className="font-black text-sm pr-2">GH₵{subtotal.toFixed(2)}</span>
-              </button>
-            )}
-
-            {/* Track Order Floating Button */}
-            {orders.filter(o => o.customer_id === user.id && o.status !== 'delivered' && o.status !== 'cancelled').length > 0 && activeTab !== 'tracking' && (
-              <button
-                onClick={() => setActiveTab('tracking')}
-                className="fixed bottom-28 sm:bottom-8 left-4 sm:left-8 z-[60] bg-slate-900 text-white px-5 sm:px-6 py-3 sm:py-4 rounded-3xl shadow-2xl flex items-center gap-3 hover:scale-105 active:scale-95 transition-all group"
-              >
-                <div className="relative">
-                  <Navigation size={20} className="animate-pulse" />
-                  <span className="absolute -top-1 -right-1 w-3 h-3 bg-brand-green rounded-full border-2 border-slate-900 animate-ping" />
-                  <span className="absolute -top-1 -right-1 w-3 h-3 bg-brand-green rounded-full border-2 border-slate-900" />
-                </div>
-                <span className="font-black text-xs uppercase tracking-widest">Track · {orders.filter(o => o.customer_id === user.id && o.status !== 'delivered' && o.status !== 'cancelled').length}</span>
-              </button>
-            )}
-
-            {/* Global Cart Modal */}
-            {isCartOpen && (
-              <>
-                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsCartOpen(false)} className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[200]" />
-                <motion.div 
-                  initial={{ y: '100%' }} 
-                  animate={{ y: 0 }} 
-                  exit={{ y: '100%' }} 
-                  transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-                  className="fixed bottom-0 left-0 right-0 sm:inset-y-0 sm:right-0 sm:left-auto w-full sm:max-w-md h-auto sm:h-full max-h-[95vh] sm:max-h-none bg-white z-[210] shadow-2xl p-6 sm:p-8 pb-32 sm:pb-8 flex flex-col rounded-t-[3rem] sm:rounded-none"
-                >
-                  <div className="w-12 h-1.5 bg-slate-100 rounded-full mx-auto mb-6 sm:hidden" />
-                  <div className="flex justify-between items-center mb-8">
-                    <h3 className="text-3xl font-black italic tracking-tighter">Your Bytz</h3>
-                    <button onClick={() => setIsCartOpen(false)} className="p-2 hover:bg-slate-100 rounded-xl transition-colors">
-                      <X size={20} />
-                    </button>
-                  </div>
-
-                  <div className="flex-1 overflow-y-auto space-y-4 pr-2">
-                    {cart.length === 0 ? (
-                      <div className="text-center py-20">
-                        <ShoppingBag size={48} className="mx-auto text-slate-200 mb-4" />
-                        <p className="text-slate-400 font-bold italic uppercase tracking-tighter">Empty stomach, empty cart.</p>
-                      </div>
-                    ) : (
-                      cart.map(item => (
-                        <div key={item.id} className="bg-slate-50 p-4 rounded-2xl flex items-center justify-between border border-slate-100">
-                          <div className="flex items-center gap-4">
-                            <div className="w-12 h-12 bg-white rounded-xl shadow-sm flex items-center justify-center text-brand-blue font-black">
-                              {item.name[0]}
-                            </div>
-                            <div>
-                              <h4 className="font-black text-sm">{item.name}</h4>
-                              <p className="text-xs font-mono text-brand-blue">GH₵{Number(item.price).toFixed(2)}</p>
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-3">
-                            <button onClick={() => {
-                              const newCart = cart.map(i => i.id === item.id ? { ...i, quantity: Math.max(0, i.quantity - 1) } : i).filter(i => i.quantity > 0);
-                              setCart(newCart);
-                            }} className="w-8 h-8 rounded-lg bg-white border border-slate-200 flex items-center justify-center font-black">-</button>
-                            <span className="font-mono font-black text-sm">{item.quantity}</span>
-                            <button onClick={() => {
-                              const newCart = cart.map(i => i.id === item.id ? { ...i, quantity: i.quantity + 1 } : i);
-                              setCart(newCart);
-                            }} className="w-8 h-8 rounded-lg bg-white border border-slate-200 flex items-center justify-center font-black">+</button>
-                          </div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-
-                    {cart.length > 0 && (
-                      <div className="mt-8 pt-8 border-t border-slate-100 space-y-4">
-                        <div className="flex justify-between items-center text-slate-500">
-                          <span className="text-[10px] font-black uppercase tracking-widest">Subtotal</span>
-                          <span className="font-mono font-bold">GH₵{subtotal.toFixed(2)}</span>
-                        </div>
-                        <div className="flex justify-between items-center text-brand-green bg-brand-green/5 p-3 rounded-2xl border border-brand-green/10">
-                          <span className="text-[10px] font-black uppercase tracking-widest">Delivery Fee (Rider Payout)</span>
-                          <span className="font-mono font-bold">GH₵{deliveryFee.toFixed(2)}</span>
-                        </div>
-                        <div className="flex justify-between items-end pt-2">
-                          <span className="text-slate-400 font-black uppercase tracking-widest text-xs">Total Bill</span>
-                          <span className="text-3xl font-black tracking-tighter text-brand-blue italic">GH₵{total.toFixed(2)}</span>
-                        </div>
-                      
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                        <button onClick={async () => {
-                          // Handle Pay logic moved to App or duplicated
-                          let currentKey = paystackKey;
-                          if (!currentKey) {
-                            try {
-                              const res = await axios.get('/api/config/paystack');
-                              currentKey = res.data.publicKey;
-                              setPaystackKey(currentKey);
-                            } catch (e) {}
-                          }
-                          if (!currentKey) return addNotification('Payment system offline', 'warning');
-                          if (!(window as any).PaystackPop) return addNotification('Paystack not loaded', 'warning');
-
-                          const handler = (window as any).PaystackPop.setup({
-                            key: currentKey,
-                            email: user.email,
-                            amount: Math.round(total * 100),
-                            currency: 'GHS',
-                            callback: (response: any) => {
-                              axios.post('/api/orders', { 
-                                items: cart.map(item => ({ id: item.id, name: item.name, quantity: item.quantity, price: item.price })), 
-                                total: total, 
-                                delivery_fee: deliveryFee,
-                                vendorId: cart[0].vendor_id, // Assuming same vendor for all items
-                                payment_reference: response.reference, 
-                                payment_method: 'paystack' 
-                              }).then(() => {
-                                setCart([]);
-                                setIsCartOpen(false);
-                                setActiveTab('tracking');
-                                refreshData();
-                              });
-                            }
-                          });
-                          handler.openIframe();
-                        }} className="py-4 bg-slate-900 text-white rounded-2xl font-black uppercase tracking-widest text-[10px] hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-2">
-                          <CreditCard size={14} /> Card/Momo
-                        </button>
-                        <button 
-                          disabled={user.balance < total}
-                          onClick={async () => {
-                            await axios.post('/api/orders', { 
-                              items: cart.map(item => ({ id: item.id, name: item.name, quantity: item.quantity, price: item.price })), 
-                              total: total, 
-                              delivery_fee: deliveryFee,
-                              vendorId: cart[0].vendor_id,
-                              payment_method: 'wallet' 
-                            });
-                            setCart([]);
-                            setIsCartOpen(false);
-                            setActiveTab('tracking');
-                            refreshData();
-                          }}
-                          className="py-4 bg-brand-blue text-white rounded-2xl font-black uppercase tracking-widest text-[10px] hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-2 disabled:opacity-30"
-                        >
-                          <ShoppingBag size={14} /> Wallet
-                        </button>
-                        <button 
-                          onClick={async () => {
-                            await axios.post('/api/orders', { 
-                              items: cart.map(item => ({ id: item.id, name: item.name, quantity: item.quantity, price: item.price })), 
-                              total: total, 
-                              delivery_fee: deliveryFee,
-                              vendorId: cart[0].vendor_id,
-                              payment_method: 'pay_on_delivery' 
-                            });
-                            setCart([]);
-                            setIsCartOpen(false);
-                            setActiveTab('tracking');
-                            refreshData();
-                          }}
-                          className="py-4 bg-brand-green text-white rounded-2xl font-black uppercase tracking-widest text-[10px] hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-2"
-                        >
-                          <Package size={14} /> Pay on Delivery
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </motion.div>
-              </>
-            )}
-          </AnimatePresence>
-        )}
-      </div>
+      </DarkAppShell>
     </MapsProvider>
   );
 }
@@ -1146,6 +973,7 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
   const [otpPurpose, setOtpPurpose] = useState<'signup_verify' | 'forgot_password'>('signup_verify');
   const [otpError, setOtpError] = useState('');
   const [otpLoading, setOtpLoading] = useState(false);
+  const [resendLoading, setResendLoading] = useState(false);
 
   // Forgot Password state
   const [isForgotPassword, setIsForgotPassword] = useState(false);
@@ -1210,7 +1038,7 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
       setIsOtpModalOpen(false);
       setLoading(true);
       
-      const res = await axios.post('/api/auth/register', { name, email, password, role, phone });
+      const res = await axios.post('/api/auth/register', { name, email, password, role, phone, otp });
       const accepted = onLogin(res.data.user, res.data.token);
       if (accepted === false) {
         setError(loginRejectedMessage(res.data.user.role as Role, forcedRole || role));
@@ -1234,6 +1062,7 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
     setLoading(true);
     try {
       await axios.post('/api/auth/send-forgot-otp', { phone });
+      setOtpPurpose('forgot_password');
       setForgotStep(2);
       setOtp('');
       setNewPassword('');
@@ -1242,6 +1071,25 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
       setError(err.response?.data?.message || 'Failed to send recovery code. Phone number might not be registered.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleResendOtp = async () => {
+    setOtpError('');
+    setResendLoading(true);
+    try {
+      await axios.post('/api/auth/resend-otp', {
+        phone,
+        purpose: otpPurpose,
+        ...(otpPurpose === 'signup_verify' ? { email } : {}),
+      });
+      setOtpError('');
+      alert('A new verification code was sent to your phone.');
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { message?: string } } };
+      setOtpError(e.response?.data?.message || 'Could not resend code. Try again shortly.');
+    } finally {
+      setResendLoading(false);
     }
   };
 
@@ -1362,6 +1210,14 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
                       placeholder="Enter 6-digit OTP"
                       className="w-full bg-slate-50 border border-slate-100 p-4 text-center rounded-2xl focus:outline-none focus:border-brand-blue font-mono font-black text-xl tracking-[0.5em]"
                     />
+                    <button
+                      type="button"
+                      disabled={resendLoading}
+                      onClick={handleResendOtp}
+                      className="w-full text-[10px] font-black uppercase tracking-widest text-brand-blue hover:underline disabled:opacity-50"
+                    >
+                      {resendLoading ? 'Sending…' : 'Resend code'}
+                    </button>
                   </div>
 
                   <div className="space-y-2">
@@ -1421,7 +1277,7 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
                   }} 
                   className="text-[10px] font-black uppercase tracking-widest text-slate-400 hover:text-slate-600 hover:underline"
                 >
-                  ← Back to Login
+                  ? Back to Login
                 </button>
               </div>
             </div>
@@ -1523,7 +1379,7 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
                       required
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
-                      placeholder="••••••••"
+                      placeholder="????????"
                       className="w-full bg-slate-50 border border-slate-100 p-4 pl-12 rounded-2xl focus:outline-none focus:border-brand-blue font-bold text-sm"
                     />
                     <button 
@@ -1650,6 +1506,14 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
               className="w-full bg-slate-50 border border-slate-100 p-4 text-center rounded-2xl focus:outline-none focus:border-brand-blue font-mono font-black text-xl tracking-[0.5em]"
             />
             {otpError && <p className="text-[10px] font-black text-red-500 uppercase tracking-widest ml-2">{otpError}</p>}
+            <button
+              type="button"
+              disabled={resendLoading}
+              onClick={handleResendOtp}
+              className="w-full text-[10px] font-black uppercase tracking-widest text-brand-blue hover:underline disabled:opacity-50"
+            >
+              {resendLoading ? 'Sending…' : 'Resend code'}
+            </button>
           </div>
 
           <div className="flex gap-3">
@@ -1675,117 +1539,27 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
 }
 
 // Location Autocomplete Component (Ghana-only Places search)
-function LocationAutocompleteInput({
-  placeholder,
-  icon: Icon,
-  value,
-  onChange,
-  onMapClick,
-  showUseMyLocation = true,
-  showMapButton = true,
-  onLocationError,
-}: {
-  placeholder: string;
-  icon: React.ComponentType<{ size?: number; className?: string }>;
-  value: string;
-  onChange: (val: { address: string; lat: number; lng: number }) => void;
-  onMapClick: () => void;
-  showUseMyLocation?: boolean;
-  showMapButton?: boolean;
-  onLocationError?: (message: string) => void;
-}) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const places = useMapsLibrary('places');
-  const onChangeRef = useRef(onChange);
-  const [locating, setLocating] = useState(false);
-
-  useEffect(() => {
-    onChangeRef.current = onChange;
-  }, [onChange]);
-
-  useEffect(() => {
-    if (!places || !inputRef.current || typeof google === 'undefined') return;
-    const autocomplete = new places.Autocomplete(
-      inputRef.current,
-      ghanaPlacesAutocompleteOptions(google.maps)
-    );
-    
-    const listener = autocomplete.addListener('place_changed', () => {
-      const place = autocomplete.getPlace();
-      if (place.geometry?.location) {
-        onChangeRef.current({
-          address: place.formatted_address || place.name || '',
-          lat: place.geometry.location.lat(),
-          lng: place.geometry.location.lng(),
-        });
-      }
-    });
-
-    return () => {
-      if (listener) {
-        google.maps.event.removeListener(listener);
-      }
-    };
-  }, [places]);
-
-  const handleUseMyLocation = async () => {
-    setLocating(true);
-    const loc = await detectCurrentLocation();
-    setLocating(false);
-    if (loc) onChangeRef.current(loc);
-    else onLocationError?.('Could not get your location. Allow location access in your browser.');
-  };
-
-  return (
-    <div className="relative flex items-center">
-      <Icon size={18} className="absolute left-4 text-slate-300 z-10" />
-      <input
-        ref={inputRef}
-        required
-        type="text"
-        placeholder={placeholder}
-        className={cn(
-          'w-full bg-slate-50 border border-slate-100 rounded-2xl py-4 pl-12 font-bold text-sm focus:outline-none focus:border-brand-blue transition-all',
-          showUseMyLocation && showMapButton ? 'pr-28' : showUseMyLocation || showMapButton ? 'pr-20' : 'pr-4'
-        )}
-        value={value}
-        onChange={(e) => onChange({ address: e.target.value, lat: 0, lng: 0 })}
-      />
-      {showUseMyLocation && (
-        <button
-          type="button"
-          title="Use my location"
-          disabled={locating}
-          onClick={handleUseMyLocation}
-          className={cn(
-            'absolute z-10 p-2 rounded-xl bg-slate-100 text-brand-blue hover:bg-brand-blue/10 transition-all disabled:opacity-50',
-            showMapButton ? 'right-14' : 'right-2'
-          )}
-        >
-          {locating ? <LoadingIndicator size="sm" /> : <LocateFixed size={16} />}
-        </button>
-      )}
-      {showMapButton && (
-        <button
-          type="button"
-          onClick={onMapClick}
-          className="absolute right-2 z-10 text-[10px] font-black uppercase tracking-widest bg-brand-blue text-white px-3 py-2 rounded-xl"
-        >
-          Map
-        </button>
-      )}
-    </div>
-  );
-}
-
 // REST OF THE VIEW COMPONENTS (CustomerView, VendorView, etc.) 
 // UPDATED TO USE REAL DATA FROM PROPS AND API
-function CustomerView({ user, orders, products, vendors, riderLocations, paystackKey, setPaystackKey, onPlaceOrder, addNotification, cart, setCart, isCartOpen, setIsCartOpen, activeTab, setActiveTab, zones, subtotal, deliveryFee, total }: { user: AuthUser, orders: Order[], products: any[], vendors: any[], riderLocations: { [key: string]: { lat: number, lng: number } }, paystackKey: string, setPaystackKey: (k: string) => void, onPlaceOrder: (items: any[], total: number, vendorId?: string, extra?: any) => void, addNotification: (m: string, t?: 'info' | 'success' | 'warning') => void, cart: any[], setCart: React.Dispatch<React.SetStateAction<any[]>>, isCartOpen: boolean, setIsCartOpen: (v: boolean) => void, activeTab: string, setActiveTab: (v: any) => void, zones: any[], subtotal: number, deliveryFee: number, total: number }) {
+function CustomerView({ user, orders, products, vendors, riderLocations, paystackKey, setPaystackKey, onPlaceOrder, addNotification, cart, setCart, isCartOpen, setIsCartOpen, activeTab, setActiveTab, zones, deliveryPricePerKm, subtotal, deliveryFee, total, refreshData }: { user: AuthUser, orders: Order[], products: any[], vendors: any[], riderLocations: { [key: string]: { lat: number, lng: number } }, paystackKey: string, setPaystackKey: (k: string) => void, onPlaceOrder: (items: any[], total: number, vendorId?: string, extra?: any) => void, addNotification: (m: string, t?: 'info' | 'success' | 'warning') => void, cart: any[], setCart: React.Dispatch<React.SetStateAction<any[]>>, isCartOpen: boolean, setIsCartOpen: (v: boolean) => void, activeTab: string, setActiveTab: (v: any) => void, zones: any[], deliveryPricePerKm: number, subtotal: number, deliveryFee: number, total: number, refreshData: () => Promise<void> }) {
   const [selectedVendor, setSelectedVendor] = useState<any | null>(null);
   const [isTopUpOpen, setIsTopUpOpen] = useState(false);
   const [topUpAmount, setTopUpAmount] = useState('50');
   const [orderToCancel, setOrderToCancel] = useState<Order | null>(null);
   const [walletTab, setWalletTab] = useState<'topup' | 'withdraw'>('topup');
+  const [walletPaying, setWalletPaying] = useState(false);
+  const [pendingTopupRef, setPendingTopupRef] = useState(getPendingWalletTopupRef);
+  const [manualTopupRef, setManualTopupRef] = useState('');
+  const [creditingWallet, setCreditingWallet] = useState(false);
+
+  useEffect(() => {
+    const saved = getPendingWalletTopupRef();
+    if (saved) {
+      setPendingTopupRef(saved);
+      setManualTopupRef(saved);
+      setIsTopUpOpen(true);
+    }
+  }, []);
   const [withdrawAmount, setWithdrawAmount] = useState('');
   const [withdrawMethod, setWithdrawMethod] = useState<'momo' | 'bank'>('momo');
   const [withdrawPhone, setWithdrawPhone] = useState(user.phone || '');
@@ -1806,6 +1580,7 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
   });
   const [mapMode, setMapMode] = useState<'pickup' | 'destination'>('pickup');
   const [isMapOpen, setIsMapOpen] = useState(false);
+  const [showDeliveryDetails, setShowDeliveryDetails] = useState(false);
   const [profileForm, setProfileForm] = useState({ 
     email: user.email, 
     phone: user.phone || '',
@@ -1815,17 +1590,7 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
     region: user.region || ''
   });
 
-  const courierPickupAutoSet = useRef(false);
   const profileGeoSet = useRef(false);
-
-  useEffect(() => {
-    if (activeTab !== 'courier') return;
-    if (courierPickupAutoSet.current || courierForm.pickup?.lat) return;
-    courierPickupAutoSet.current = true;
-    detectCurrentLocation().then((loc) => {
-      if (loc) setCourierForm((prev) => ({ ...prev, pickup: loc }));
-    });
-  }, [activeTab, courierForm.pickup?.lat]);
 
   useEffect(() => {
     if (activeTab !== 'profile') return;
@@ -1845,16 +1610,15 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
 
   const calculateCourierFee = () => {
     if (!courierForm.pickup || !courierForm.destination) return 0;
-    const distance = calculateDistance(
+    const distance = haversineDistanceKm(
       courierForm.pickup.lat, courierForm.pickup.lng,
       courierForm.destination.lat, courierForm.destination.lng
     );
     const zone = zones.find(z => z.region === user.region && z.is_active) || zones[0];
-    if (!zone) return 50;
-    const fee = Number(zone.base_price) + (distance * Number(zone.price_per_km));
-    const min = Number(zone.min_price);
-    const max = zone.max_price ? Number(zone.max_price) : Infinity;
-    return Math.max(min, Math.min(fee, max));
+    const bounds = zone
+      ? { min: Number(zone.min_price), max: zone.max_price ? Number(zone.max_price) : null }
+      : undefined;
+    return deliveryFeeFromDistanceKm(distance, deliveryPricePerKm, bounds);
   };
   const courierFee = calculateCourierFee();
 
@@ -1863,6 +1627,8 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
   const [vendorConflict, setVendorConflict] = useState<any>(null);
 
   const myOrders = orders.filter(o => o.customer_id === user.id);
+  const liveOrders = myOrders.filter((o) => !['delivered', 'cancelled'].includes(o.status));
+  const tripHistory = myOrders.filter((o) => o.status !== 'cancelled');
 
   const vendorProducts = selectedVendor 
     ? products.filter(p => p.vendor_id === selectedVendor.id)
@@ -1895,6 +1661,93 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
     }));
   };
 
+  const walletPayingRef = useRef(false);
+
+  const creditWalletFromPaystack = async (reference: string) => {
+    setCreditingWallet(true);
+    try {
+      const res = await axios.post('/api/wallet/topup', { reference });
+      clearPendingWalletTopupRef();
+      setPendingTopupRef('');
+      await refreshData();
+      const credited = res.data?.balance != null ? Number(res.data.balance).toFixed(2) : null;
+      addNotification(
+        res.data?.alreadyProcessed
+          ? `Wallet already credited. Balance: ?${credited}`
+          : `Wallet topped up! Balance: ?${credited}`,
+        'success'
+      );
+      setIsTopUpOpen(false);
+    } catch (err: unknown) {
+      setPendingWalletTopupRef(reference);
+      setPendingTopupRef(reference);
+      setManualTopupRef(reference);
+      setIsTopUpOpen(true);
+      const msg = axios.isAxiosError(err) ? err.response?.data?.message : null;
+      addNotification(formatWalletTopupError(typeof msg === 'string' ? msg : null), 'warning');
+    } finally {
+      setCreditingWallet(false);
+      walletPayingRef.current = false;
+      setWalletPaying(false);
+    }
+  };
+
+  const handleWalletTopUp = async () => {
+    if (walletPayingRef.current) return;
+
+    const amountGhs = Number(topUpAmount);
+    if (!Number.isFinite(amountGhs) || amountGhs < 1) {
+      addNotification('Enter at least ?1 to top up', 'warning');
+      return;
+    }
+
+    let currentKey = paystackKey;
+    if (!currentKey) {
+      try {
+        const res = await axios.get('/api/config/paystack');
+        currentKey = res.data.publicKey;
+        if (currentKey) setPaystackKey(currentKey);
+      } catch {
+        /* handled below */
+      }
+    }
+    if (!currentKey) {
+      addNotification('Payment system is offline. Check Paystack keys in admin settings.', 'warning');
+      return;
+    }
+
+    walletPayingRef.current = true;
+    setWalletPaying(true);
+
+    try {
+      await openPaystackCheckout({
+        publicKey: currentKey,
+        email: paystackPaymentEmail(user),
+        amountGhs,
+        metadata: { type: 'wallet_topup', user_id: user.id },
+        onReferenceReady: (reference) => {
+          setPendingWalletTopupRef(reference);
+          setPendingTopupRef(reference);
+          setManualTopupRef(reference);
+        },
+        onSuccess: (reference) => {
+          void creditWalletFromPaystack(reference);
+        },
+        onClose: () => {
+          if (!creditingWallet) {
+            walletPayingRef.current = false;
+            setWalletPaying(false);
+          }
+        },
+      });
+    } catch (err: unknown) {
+      walletPayingRef.current = false;
+      setWalletPaying(false);
+      const msg = err instanceof Error ? err.message : 'Could not open payment window';
+      addNotification(msg, 'warning');
+    }
+  };
+
   const handlePay = async () => {
     console.log('handlePay triggered. Cart length:', cart.length);
     if (cart.length === 0) return;
@@ -1917,96 +1770,134 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
       return;
     }
 
-    console.log('Opening Paystack with key:', currentKey.slice(0, 10) + '...');
+    setIsCartOpen(false);
     try {
-      if (!(window as any).PaystackPop) {
-        console.error('Paystack script (inline.js) not found in window!');
-        addNotification('Payment library not loaded. Please refresh.', 'warning');
-        return;
-      }
-
-      const handler = (window as any).PaystackPop.setup({
-        key: currentKey,
-        email: user.email,
-        amount: Math.round(total * 100),
-        currency: 'GHS',
-        callback: (response: any) => {
-          console.log('Paystack payment successful:', response.reference);
-          onPlaceOrder(cart.map(item => ({ id: item.id, name: item.name, quantity: item.quantity, price: item.price })), total, selectedVendor?.id, { payment_reference: response.reference, payment_method: 'paystack' });
+      await openPaystackCheckout({
+        publicKey: currentKey,
+        email: paystackPaymentEmail(user),
+        amountGhs: total,
+        metadata: { type: 'order', vendor_id: selectedVendor?.id },
+        onSuccess: (reference) => {
+          onPlaceOrder(
+            cart.map((item) => ({
+              id: item.id,
+              name: item.name,
+              quantity: item.quantity,
+              price: item.price,
+            })),
+            total,
+            selectedVendor?.id,
+            { payment_reference: reference, payment_method: 'paystack' }
+          );
           setCart([]);
-          setIsCartOpen(false);
           setActiveTab('tracking');
         },
-        onClose: () => {
-          console.log('Paystack window closed by user');
-          setIsCartOpen(false);
-        }
       });
-      handler.openIframe();
-    } catch (err) {
-      console.error('Critical Paystack Error:', err);
-      addNotification('Could not open payment window', 'warning');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Could not open payment window';
+      addNotification(msg, 'warning');
     }
   };
 
+  const creditPendingOrManual = () => {
+    const ref = (manualTopupRef || pendingTopupRef).trim();
+    if (!ref) {
+      addNotification('Paste your Paystack reference (e.g. T1234567890) or pay again below.', 'warning');
+      return;
+    }
+    const hint = walletTopupReferenceHint(ref);
+    if (hint) {
+      addNotification(hint, 'warning');
+      return;
+    }
+    void creditWalletFromPaystack(ref);
+  };
+
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="relative space-y-8 pb-24 sm:pb-0">
-      {/* Mobile Bottom Navigation - Moved to App component */}
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="relative space-y-6">
+      {(pendingTopupRef || manualTopupRef) && (
+        <motion.div
+          role="alert"
+          className="sticky top-0 z-50 -mx-1 px-4 py-3 rounded-2xl bg-amber-400 text-slate-900 shadow-lg shadow-amber-400/30 border border-amber-300"
+        >
+          <p className="text-[10px] font-black uppercase tracking-widest mb-1">Payment received</p>
+          <p className="text-xs font-bold mb-3 leading-snug">
+            Your MoMo/card payment went through. Tap below to add it to your wallet (no extra charge).
+          </p>
+          <button
+            type="button"
+            disabled={creditingWallet}
+            onClick={creditPendingOrManual}
+            className="w-full py-3.5 bg-slate-900 text-white rounded-xl font-black uppercase tracking-widest text-xs disabled:opacity-60"
+          >
+            {creditingWallet ? 'Crediting wallet?' : 'Credit my wallet'}
+          </button>
+        </motion.div>
+      )}
 
       {/* Modals and Cart Logic same as before */}
       {/* Modals */}
       <AnimatePresence>
         {isTopUpOpen && (
           <>
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsTopUpOpen(false)} className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[100]" />
-            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-sm bg-white p-6 sm:p-8 rounded-[3rem] shadow-2xl z-[110] border border-slate-100 overflow-y-auto max-h-[90vh]">
-               <div className="flex p-1 bg-slate-100 rounded-2xl mb-6">
-                 <button onClick={() => setWalletTab('topup')} className={cn("flex-1 py-2 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all", walletTab === 'topup' ? "bg-white text-brand-blue shadow-sm" : "text-slate-400")}>Top Up</button>
-                 <button onClick={() => setWalletTab('withdraw')} className={cn("flex-1 py-2 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all", walletTab === 'withdraw' ? "bg-white text-brand-blue shadow-sm" : "text-slate-400")}>Withdraw</button>
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => !walletPaying && setIsTopUpOpen(false)} className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[280]" />
+            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[calc(100%-2rem)] max-w-sm bg-slate-900 p-6 sm:p-8 rounded-[2rem] shadow-2xl z-[290] border border-slate-800 text-white overflow-y-auto max-h-[85vh]">
+               <div className="flex p-1 bg-slate-800 rounded-2xl mb-6">
+                 <button type="button" onClick={() => setWalletTab('topup')} className={cn("flex-1 py-2 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all", walletTab === 'topup' ? "bg-white text-brand-blue shadow-sm" : "text-slate-400")}>Top Up</button>
+                 <button type="button" onClick={() => setWalletTab('withdraw')} className={cn("flex-1 py-2 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all", walletTab === 'withdraw' ? "bg-white text-brand-blue shadow-sm" : "text-slate-400")}>Withdraw</button>
                </div>
 
                {walletTab === 'topup' ? (
                  <>
-                   <h3 className="text-xl font-black italic tracking-tighter mb-4 text-slate-800">Top Up Wallet</h3>
+                   <h3 className="text-xl font-black italic tracking-tighter mb-4 text-white">Top Up Wallet</h3>
+                   <div className="mb-5 p-4 rounded-2xl bg-slate-800/80 border border-slate-700">
+                     <p className="text-[10px] font-black uppercase tracking-widest text-amber-400 mb-2">Already paid?</p>
+                     <p className="text-[11px] text-slate-500 mb-2">
+                       Use the <strong className="text-slate-400">Paystack</strong> reference (starts with{' '}
+                       <span className="font-mono text-slate-400">T</span> or{' '}
+                       <span className="font-mono text-slate-400">bytzgo_</span>), not your MTN/Vodafone MoMo ID.
+                     </p>
+                     <input
+                       type="text"
+                       value={manualTopupRef}
+                       onChange={(e) => setManualTopupRef(e.target.value)}
+                       placeholder="e.g. bytzgo_1716123456_abc12 or T1234567890"
+                       className="w-full mb-2 bg-slate-900 border border-slate-600 text-white placeholder:text-slate-500 p-3 rounded-xl font-mono text-sm focus:outline-none focus:border-brand-blue"
+                     />
+                     <button
+                       type="button"
+                       disabled={creditingWallet || !manualTopupRef.trim()}
+                       onClick={creditPendingOrManual}
+                       className="w-full py-3 bg-amber-400 text-slate-900 rounded-xl font-black uppercase tracking-widest text-[10px] disabled:opacity-50"
+                     >
+                       {creditingWallet ? 'Crediting?' : 'Credit my wallet'}
+                     </button>
+                   </div>
                    <div className="grid grid-cols-2 gap-2 mb-6">
                       {['20', '50', '100', '200'].map(val => (
-                        <button key={val} onClick={() => setTopUpAmount(val)} className={cn("py-3 rounded-xl font-bold transition-all border text-sm", topUpAmount === val ? "bg-brand-blue text-white border-brand-blue shadow-lg" : "bg-slate-50 text-slate-500 border-slate-100")}>₵{val}</button>
+                        <button key={val} type="button" onClick={() => setTopUpAmount(val)} className={cn("py-3 rounded-xl font-bold transition-all border text-sm", topUpAmount === val ? "bg-brand-blue text-white border-brand-blue shadow-lg" : "bg-slate-800 text-slate-300 border-slate-700 hover:border-slate-600")}>?{val}</button>
                       ))}
                    </div>
                    <div className="mb-6">
                       <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Custom Amount</label>
-                      <input type="number" value={topUpAmount} onChange={e => setTopUpAmount(e.target.value)} className="w-full bg-slate-50 border border-slate-100 p-4 rounded-xl focus:outline-none focus:border-brand-blue font-mono font-black text-lg" />
+                      <input
+                        type="number"
+                        min={1}
+                        step={1}
+                        inputMode="decimal"
+                        value={topUpAmount}
+                        onChange={e => setTopUpAmount(e.target.value)}
+                        className="w-full mt-2 bg-slate-800 border border-slate-700 text-white placeholder:text-slate-500 p-4 rounded-xl focus:outline-none focus:border-brand-blue font-mono font-black text-lg"
+                        placeholder="Enter amount"
+                      />
                    </div>
-                   <button 
-                     onClick={async () => {
-                        let currentKey = paystackKey;
-                        if (!currentKey) {
-                          try {
-                            const res = await axios.get('/api/config/paystack');
-                            currentKey = res.data.publicKey;
-                            setPaystackKey(currentKey);
-                          } catch (e) {}
-                        }
-                        if (!currentKey) return addNotification('Payment system offline', 'warning');
-
-                        if (!(window as any).PaystackPop) return addNotification('Paystack not loaded', 'warning');
-
-                        const handler = (window as any).PaystackPop.setup({
-                          key: currentKey,
-                          email: user.email,
-                          amount: Number(topUpAmount) * 100,
-                          currency: 'GHS',
-                          callback: async (response: any) => {
-                            await axios.post('/api/wallet/topup', { reference: response.reference });
-                            addNotification('Wallet topped up successfully!', 'success');
-                            setIsTopUpOpen(false);
-                          }
-                        });
-                        handler.openIframe();
-                     }}
-                     className="w-full py-4 bg-brand-blue text-white rounded-2xl font-black uppercase tracking-widest text-xs hover:scale-105 active:scale-95 transition-all shadow-xl"
+                   <button
+                     type="button"
+                     disabled={walletPaying}
+                     onClick={handleWalletTopUp}
+                     className="w-full py-4 bg-brand-blue text-white rounded-2xl font-black uppercase tracking-widest text-xs hover:scale-[1.02] active:scale-[0.98] transition-all shadow-xl disabled:opacity-50 disabled:pointer-events-none"
                    >
-                     Pay with Card/Momo
+                     {walletPaying ? 'Opening payment?' : 'Pay with Card/Momo'}
                    </button>
                  </>
                ) : (
@@ -2022,110 +1913,105 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
                        bank: withdrawBank,
                        account: withdrawAccount
                      });
+                     await refreshData();
                      addNotification('Withdrawal requested successfully!', 'success');
                      setIsTopUpOpen(false);
-                   } catch (err: any) {
-                     addNotification(err.response?.data?.message || 'Withdrawal failed', 'warning');
+                   } catch (err: unknown) {
+                     const msg = axios.isAxiosError(err) ? err.response?.data?.message : null;
+                     addNotification(msg || 'Withdrawal failed', 'warning');
                    }
                  }} className="space-y-4">
-                    <h3 className="text-xl font-black italic tracking-tighter text-slate-800">Withdraw Funds</h3>
+                    <h3 className="text-xl font-black italic tracking-tighter text-white">Withdraw Funds</h3>
                     <div>
                       <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Amount to Withdraw</label>
-                      <input type="number" required value={withdrawAmount} onChange={e => setWithdrawAmount(e.target.value)} className="w-full bg-slate-50 border border-slate-100 p-4 rounded-xl focus:outline-none focus:border-brand-blue font-mono font-black text-lg" placeholder="0.00" />
+                      <input type="number" required min={1} value={withdrawAmount} onChange={e => setWithdrawAmount(e.target.value)} className="w-full mt-2 bg-slate-800 border border-slate-700 text-white placeholder:text-slate-500 p-4 rounded-xl focus:outline-none focus:border-brand-blue font-mono font-black text-lg" placeholder="0.00" />
                     </div>
 
                     <div className="flex gap-2">
-                      <button type="button" onClick={() => setWithdrawMethod('momo')} className={cn("flex-1 py-3 rounded-xl border text-[10px] font-black uppercase tracking-widest transition-all", withdrawMethod === 'momo' ? "bg-brand-blue text-white border-brand-blue" : "bg-white text-slate-400 border-slate-100")}>MoMo</button>
-                      <button type="button" onClick={() => setWithdrawMethod('bank')} className={cn("flex-1 py-3 rounded-xl border text-[10px] font-black uppercase tracking-widest transition-all", withdrawMethod === 'bank' ? "bg-brand-blue text-white border-brand-blue" : "bg-white text-slate-400 border-slate-100")}>Bank</button>
+                      <button type="button" onClick={() => setWithdrawMethod('momo')} className={cn("flex-1 py-3 rounded-xl border text-[10px] font-black uppercase tracking-widest transition-all", withdrawMethod === 'momo' ? "bg-brand-blue text-white border-brand-blue" : "bg-slate-800 text-slate-400 border-slate-700")}>MoMo</button>
+                      <button type="button" onClick={() => setWithdrawMethod('bank')} className={cn("flex-1 py-3 rounded-xl border text-[10px] font-black uppercase tracking-widest transition-all", withdrawMethod === 'bank' ? "bg-brand-blue text-white border-brand-blue" : "bg-slate-800 text-slate-400 border-slate-700")}>Bank</button>
                     </div>
 
                     {withdrawMethod === 'momo' ? (
                       <div className="space-y-3">
-                         <select value={withdrawNetwork} onChange={e => setWithdrawNetwork(e.target.value)} className="w-full bg-slate-50 border border-slate-100 p-4 rounded-xl focus:outline-none font-bold text-xs">
+                         <select value={withdrawNetwork} onChange={e => setWithdrawNetwork(e.target.value)} className="w-full bg-slate-800 border border-slate-700 text-white p-4 rounded-xl focus:outline-none font-bold text-xs">
                            <option value="mtn">MTN Mobile Money</option>
                            <option value="vodafone">Vodafone Cash</option>
                            <option value="airteltigo">AirtelTigo Money</option>
                          </select>
-                         <input type="tel" placeholder="Mobile Number" required value={withdrawPhone} onChange={e => setWithdrawPhone(e.target.value)} className="w-full bg-slate-50 border border-slate-100 p-4 rounded-xl focus:outline-none font-bold text-xs" />
+                         <input type="tel" placeholder="Mobile Number" required value={withdrawPhone} onChange={e => setWithdrawPhone(e.target.value)} className="w-full bg-slate-800 border border-slate-700 text-white placeholder:text-slate-500 p-4 rounded-xl focus:outline-none font-bold text-xs" />
                       </div>
                     ) : (
                       <div className="space-y-3">
-                         <input type="text" placeholder="Bank Name" required value={withdrawBank} onChange={e => setWithdrawBank(e.target.value)} className="w-full bg-slate-50 border border-slate-100 p-4 rounded-xl focus:outline-none font-bold text-xs" />
-                         <input type="text" placeholder="Account Number" required value={withdrawAccount} onChange={e => setWithdrawAccount(e.target.value)} className="w-full bg-slate-50 border border-slate-100 p-4 rounded-xl focus:outline-none font-bold text-xs" />
+                         <input type="text" placeholder="Bank Name" required value={withdrawBank} onChange={e => setWithdrawBank(e.target.value)} className="w-full bg-slate-800 border border-slate-700 text-white placeholder:text-slate-500 p-4 rounded-xl focus:outline-none font-bold text-xs" />
+                         <input type="text" placeholder="Account Number" required value={withdrawAccount} onChange={e => setWithdrawAccount(e.target.value)} className="w-full bg-slate-800 border border-slate-700 text-white placeholder:text-slate-500 p-4 rounded-xl focus:outline-none font-bold text-xs" />
                       </div>
                     )}
 
-                    <button type="submit" className="w-full py-4 bg-slate-900 text-white rounded-2xl font-black uppercase tracking-widest text-xs hover:scale-105 active:scale-95 transition-all shadow-xl">Confirm Withdrawal</button>
+                    <button type="submit" className="w-full py-4 bg-brand-green text-white rounded-2xl font-black uppercase tracking-widest text-xs hover:scale-[1.02] active:scale-[0.98] transition-all shadow-xl">Confirm Withdrawal</button>
                  </form>
                )}
             </motion.div>
           </>
         )}
-        {isCartOpen && null}
       </AnimatePresence>
 
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-        <div className="flex items-center justify-between w-full sm:w-auto gap-4">
-          <div>
-            <h2 className="text-2xl sm:text-3xl font-black tracking-tighter text-slate-800 italic uppercase">Flavor Port</h2>
-            <p className="text-slate-500 font-bold text-[10px] sm:text-sm tracking-tight">{user.name.split(' ')[0]}, what's on the menu today?</p>
-          </div>
-          <div onClick={() => setIsTopUpOpen(true)} className="group cursor-pointer bg-brand-blue px-4 sm:px-6 py-2 sm:py-3 rounded-xl sm:rounded-2xl text-white shadow-xl shadow-brand-blue/20 flex flex-col items-start hover:scale-105 transition-all">
-             <span className="text-[7px] sm:text-[8px] font-black uppercase tracking-widest opacity-60">Wallet</span>
-             <span className="text-xs sm:text-sm font-black font-mono">₵{Number(user.balance || 0).toFixed(2)}</span>
-          </div>
-        </div>
-        <div className="flex p-1 bg-slate-200 rounded-2xl w-full sm:w-auto shadow-inner">
-          <button onClick={() => setActiveTab('menu')} className={cn("flex-1 sm:flex-none px-8 py-2.5 text-xs font-black rounded-xl transition-all uppercase tracking-widest", activeTab === 'menu' ? "bg-white text-brand-blue shadow-sm" : "text-slate-500")}>MARKET</button>
-          <button onClick={() => setActiveTab('courier')} className={cn("flex-1 sm:flex-none px-8 py-2.5 text-xs font-black rounded-xl transition-all uppercase tracking-widest", activeTab === 'courier' ? "bg-white text-brand-blue shadow-sm" : "text-slate-500")}>SEND</button>
-          <button onClick={() => setActiveTab('tracking')} className={cn("flex-1 sm:flex-none px-8 py-2.5 text-xs font-black rounded-xl transition-all uppercase tracking-widest", activeTab === 'tracking' ? "bg-white text-brand-green shadow-sm" : "text-slate-500")}>HISTORY</button>
-        </div>
-        <button id="profile-toggle" className="hidden" onClick={() => setActiveTab(activeTab === 'profile' ? 'menu' : 'profile')} />
-      </div>
+      <button id="customer-wallet-open" type="button" className="hidden" onClick={() => setIsTopUpOpen(true)} />
+
 
       {activeTab === 'menu' && (
         <div className="space-y-6">
-           <div className="flex items-center gap-4">
+           <div className="flex items-center gap-3">
+             <button
+               type="button"
+               onClick={() => { setSelectedVendor(null); setActiveTab('courier'); }}
+               className="p-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 hover:text-white"
+             >
+               <ChevronRight size={20} className="rotate-180" />
+             </button>
+             <div>
+               <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Optional</p>
+               <h3 className="text-lg font-black text-white">
+                 {selectedVendor ? selectedVendor.name : 'Browse shops'}
+               </h3>
+             </div>
              {selectedVendor && (
-               <button onClick={() => setSelectedVendor(null)} className="p-2 hover:bg-slate-200 rounded-xl transition-colors">
-                  <X size={20} />
+               <button type="button" onClick={() => setSelectedVendor(null)} className="ml-auto p-2 hover:bg-slate-800 rounded-xl text-slate-300">
+                 <X size={20} />
                </button>
              )}
-             <h3 className="text-xl font-black uppercase tracking-widest text-slate-400">
-               {selectedVendor ? selectedVendor.name : "Choose a Vendor"}
-             </h3>
            </div>
 
             <div className={cn("grid gap-4 sm:gap-8", selectedVendor ? "grid-cols-1 sm:grid-cols-2 lg:grid-cols-4" : "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3")}>
              {selectedVendor ? (
                vendorProducts.length > 0 ? (
                  vendorProducts.map(item => (
-                   <div key={item.id} className="bg-white p-4 sm:p-6 rounded-[2rem] sm:rounded-[2.5rem] border border-slate-100 hover:shadow-2xl hover:shadow-brand-blue/10 transition-all group flex flex-col justify-between">
+                   <div key={item.id} className="bg-slate-900/90 p-4 sm:p-6 rounded-[2rem] sm:rounded-[2.5rem] border border-slate-800 hover:shadow-2xl hover:shadow-brand-blue/10 transition-all group flex flex-col justify-between">
                       <div>
-                        <div className="h-40 sm:h-56 bg-slate-50 rounded-2xl sm:rounded-3xl mb-4 sm:mb-6 flex items-center justify-center relative overflow-hidden group-hover:scale-105 transition-transform">
+                        <div className="h-40 sm:h-56 bg-slate-800 rounded-2xl sm:rounded-3xl mb-4 sm:mb-6 flex items-center justify-center relative overflow-hidden group-hover:scale-105 transition-transform">
                           <img src={item.image_url || 'https://images.unsplash.com/photo-1567333328061-6d7aae8e2e6b?auto=format&fit=crop&q=80&w=400'} alt={item.name} className="w-full h-full object-cover" />
                           <span className="absolute top-3 left-3 sm:top-4 sm:left-4 bg-white/90 backdrop-blur-md px-3 sm:px-4 py-1 rounded-full text-[8px] sm:text-[10px] font-black uppercase tracking-widest text-slate-400 border border-slate-100">{item.category}</span>
                         </div>
-                        <h4 className="font-black text-xl sm:text-2xl text-slate-800 tracking-tight leading-tight mb-1 sm:mb-2">{item.name}</h4>
+                        <h4 className="font-black text-xl sm:text-2xl text-white tracking-tight leading-tight mb-1 sm:mb-2">{item.name}</h4>
                         <p className="text-slate-400 text-[10px] sm:text-sm mb-6 sm:mb-8 font-medium leading-relaxed line-clamp-2 sm:line-clamp-none">{item.description}</p>
                       </div>
                       <div className="flex items-center justify-between gap-3 sm:gap-4">
                         <div className="flex flex-col">
                           <span className="text-[8px] sm:text-[10px] font-black text-slate-300 uppercase tracking-widest">Price</span>
-                          <span className="font-mono font-black text-lg sm:text-xl text-brand-blue">₵{Number(item.price).toFixed(2)}</span>
+                          <span className="font-mono font-black text-lg sm:text-xl text-brand-blue">{formatCedis(item.price)}</span>
                         </div>
                          <button onClick={() => addToCart(item)} className="flex-1 py-3 sm:py-4 bg-slate-900 text-white rounded-xl sm:rounded-2xl font-black text-[10px] sm:text-xs hover:bg-brand-blue transition-all uppercase tracking-widest shadow-lg">Add</button>
                       </div>
                     </div>
                   ))
                 ) : (
-                 <div className="col-span-full text-center py-20 bg-white rounded-[3rem] border border-slate-100">
+                 <div className="col-span-full text-center py-32 bg-slate-900/90 rounded-[3rem] border border-slate-800">
                     <p className="text-slate-400 font-bold italic">No items found for this vendor.</p>
                  </div>
                )
              ) : (
                vendors.map(vendor => (
-                 <div key={vendor.id} onClick={() => setSelectedVendor(vendor)} className="bg-white rounded-[2.5rem] border border-slate-100 hover:shadow-2xl hover:shadow-brand-blue/10 transition-all cursor-pointer group overflow-hidden flex flex-col">
+                 <div key={vendor.id} onClick={() => setSelectedVendor(vendor)} className="bg-slate-900/90 rounded-[2.5rem] border border-slate-800 hover:shadow-2xl hover:shadow-brand-blue/10 transition-all cursor-pointer group overflow-hidden flex flex-col">
                     <div className="h-48 bg-slate-100 relative overflow-hidden group-hover:scale-105 transition-transform">
                       <img src={vendor.cover_image || 'https://images.unsplash.com/photo-1441986300917-64674bd600d8?auto=format&fit=crop&q=80&w=600'} alt={vendor.name} className="w-full h-full object-cover" />
                       <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent" />
@@ -2136,7 +2022,7 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
                       </div>
                     </div>
                     <div className="p-6 flex flex-col flex-1">
-                      <h4 className="font-black text-2xl text-slate-800 tracking-tight leading-tight mb-2">{vendor.name}</h4>
+                      <h4 className="font-black text-2xl text-white tracking-tight leading-tight mb-2">{vendor.name}</h4>
                       <p className="text-slate-500 font-medium text-sm flex items-center gap-2 mb-6">
                         <MapPin size={14} className="text-brand-blue" />
                         {vendor.address || 'Accra, Ghana'}
@@ -2156,276 +2042,38 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
       )}
 
       {activeTab === 'courier' && (
-        <div className="bg-white rounded-[2rem] sm:rounded-[3rem] p-5 sm:p-12 shadow-xl border border-slate-100 max-w-3xl mx-auto">
-          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 sm:gap-6 mb-8 sm:mb-10">
-            <div className="w-14 h-14 sm:w-16 sm:h-16 bg-brand-blue rounded-2xl sm:rounded-3xl flex items-center justify-center text-white shadow-lg rotate-3 shrink-0">
-              <Package size={28} className="sm:hidden" />
-              <Package size={32} className="hidden sm:block" />
-            </div>
-            <div>
-              <h3 className="text-2xl sm:text-3xl font-black italic tracking-tighter text-slate-800">Send a Package</h3>
-              <p className="text-slate-400 font-bold uppercase tracking-widest text-[9px] sm:text-[10px]">Fast, secure courier delivery across the city</p>
-            </div>
-          </div>
-
-          <form onSubmit={(e) => {
-            e.preventDefault();
-            if (!courierForm.pickup || !courierForm.destination) return addNotification('Please select pickup and destination', 'warning');
-            onPlaceOrder([{ id: 'courier-1', name: `Delivery: ${courierForm.itemDesc}`, quantity: 1, price: courierFee }], courierFee, undefined, {
-               order_type: 'courier',
-               address: courierForm.destination.address,
-               pickup: courierForm.pickup.address,
-               lat: courierForm.destination.lat,
-               lng: courierForm.destination.lng,
-               pickup_lat: courierForm.pickup.lat,
-               pickup_lng: courierForm.pickup.lng,
-               delivery_fee: courierFee,
-               payment_method: 'pay_on_delivery',
-               scheduled_time: courierForm.scheduledTime === 'later' ? `${courierForm.scheduleDate} ${courierForm.scheduleClock}` : null
-            });
-            setActiveTab('tracking');
-          }} className="space-y-5 sm:space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
-              <div className="space-y-2">
-                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Pickup Location</label>
-                <LocationAutocompleteInput 
-                   placeholder="Where from? (Ghana)" 
-                   icon={MapPin} 
-                   value={courierForm.pickup?.address || ''} 
-                   onChange={(val) => setCourierForm({...courierForm, pickup: { ...(courierForm.pickup || {}), ...val }})}
-                   onMapClick={() => { setMapMode('pickup'); setIsMapOpen(true); }}
-                   onLocationError={(m) => addNotification(m, 'warning')}
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Destination</label>
-                <LocationAutocompleteInput 
-                   placeholder="Where to? (Ghana)" 
-                   icon={Navigation} 
-                   value={courierForm.destination?.address || ''} 
-                   onChange={(val) => setCourierForm({...courierForm, destination: { ...(courierForm.destination || {}), ...val }})}
-                   onMapClick={() => { setMapMode('destination'); setIsMapOpen(true); }}
-                   onLocationError={(m) => addNotification(m, 'warning')}
-                />
-              </div>
-            </div>
-
-            <AnimatePresence>
-              {isMapOpen && (
-                 <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="overflow-hidden">
-                    <div className="bg-slate-50 border border-slate-100 rounded-[2rem] p-2 mb-6 shadow-inner relative mt-2">
-                      <div className="flex justify-between items-center px-4 py-3 border-b border-slate-200/50 mb-2">
-                         <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Select {mapMode} on Map</span>
-                         <button type="button" onClick={() => setIsMapOpen(false)} className="text-[10px] font-black uppercase tracking-widest bg-brand-blue/10 text-brand-blue px-4 py-2 rounded-full">Done</button>
-                      </div>
-                      <div className="h-56 sm:h-64 rounded-2xl overflow-hidden relative">
-                        <Map 
-                          defaultCenter={courierForm.pickup ? { lat: courierForm.pickup.lat, lng: courierForm.pickup.lng } : GHANA_CENTER} 
-                          defaultZoom={15} 
-                          defaultTilt={45}
-                          gestureHandling={'greedy'}
-                          disableDefaultUI={true}
-                          styles={CLEAN_MAP_STYLE}
-                          onClick={async (e) => {
-                           if (!e.detail.latLng) return;
-                           const lat = e.detail.latLng.lat;
-                           const lng = e.detail.latLng.lng;
-                           const address = (await reverseGeocodeGhana(lat, lng)) || `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
-                           const loc = { lat, lng, address };
-                           if (mapMode === 'pickup') {
-                               setCourierForm({...courierForm, pickup: loc});
-                           } else {
-                               setCourierForm({...courierForm, destination: loc});
-                           }
-                        }}>
-                           {courierForm.pickup && <Marker position={{lat: courierForm.pickup.lat, lng: courierForm.pickup.lng}} />}
-                           {courierForm.destination && <Marker position={{lat: courierForm.destination.lat, lng: courierForm.destination.lng}} />}
-                        </Map>
-                      </div>
-                    </div>
-                 </motion.div>
-              )}
-            </AnimatePresence>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
-              <div className="space-y-2">
-                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Sender's Contact</label>
-                <div className="relative">
-                  <input required type="tel" placeholder="054..." className="w-full bg-slate-50 border border-slate-100 rounded-2xl py-4 pl-4 pr-4 font-bold text-sm focus:outline-none focus:border-brand-blue focus:ring-4 focus:ring-brand-blue/10 transition-all" value={courierForm.senderContact} onChange={e => setCourierForm({...courierForm, senderContact: e.target.value})} />
-                </div>
-              </div>
-              <div className="space-y-2">
-                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Receiver's Contact</label>
-                <div className="relative">
-                  <input required type="tel" placeholder="024..." className="w-full bg-slate-50 border border-slate-100 rounded-2xl py-4 pl-4 pr-4 font-bold text-sm focus:outline-none focus:border-brand-blue focus:ring-4 focus:ring-brand-blue/10 transition-all" value={courierForm.receiverContact} onChange={e => setCourierForm({...courierForm, receiverContact: e.target.value})} />
-                </div>
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">What are you sending?</label>
-              <div className="relative">
-                <Package size={16} className="absolute left-4 top-4 text-slate-300" />
-                <textarea required placeholder="Brief description of the item..." className="w-full bg-slate-50 border border-slate-100 rounded-2xl py-4 pl-12 pr-4 font-bold text-sm h-32 focus:outline-none focus:border-brand-blue focus:ring-4 focus:ring-brand-blue/10 transition-all resize-none" value={courierForm.itemDesc} onChange={e => setCourierForm({...courierForm, itemDesc: e.target.value})} />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3 sm:gap-4 pt-4 border-t border-slate-100">
-               <button type="button" onClick={() => setCourierForm({...courierForm, scheduledTime: 'now'})} className={cn("py-4 rounded-2xl font-black uppercase tracking-widest text-[10px] sm:text-xs border transition-all", courierForm.scheduledTime === 'now' || !courierForm.scheduledTime ? "bg-brand-blue text-white border-brand-blue shadow-lg" : "bg-slate-50 text-slate-400 border-slate-100 hover:bg-slate-100")}>Send Now</button>
-               <button type="button" onClick={() => setCourierForm({...courierForm, scheduledTime: 'later'})} className={cn("py-4 rounded-2xl font-black uppercase tracking-widest text-[10px] sm:text-xs border transition-all flex items-center justify-center gap-2", courierForm.scheduledTime === 'later' ? "bg-brand-blue text-white border-brand-blue shadow-lg" : "bg-slate-50 text-slate-400 border-slate-100 hover:bg-slate-100")}><Clock size={14} /> Schedule</button>
-            </div>
-
-            <AnimatePresence>
-               {courierForm.scheduledTime === 'later' && (
-                 <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="overflow-hidden">
-                    <div className="grid grid-cols-2 gap-4 sm:gap-6 pt-2">
-                       <div className="space-y-2">
-                         <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Date</label>
-                         <input type="date" required className="w-full bg-slate-50 border border-slate-100 rounded-2xl py-4 px-4 font-bold text-sm focus:outline-none focus:border-brand-blue transition-all text-slate-700" value={courierForm.scheduleDate} onChange={e => setCourierForm({...courierForm, scheduleDate: e.target.value})} />
-                       </div>
-                       <div className="space-y-2">
-                         <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Time</label>
-                         <input type="time" required className="w-full bg-slate-50 border border-slate-100 rounded-2xl py-4 px-4 font-bold text-sm focus:outline-none focus:border-brand-blue transition-all text-slate-700" value={courierForm.scheduleClock} onChange={e => setCourierForm({...courierForm, scheduleClock: e.target.value})} />
-                       </div>
-                    </div>
-                 </motion.div>
-               )}
-            </AnimatePresence>
-
-            <div className="pt-4 sm:pt-8">
-              <button type="submit" className="w-full py-4 sm:py-5 bg-slate-900 text-white rounded-2xl sm:rounded-[2rem] font-black uppercase tracking-widest text-[11px] sm:text-sm hover:scale-[1.02] active:scale-[0.98] transition-all shadow-2xl flex items-center justify-center gap-3">
-                 <Package size={18} /> Request Courier {courierFee > 0 && ` · GH₵${courierFee.toFixed(2)}`}
-              </button>
-            </div>
-          </form>
-        </div>
+        <CustomerDeliveryHome
+          liveOrders={liveOrders}
+          user={user}
+          courierForm={courierForm}
+          setCourierForm={setCourierForm}
+          courierFee={courierFee}
+          mapMode={mapMode}
+          setMapMode={setMapMode}
+          isMapOpen={isMapOpen}
+          setIsMapOpen={setIsMapOpen}
+          showDeliveryDetails={showDeliveryDetails}
+          setShowDeliveryDetails={setShowDeliveryDetails}
+          onPlaceOrder={onPlaceOrder}
+          addNotification={addNotification}
+          setActiveTab={setActiveTab}
+          paystackKey={paystackKey}
+          setPaystackKey={setPaystackKey}
+        />
       )}
 
-      {/* (Tracking view same as before but using real order data) */}
       {activeTab === 'tracking' && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-           {myOrders.length === 0 && (
-            <div className="col-span-full text-center py-32 bg-white rounded-[3rem] border border-slate-200 border-dashed">
-              <Clock className="mx-auto text-slate-200 mb-6" size={64} />
-              <p className="text-slate-400 font-black text-xl italic uppercase tracking-tighter">No active history...</p>
-            </div>
-          )}
-          {myOrders.map(order => {
-            const vendor = vendors.find(v => v.id === order.vendor_id);
-            const riderLoc = order.rider_id ? riderLocations[order.rider_id] : null;
-            const isActive = ['pending', 'preparing', 'ready', 'picked_up'].includes(order.status) && !!order.rider_id;
-            
-            return (
-              <div key={order.id} className="bg-white p-8 rounded-[2.5rem] border border-slate-200 shadow-sm flex flex-col justify-between hover:border-brand-blue transition-colors">
-                 <div className="flex justify-between items-center mb-6">
-                    <div className="flex items-center gap-3">
-                      <div className="w-12 h-12 bg-slate-900 rounded-2xl flex items-center justify-center text-white">
-                        {(order as any).order_type === 'courier' ? <Package size={20} /> : <ShoppingBag size={20} />}
-                      </div>
-                      <div>
-                        <h4 className="font-black text-2xl tracking-tighter italic uppercase underline decoration-brand-blue/50">#{order.id.slice(-4)}</h4>
-                        <div className="flex flex-col">
-                          {order.vendor_id && (
-                            <p className="text-[10px] font-black text-brand-blue uppercase tracking-widest">
-                              {vendor?.name || 'Order'}
-                            </p>
-                          )}
-                          <p className="text-[10px] font-mono text-slate-400 uppercase tracking-widest">
-                            {new Date((order as any).created_at || order.createdAt).toDateString()}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                    <div className="flex flex-col items-end gap-2">
-                      <div className={cn(
-                        "px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest",
-                        order.status === 'delivered' ? "bg-brand-green/10 text-brand-green" : "bg-brand-blue/10 text-brand-blue"
-                      )}>
-                        {order.status.replace('_', ' ')}
-                      </div>
-                      <PaymentStatusBadge order={order} />
-                    </div>
-                  </div>
-                  
-                  {order.status === 'pending' && (
-                    <button 
-                      onClick={() => setOrderToCancel(order)}
-                      className="mb-8 w-full py-4 bg-red-50 text-red-500 rounded-2xl font-black uppercase tracking-widest text-[10px] hover:bg-red-100 transition-all active:scale-95"
-                    >
-                      Cancel Order
-                    </button>
-                  )}
-
-                  {isActive && (
-                    <div className="mb-8 h-64 rounded-3xl overflow-hidden border border-slate-100 shadow-inner relative">
-                      {!riderLoc && (
-                        <div className="absolute inset-0 bg-slate-900/10 backdrop-blur-sm z-10 flex items-center justify-center">
-                          <div className="bg-white px-6 py-3 rounded-2xl shadow-xl flex items-center gap-3">
-                            <div className="w-2 h-2 bg-brand-blue rounded-full animate-ping" />
-                            <p className="text-xs font-black uppercase tracking-widest text-slate-800">Waiting for rider GPS...</p>
-                          </div>
-                        </div>
-                      )}
-                      <TrackingMap 
-                        riderLocation={riderLoc}
-                        pickupLocation={{ lat: vendor?.lat || 5.6037, lng: vendor?.lng || -0.1870 }}
-                        destination={{ lat: order.lat || 5.6037, lng: order.lng || -0.1870 }}
-                        orderStatus={order.status}
-                      />
-                    </div>
-                  )}
-                  
-                  <div className="space-y-6 mb-10 border-l-2 border-slate-50 ml-4 pl-8">
-                    <TrackingStep label="Mission Started" active={['pending', 'preparing', 'ready', 'picked_up', 'delivered'].includes(order.status)} />
-                    <TrackingStep label={(order as any).order_type === 'courier' ? "Rider at Pickup" : "Kitchen Magic"} active={['preparing', 'ready', 'picked_up', 'delivered'].includes(order.status)} />
-                    <TrackingStep label="Bytz on Wheels" active={['picked_up', 'delivered'].includes(order.status)} />
-                    <TrackingStep label={(order as any).order_type === 'courier' ? "Mission Accomplished" : "Enjoy your Meal"} active={order.status === 'delivered'} />
-                  </div>
-
-                  {order.status === 'delivered' && (
-                    <div className="mt-6 pt-6 border-t border-slate-50">
-                      <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3">Rate your experience</p>
-                      {(order as any).rating ? (
-                        <div className="flex items-center gap-2">
-                          {[1, 2, 3, 4, 5].map(star => (
-                            <Star key={star} size={16} className={cn(star <= (order as any).rating ? "text-yellow-400 fill-yellow-400" : "text-slate-300")} />
-                          ))}
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-2">
-                          {[1, 2, 3, 4, 5].map(star => (
-                            <button 
-                              key={star} 
-                              onClick={async () => {
-                                try {
-                                  await axios.post(`/api/orders/${order.id}/rate`, { rating: star, comment: '' });
-                                  addNotification('Thanks for your rating!', 'success');
-                                  // Update local state if needed
-                                } catch (err) {
-                                  console.error('Rating failed', err);
-                                  addNotification('Failed to save rating', 'warning');
-                                }
-                              }}
-                              className="hover:scale-125 transition-all group"
-                            >
-                              <Star size={20} className="text-slate-300 group-hover:text-yellow-400 transition-colors" />
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  {order.status === 'delivered' && (
-                    <div className="mt-6 flex justify-center">
-                      <button className="text-[9px] font-black uppercase tracking-widest text-slate-300 hover:text-red-500 transition-colors flex items-center gap-2">
-                        <AlertTriangle size={12} /> Report a problem with this order
-                      </button>
-                    </div>
-                  )}
-              </div>
-            );
-          })}
-        </div>
+        <CustomerTripsView
+          tripHistory={tripHistory}
+          vendors={vendors}
+          riderLocations={riderLocations}
+          user={user}
+          paystackKey={paystackKey}
+          setPaystackKey={setPaystackKey}
+          addNotification={addNotification}
+          refreshData={refreshData}
+          onCancelOrder={setOrderToCancel}
+        />
       )}
 
       <ConfirmationModal 
@@ -2449,6 +2097,7 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
           if (!orderToCancel) return;
           try {
             await axios.post(`/api/orders/${orderToCancel.id}/cancel`);
+            await refreshData();
             addNotification('Order cancelled and refunded!', 'success');
             setOrderToCancel(null);
           } catch (err: any) {
@@ -2463,13 +2112,13 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
       />
 
       {activeTab === 'profile' && (
-        <div className="bg-white rounded-[2rem] sm:rounded-[3rem] p-6 sm:p-12 shadow-xl border border-slate-100 max-w-2xl mx-auto">
+        <div className="bg-slate-900/90 rounded-[2rem] sm:rounded-[3rem] p-6 sm:p-12 shadow-xl border border-slate-800 max-w-2xl mx-auto">
           <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 sm:gap-6 mb-8 sm:mb-10">
             <div className="w-16 h-16 sm:w-20 sm:h-20 bg-brand-blue rounded-2xl sm:rounded-3xl flex items-center justify-center text-white shadow-lg rotate-3 shrink-0 text-2xl sm:text-3xl font-black italic">
               {user.name[0]}
             </div>
             <div>
-              <h3 className="text-3xl font-black italic tracking-tighter text-slate-800">{user.name}</h3>
+              <h3 className="text-3xl font-black italic tracking-tighter text-white">{user.name}</h3>
               <p className="text-slate-400 font-bold uppercase tracking-widest text-[10px]">Account Settings</p>
             </div>
           </div>
@@ -2530,8 +2179,8 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
                     const newLat = e.latLng?.lat() || profileForm.lat;
                     const newLng = e.latLng?.lng() || profileForm.lng;
                     setProfileForm(prev => ({...prev, lat: newLat, lng: newLng}));
-                    const address = await reverseGeocodeGhana(newLat, newLng);
-                    if (address) setProfileForm(prev => ({ ...prev, address }));
+                    const address = await resolveAddressLabel(newLat, newLng);
+                    setProfileForm((prev) => ({ ...prev, address }));
                   }} />
                 </Map>
               </div>
@@ -2541,7 +2190,7 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
               <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Email Address</label>
               <div className="relative">
                 <Mail size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" />
-                <input type="email" required value={profileForm.email} onChange={e => setProfileForm({...profileForm, email: e.target.value})} className="w-full bg-slate-50 border border-slate-100 rounded-2xl py-4 pl-12 pr-4 font-bold text-sm focus:outline-none focus:border-brand-blue focus:ring-4 focus:ring-brand-blue/10 transition-all" />
+                <input type="email" required value={profileForm.email} onChange={e => setProfileForm({...profileForm, email: e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded-2xl py-4 text-white pl-12 pr-4 font-bold text-sm focus:outline-none focus:border-brand-blue focus:ring-4 focus:ring-brand-blue/10 transition-all" />
               </div>
             </div>
 
@@ -2553,7 +2202,7 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
                   required 
                   value={profileForm.region} 
                   onChange={e => setProfileForm({...profileForm, region: e.target.value})} 
-                  className="w-full bg-slate-50 border border-slate-100 rounded-2xl py-4 pl-12 pr-4 font-bold text-sm focus:outline-none focus:border-brand-blue transition-all"
+                  className="w-full bg-slate-800 border border-slate-700 rounded-2xl py-4 text-white pl-12 pr-4 font-bold text-sm focus:outline-none focus:border-brand-blue transition-all"
                 >
                   <option value="">Select Region</option>
                   {GHANA_REGIONS.map(r => <option key={r} value={r}>{r}</option>)}
@@ -2565,7 +2214,7 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
               <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Phone Number</label>
               <div className="relative">
                 <Phone size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" />
-                <input type="tel" placeholder="024 000 0000" value={profileForm.phone} onChange={e => setProfileForm({...profileForm, phone: e.target.value})} className="w-full bg-slate-50 border border-slate-100 rounded-2xl py-4 pl-12 pr-4 font-bold text-sm focus:outline-none focus:border-brand-blue focus:ring-4 focus:ring-brand-blue/10 transition-all" />
+                <input type="tel" placeholder="024 000 0000" value={profileForm.phone} onChange={e => setProfileForm({...profileForm, phone: e.target.value})} className="w-full bg-slate-800 border border-slate-700 rounded-2xl py-4 text-white pl-12 pr-4 font-bold text-sm focus:outline-none focus:border-brand-blue focus:ring-4 focus:ring-brand-blue/10 transition-all" />
               </div>
             </div>
 
@@ -2612,15 +2261,42 @@ function PaymentStatusBadge({ order }: { order: Order }) {
 function TrackingStep({ label, active }: { label: string, active: boolean }) {
   return (
     <div className="flex items-center gap-6 relative">
-      <div className={cn("z-10 w-8 h-8 rounded-2xl flex items-center justify-center transition-all shadow-sm", active ? "bg-brand-green text-white rotate-6" : "bg-slate-100 text-slate-300")}>
+      <div className={cn("z-10 w-8 h-8 rounded-2xl flex items-center justify-center transition-all shadow-sm", active ? "bg-brand-green text-white rotate-6" : "bg-slate-800 text-slate-500 border border-slate-700")}>
         <CheckCircle2 size={16} />
       </div>
-      <span className={cn("text-base font-black tracking-tight", active ? "text-slate-800" : "text-slate-300")}>{label}</span>
+      <span className={cn("text-base font-black tracking-tight", active ? "text-white" : "text-slate-500")}>{label}</span>
     </div>
   );
 }
 
-function VendorView({ user, orders, products, riderLocations, onUpdateStatus, onAddProduct, onDeleteProduct, addNotification, activeTab, setActiveTab }: { user: AuthUser, orders: Order[], products: any[], riderLocations: { [key: string]: { lat: number, lng: number } }, onUpdateStatus: (id: string, s: OrderStatus, extra?: any) => void, onAddProduct: (p: any) => void, onDeleteProduct: (id: string) => void, addNotification: (m: string, t?: 'info' | 'success' | 'warning') => void, activeTab: any, setActiveTab: (v: any) => void }) {
+function VendorView({
+  user,
+  orders,
+  products,
+  riderLocations,
+  onUpdateStatus,
+  onAddProduct,
+  onDeleteProduct,
+  addNotification,
+  onBalanceUpdate,
+  activeTab,
+  setActiveTab,
+  refreshData,
+}: {
+  user: AuthUser;
+  orders: Order[];
+  products: any[];
+  riderLocations: { [key: string]: { lat: number; lng: number } };
+  onUpdateStatus: (id: string, s: OrderStatus, extra?: any) => void | Promise<boolean>;
+  onAddProduct: (p: any) => void;
+  onDeleteProduct: (id: string) => void;
+  addNotification: (m: string, t?: 'info' | 'success' | 'warning') => void;
+  onBalanceUpdate: (balance: number) => void;
+  activeTab: any;
+  setActiveTab: (v: any) => void;
+  refreshData: () => Promise<void>;
+}) {
+  const vendorActive = user.status === 'active';
   const [isAddProductOpen, setIsAddProductOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<any | null>(null);
   const [productToDelete, setProductToDelete] = useState<any | null>(null);
@@ -2637,7 +2313,7 @@ function VendorView({ user, orders, products, riderLocations, onUpdateStatus, on
   const storeGeoSet = useRef(false);
 
   useEffect(() => {
-    if (activeTab !== 'profile') return;
+    if (activeTab !== 'store') return;
     if (storeGeoSet.current) return;
     if (user.address && user.lat && user.lng) return;
     storeGeoSet.current = true;
@@ -2671,12 +2347,19 @@ function VendorView({ user, orders, products, riderLocations, onUpdateStatus, on
     setIsWithdrawing(true);
     setWithdrawStatus(null);
     try {
-      const res = await axios.post('/api/wallet/withdraw', { amount: Number(withdrawAmount) });
-      user.balance = res.data.balance; // Update local user balance
+      const payload: Record<string, unknown> = { amount: Number(withdrawAmount) };
+      if (withdrawMethod === 'momo') {
+        payload.phone = withdrawPhone;
+        payload.network = withdrawNetwork;
+      }
+      const res = await axios.post('/api/wallet/withdraw', payload);
+      onBalanceUpdate(res.data.balance);
       setWithdrawStatus({ message: 'Withdrawal successful!', type: 'success' });
       setWithdrawAmount('');
-    } catch (err: any) {
-      setWithdrawStatus({ message: err.response?.data?.error || 'Withdrawal failed', type: 'error' });
+      addNotification('Withdrawal submitted', 'success');
+      await refreshData();
+    } catch (err: unknown) {
+      setWithdrawStatus({ message: getApiError(err, 'Withdrawal failed'), type: 'error' });
     } finally {
       setIsWithdrawing(false);
     }
@@ -2691,8 +2374,9 @@ function VendorView({ user, orders, products, riderLocations, onUpdateStatus, on
       formData.append('image', file);
       const res = await axios.post('/api/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
       onSuccess(res.data.url);
+      addNotification('Image uploaded', 'success');
     } catch (err) {
-      console.error('Upload failed', err);
+      addNotification(getApiError(err, 'Upload failed'), 'warning');
     } finally {
       setUploading(false);
     }
@@ -2700,6 +2384,10 @@ function VendorView({ user, orders, products, riderLocations, onUpdateStatus, on
 
   const handleSubmitProduct = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!vendorActive) {
+      addNotification('Your vendor account is pending approval', 'warning');
+      return;
+    }
     try {
       const payload = { ...newProduct, price: parseFloat(newProduct.price) };
       let res;
@@ -2712,9 +2400,10 @@ function VendorView({ user, orders, products, riderLocations, onUpdateStatus, on
       setIsAddProductOpen(false);
       setEditingProduct(null);
       setNewProduct({ name: '', description: '', price: '', category: 'Food', image_url: '' });
-      // addNotification('Product saved successfully!', 'success');
+      addNotification(editingProduct ? 'Menu item updated' : 'Item saved ? pending admin approval', 'success');
+      await refreshData();
     } catch (err) {
-      console.error('Failed to save product', err);
+      addNotification(getApiError(err, 'Failed to save product'), 'warning');
     }
   };
 
@@ -2722,8 +2411,9 @@ function VendorView({ user, orders, products, riderLocations, onUpdateStatus, on
     try {
       await onDeleteProduct(id);
       setProductToDelete(null);
+      addNotification('Item removed from menu', 'success');
     } catch (err) {
-      console.error('Delete product failed', err);
+      addNotification(getApiError(err, 'Delete failed'), 'warning');
     }
   };
 
@@ -2773,7 +2463,7 @@ function VendorView({ user, orders, products, riderLocations, onUpdateStatus, on
                       <h4 className="font-black text-lg sm:text-2xl tracking-tighter">Order #{order.id.slice(-4)}</h4>
                       <p className="text-brand-green font-mono text-xs uppercase tracking-widest mt-1">{order.customerName}</p>
                     </div>
-                    <div className="font-mono font-black text-base sm:text-xl text-slate-800">GH₵{order.total}</div>
+                    <div className="font-mono font-black text-base sm:text-xl text-slate-800">{formatCedis(order.total)}</div>
                   </div>
 
                   {isTrackingActive && (
@@ -2799,7 +2489,7 @@ function VendorView({ user, orders, products, riderLocations, onUpdateStatus, on
                     {order.items.map((item, idx) => (
                       <div key={idx} className="flex justify-between text-xs sm:text-sm font-bold">
                         <span className="text-slate-600">{item.quantity}x {item.name}</span>
-                        <span className="text-slate-400">GH₵{item.price}</span>
+                        <span className="text-slate-400">{formatCedis(item.price)}</span>
                       </div>
                     ))}
                   </div>
@@ -2838,15 +2528,20 @@ function VendorView({ user, orders, products, riderLocations, onUpdateStatus, on
                      </div>
                    )}
                    <div className="absolute top-4 right-4 bg-white/90 backdrop-blur px-3 py-1 rounded-lg text-xs font-black text-brand-blue">
-                     GH₵{product.price}
+                     {formatCedis(product.price)}
                    </div>
                  </div>
                  <div className="p-6">
                    <div className="flex justify-between items-start mb-1">
                      <h4 className="font-black text-lg">{product.name}</h4>
-                     <button onClick={() => handleEditClick(product)} className="p-2 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-brand-blue transition-colors">
+                     <div className="flex gap-1">
+                     <button type="button" onClick={() => handleEditClick(product)} className="p-2 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-brand-blue transition-colors">
                        <Edit3 size={16} />
                      </button>
+                     <button type="button" onClick={() => setProductToDelete(product)} className="p-2 hover:bg-red-500/10 rounded-lg text-slate-400 hover:text-red-400 transition-colors">
+                       <Trash2 size={16} />
+                     </button>
+                     </div>
                    </div>
                    <p className="text-slate-400 text-xs font-bold uppercase tracking-widest mb-4">{product.category}</p>
                    <p className="text-slate-500 text-sm line-clamp-2">{product.description}</p>
@@ -2868,9 +2563,9 @@ function VendorView({ user, orders, products, riderLocations, onUpdateStatus, on
                      <div className="space-y-2">
                        <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Product Image</label>
                        <div className="flex gap-2">
-                         <input type="text" placeholder="Paste URL or upload →" className="flex-1 bg-slate-50 border border-slate-100 p-4 rounded-xl focus:outline-none focus:border-brand-blue font-bold text-sm" value={newProduct.image_url} onChange={(e) => setNewProduct({...newProduct, image_url: e.target.value})} />
+                         <input type="text" placeholder="Paste URL or upload" className="flex-1 bg-slate-50 border border-slate-100 p-4 rounded-xl focus:outline-none focus:border-brand-blue font-bold text-sm" value={newProduct.image_url} onChange={(e) => setNewProduct({...newProduct, image_url: e.target.value})} />
                          <label className={cn("px-4 py-4 rounded-xl font-black uppercase tracking-widest text-[10px] cursor-pointer transition-all flex items-center gap-1", uploading ? "bg-slate-200 text-slate-400" : "bg-brand-blue text-white hover:scale-105")}>
-                           {uploading ? <LoadingIndicator size="sm" /> : '📷'}
+                           {uploading ? <LoadingIndicator size="sm" /> : 'Upload'}
                            <input type="file" accept="image/*" className="hidden" disabled={uploading} onChange={(e) => {
                              const file = e.target.files?.[0];
                              if (file) handleFileUpload(file, (url) => setNewProduct({...newProduct, image_url: url}));
@@ -2885,7 +2580,7 @@ function VendorView({ user, orders, products, riderLocations, onUpdateStatus, on
                      </div>
 
                      <div className="flex gap-4">
-                        <input type="number" step="0.01" placeholder="Price (GH₵)" required className="flex-1 bg-slate-50 border border-slate-100 p-4 rounded-xl focus:outline-none focus:border-brand-blue font-bold text-sm" value={newProduct.price} onChange={(e) => setNewProduct({...newProduct, price: e.target.value})} />
+                        <input type="number" step="0.01" placeholder="Price" required className="flex-1 bg-slate-50 border border-slate-100 p-4 rounded-xl focus:outline-none focus:border-brand-blue font-bold text-sm" value={newProduct.price} onChange={(e) => setNewProduct({...newProduct, price: e.target.value})} />
                         <select className="flex-1 bg-slate-50 border border-slate-100 p-4 rounded-xl focus:outline-none focus:border-brand-blue font-bold text-sm" value={newProduct.category} onChange={(e) => setNewProduct({...newProduct, category: e.target.value})}>
                            <option>Food</option>
                            <option>Drinks</option>
@@ -2905,8 +2600,8 @@ function VendorView({ user, orders, products, riderLocations, onUpdateStatus, on
             </AnimatePresence>
            
         </div>
-      ) : (
-        <div className="bg-white p-8 sm:p-12 rounded-[3rem] border border-slate-100 shadow-xl max-w-2xl mx-auto">
+      ) : activeTab === 'store' ? (
+        <DarkCard className="max-w-2xl mx-auto">
           <div className="flex items-center gap-4 mb-10">
             <div className="w-16 h-16 bg-brand-green rounded-2xl flex items-center justify-center text-white text-2xl font-black rotate-3 shadow-lg">{user.name[0]}</div>
             <div>
@@ -2933,9 +2628,9 @@ function VendorView({ user, orders, products, riderLocations, onUpdateStatus, on
             <div className="space-y-3">
               <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Cover Image</label>
               <div className="flex gap-2">
-                <input type="text" placeholder="Paste URL or upload →" value={storeForm.cover_image} onChange={e => setStoreForm({...storeForm, cover_image: e.target.value})} className="flex-1 bg-slate-50 border border-slate-100 rounded-2xl py-4 px-6 font-bold text-sm focus:outline-none focus:border-brand-blue transition-all" />
+                <input type="text" placeholder="Paste URL or upload" value={storeForm.cover_image} onChange={e => setStoreForm({...storeForm, cover_image: e.target.value})} className="flex-1 bg-slate-50 border border-slate-100 rounded-2xl py-4 px-6 font-bold text-sm focus:outline-none focus:border-brand-blue transition-all" />
                 <label className={cn("px-5 py-4 rounded-2xl font-black cursor-pointer transition-all flex items-center", uploading ? "bg-slate-200 text-slate-400" : "bg-brand-green text-white hover:scale-105")}>
-                  {uploading ? <LoadingIndicator size="sm" /> : '📷'}
+                  {uploading ? <LoadingIndicator size="sm" /> : 'Upload'}
                   <input type="file" accept="image/*" className="hidden" disabled={uploading} onChange={(e) => {
                     const file = e.target.files?.[0];
                     if (file) handleFileUpload(file, (url) => setStoreForm({...storeForm, cover_image: url}));
@@ -2996,8 +2691,8 @@ function VendorView({ user, orders, products, riderLocations, onUpdateStatus, on
                     const newLat = e.latLng?.lat() || storeForm.lat;
                     const newLng = e.latLng?.lng() || storeForm.lng;
                     setStoreForm(prev => ({...prev, lat: newLat, lng: newLng}));
-                    const address = await reverseGeocodeGhana(newLat, newLng);
-                    if (address) setStoreForm(prev => ({ ...prev, address }));
+                    const address = await resolveAddressLabel(newLat, newLng);
+                    setStoreForm((prev) => ({ ...prev, address }));
                   }} />
                 </Map>
               </div>
@@ -3011,8 +2706,8 @@ function VendorView({ user, orders, products, riderLocations, onUpdateStatus, on
               {storeSaving ? <LoadingIndicator size="sm" /> : <><Save size={18} /> Update Store</>}
             </button>
           </form>
-        </div>
-      )}
+        </DarkCard>
+      ) : null}
 
       {activeTab === 'wallet' && (
         <div className="bg-white rounded-[1.5rem] sm:rounded-[2rem] border border-slate-100 shadow-sm p-4 sm:p-10 max-w-xl mx-auto min-h-[50vh] flex flex-col justify-center">
@@ -3021,7 +2716,7 @@ function VendorView({ user, orders, products, riderLocations, onUpdateStatus, on
               <CreditCard size={24} className="sm:w-8 sm:h-8" />
             </div>
             <h3 className="font-black uppercase tracking-widest text-slate-800 text-sm sm:text-lg">Available Balance</h3>
-            <p className="text-4xl sm:text-5xl font-black tracking-tighter text-brand-green mt-1 sm:mt-2">₵{Number(user.balance || 0).toFixed(2)}</p>
+            <p className="text-4xl sm:text-5xl font-black tracking-tighter text-brand-green mt-1 sm:mt-2">{formatCedis(user.balance || 0)}</p>
           </div>
           
           <form onSubmit={handleWithdraw} className="space-y-4 bg-slate-50 p-4 sm:p-8 rounded-[1.5rem] sm:rounded-[2rem] border border-slate-100">
@@ -3115,7 +2810,7 @@ function VendorView({ user, orders, products, riderLocations, onUpdateStatus, on
 
             {/* Amount */}
             <div>
-              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2 ml-2 sm:ml-4">Withdraw Amount (₵)</label>
+              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2 ml-2 sm:ml-4">Withdraw Amount (?)</label>
               <input 
                 type="number" 
                 required 
@@ -3139,6 +2834,16 @@ function VendorView({ user, orders, products, riderLocations, onUpdateStatus, on
           </form>
         </div>
       )}
+
+      <ConfirmationModal
+        isOpen={!!productToDelete}
+        onClose={() => setProductToDelete(null)}
+        onConfirm={() => productToDelete && handleDeleteProduct(productToDelete.id)}
+        title="Delete menu item"
+        message={`Remove "${productToDelete?.name}" from your menu?`}
+        confirmLabel="Delete"
+        type="danger"
+      />
     </div>
   );
 }
@@ -3196,6 +2901,12 @@ function Directions({ origin, destination, onETAUpdate }: { origin: google.maps.
 
 const INCOMING_RIDE_TIMEOUT_SEC = 30;
 
+function getOfferSecondsLeft(order: Order | null): number {
+  if (!order?.expiresAt) return INCOMING_RIDE_TIMEOUT_SEC;
+  const sec = Math.ceil((new Date(order.expiresAt).getTime() - Date.now()) / 1000);
+  return Math.max(0, Math.min(INCOMING_RIDE_TIMEOUT_SEC, sec));
+}
+
 function IncomingRideCallModal({
   order,
   vendors,
@@ -3205,12 +2916,30 @@ function IncomingRideCallModal({
   order: Order | null;
   vendors: any[];
   onAccept: (orderId: string, status: OrderStatus) => Promise<void>;
-  onDecline: () => void;
+  onDecline: () => void | Promise<void>;
 }) {
   const [secondsLeft, setSecondsLeft] = useState(INCOMING_RIDE_TIMEOUT_SEC);
+  const [offerTtlSec, setOfferTtlSec] = useState(INCOMING_RIDE_TIMEOUT_SEC);
   const [accepting, setAccepting] = useState(false);
+  const [declining, setDeclining] = useState(false);
   const ringStopRef = useRef(false);
   const ringCleanupRef = useRef<(() => void) | null>(null);
+  const onDeclineRef = useRef(onDecline);
+  onDeclineRef.current = onDecline;
+
+  const handleDecline = useCallback(async () => {
+    if (!order || declining) return;
+    setDeclining(true);
+    ringStopRef.current = true;
+    ringCleanupRef.current?.();
+    try {
+      await axios.post(`/api/orders/${order.id}/decline`);
+    } catch {
+      /* offer may already be closed */
+    }
+    await onDeclineRef.current();
+    setDeclining(false);
+  }, [order, declining]);
 
   useEffect(() => {
     if (!order) {
@@ -3221,7 +2950,13 @@ function IncomingRideCallModal({
     }
 
     ringStopRef.current = false;
-    setSecondsLeft(INCOMING_RIDE_TIMEOUT_SEC);
+    const initialSec = getOfferSecondsLeft(order);
+    setOfferTtlSec(initialSec > 0 ? initialSec : INCOMING_RIDE_TIMEOUT_SEC);
+    setSecondsLeft(initialSec);
+    if (initialSec <= 0) {
+      void handleDecline();
+      return;
+    }
 
     let wakeLock: WakeLockSentinel | null = null;
     if ('wakeLock' in navigator) {
@@ -3262,7 +2997,7 @@ function IncomingRideCallModal({
     const countdown = setInterval(() => {
       setSecondsLeft(prev => {
         if (prev <= 1) {
-          onDecline();
+          void handleDecline();
           return 0;
         }
         return prev - 1;
@@ -3278,7 +3013,7 @@ function IncomingRideCallModal({
     };
 
     return ringCleanupRef.current;
-  }, [order?.id, onDecline]);
+  }, [order?.id, order?.expiresAt, handleDecline]);
 
   if (!order) return null;
 
@@ -3319,7 +3054,7 @@ function IncomingRideCallModal({
           <motion.div
             className="absolute top-0 left-0 right-0 h-1 bg-brand-green origin-left"
             initial={{ scaleX: 1 }}
-            animate={{ scaleX: secondsLeft / INCOMING_RIDE_TIMEOUT_SEC }}
+            animate={{ scaleX: offerTtlSec > 0 ? secondsLeft / offerTtlSec : 0 }}
             transition={{ duration: 1, ease: 'linear' }}
           />
 
@@ -3339,7 +3074,7 @@ function IncomingRideCallModal({
               {isCourier ? 'Courier mission' : 'Delivery pickup'}
             </h2>
             <p className="text-slate-400 text-sm font-bold mt-1">
-              #{order.id.slice(-6).toUpperCase()} · {secondsLeft}s to respond
+              #{order.id.slice(-6).toUpperCase()} ? {secondsLeft}s to respond
             </p>
           </div>
 
@@ -3354,7 +3089,7 @@ function IncomingRideCallModal({
               transition={{ duration: 1.5, repeat: Infinity }}
             >
               <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">You earn</p>
-              <p className="text-4xl font-black text-brand-green font-mono">₵{Number(earnings).toFixed(2)}</p>
+              <p className="text-4xl font-black text-brand-green font-mono">{formatCedis(earnings)}</p>
             </motion.div>
             <motion.div className="flex items-start gap-3" initial={{ x: -8, opacity: 0.8 }} animate={{ x: 0, opacity: 1 }}>
               <div className="w-9 h-9 rounded-xl bg-brand-blue/20 flex items-center justify-center shrink-0">
@@ -3383,12 +3118,12 @@ function IncomingRideCallModal({
           <div className="grid grid-cols-2 gap-3 p-6 mt-4">
             <button
               type="button"
-              onClick={onDecline}
-              disabled={accepting}
-              className="py-4 rounded-2xl bg-white/10 text-white font-black uppercase tracking-widest text-xs hover:bg-white/15 transition-all flex flex-col items-center gap-1"
+              onClick={() => void handleDecline()}
+              disabled={accepting || declining}
+              className="py-4 rounded-2xl bg-white/10 text-white font-black uppercase tracking-widest text-xs hover:bg-white/15 transition-all flex flex-col items-center gap-1 disabled:opacity-60"
             >
               <X size={22} />
-              Decline
+              {declining ? 'Declining?' : 'Decline'}
             </button>
             <button
               type="button"
@@ -3404,7 +3139,7 @@ function IncomingRideCallModal({
               className="py-4 rounded-2xl bg-brand-green text-white font-black uppercase tracking-widest text-xs hover:bg-brand-green/90 transition-all shadow-lg shadow-brand-green/30 flex flex-col items-center gap-1 disabled:opacity-60"
             >
               <Check size={22} />
-              {accepting ? 'Accepting…' : 'Accept ride'}
+              {accepting ? 'Accepting?' : 'Accept ride'}
             </button>
           </div>
         </motion.div>
@@ -3412,22 +3147,76 @@ function IncomingRideCallModal({
     </AnimatePresence>
   );
 }
-function AdminView({ user, orders, addNotification, activeTab, setActiveTab }: { user: AuthUser, orders: Order[], addNotification: (m: string, t?: 'info' | 'success' | 'warning') => void, activeTab: any, setActiveTab: (v: any) => void }) {
+function AdminView({
+  user,
+  orders,
+  addNotification,
+  activeTab,
+  setActiveTab,
+  onPendingCountChange,
+}: {
+  user: AuthUser;
+  orders: Order[];
+  addNotification: (m: string, t?: 'info' | 'success' | 'warning') => void;
+  activeTab: any;
+  setActiveTab: (v: any) => void;
+  onPendingCountChange?: (count: number) => void;
+}) {
   const [allUsers, setAllUsers] = useState<any[]>([]);
   const [zones, setZones] = useState<any[]>([]);
   const [pendingProducts, setPendingProducts] = useState<any[]>([]);
   const [revenueData, setRevenueData] = useState<any>(null);
+  const [revenueLoading, setRevenueLoading] = useState(false);
+  const [revenueError, setRevenueError] = useState('');
+  const [settings, setSettings] = useState({
+    paystack_public_key: '',
+    paystack_secret_key: '',
+    platform_fee_percent: '10',
+    delivery_price_per_km: '4',
+  });
+  const [settingsSaving, setSettingsSaving] = useState(false);
   const [editingZone, setEditingZone] = useState<any | null>(null);
   const [zoneForm, setZoneForm] = useState({ name: '', region: '', base_price: '10', price_per_km: '2', min_price: '5', max_price: '' });
   const [showZoneForm, setShowZoneForm] = useState(false);
   const [zoneToDelete, setZoneToDelete] = useState<any | null>(null);
 
   useEffect(() => {
-    if (activeTab === 'users') axios.get('/api/admin/users').then(res => setAllUsers(res.data));
-    if (activeTab === 'zones') axios.get('/api/delivery-zones').then(res => setZones(res.data));
-    if (activeTab === 'products') axios.get('/api/admin/pending-products').then(res => setPendingProducts(res.data));
-    if (activeTab === 'revenue') axios.get('/api/admin/revenue').then(res => setRevenueData(res.data));
+    axios.get('/api/admin/users').then((res) => setAllUsers(res.data)).catch(() => addNotification('Failed to load users', 'warning'));
+    axios.get('/api/admin/pending-products').then((res) => {
+      setPendingProducts(res.data);
+      onPendingCountChange?.(res.data?.length || 0);
+    }).catch(() => {});
+    axios.get('/api/delivery-zones').then((res) => setZones(res.data)).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === 'products') {
+      axios.get('/api/admin/pending-products').then((res) => {
+        setPendingProducts(res.data);
+        onPendingCountChange?.(res.data?.length || 0);
+      }).catch(() => addNotification('Failed to load pending products', 'warning'));
+    }
+    if (activeTab === 'revenue') {
+      setRevenueLoading(true);
+      setRevenueError('');
+      axios.get('/api/admin/revenue')
+        .then((res) => setRevenueData(res.data))
+        .catch((err) => setRevenueError(getApiError(err, 'Failed to load revenue')))
+        .finally(() => setRevenueLoading(false));
+    }
+    if (activeTab === 'settings') {
+      axios.get('/api/admin/settings').then((res) => setSettings({
+        paystack_public_key: res.data.paystack_public_key || '',
+        paystack_secret_key: '',
+        platform_fee_percent: res.data.platform_fee_percent || '10',
+        delivery_price_per_km: res.data.delivery_price_per_km || '4',
+      })).catch(() => addNotification('Failed to load settings', 'warning'));
+    }
   }, [activeTab]);
+
+  useEffect(() => {
+    onPendingCountChange?.(pendingProducts.length);
+  }, [pendingProducts.length, onPendingCountChange]);
 
   const handleSaveZone = async () => {
     try {
@@ -3487,12 +3276,13 @@ function AdminView({ user, orders, addNotification, activeTab, setActiveTab }: {
              <button onClick={() => setActiveTab('products')} className={cn("px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all", activeTab === 'products' ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500")}>Approval {pendingProducts.length > 0 && <span className="ml-1 bg-red-500 text-white px-1.5 py-0.5 rounded-full text-[8px]">{pendingProducts.length}</span>}</button>
              <button onClick={() => setActiveTab('revenue')} className={cn("px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all", activeTab === 'revenue' ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500")}>Revenue</button>
              <button onClick={() => setActiveTab('zones')} className={cn("px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all", activeTab === 'zones' ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500")}>Zones</button>
+             <button onClick={() => setActiveTab('settings')} className={cn("px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all", activeTab === 'settings' ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500")}>Settings</button>
           </div>
        </header>
 
        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-6">
           <StatBox label="Total Orders" value={orders.length} color="blue" />
-          <StatBox label="Revenue" value={`₵${orders.reduce((a,b) => a + Number(b.total), 0).toFixed(2)}`} color="green" />
+          <StatBox label="Revenue" value={formatCedis(orders.reduce((a, b) => a + Number(b.total), 0))} color="green" />
           <StatBox label="Total Users" value={allUsers.length || '...'} color="blue" />
        </div>
 
@@ -3515,7 +3305,7 @@ function AdminView({ user, orders, addNotification, activeTab, setActiveTab }: {
                         <td className="px-8 py-6 font-mono font-black text-sm">#{o.id.slice(-4)}</td>
                         <td className="px-8 py-6"><span className="px-3 py-1 bg-slate-100 rounded-lg text-[10px] font-black uppercase">{o.status}</span></td>
                         <td className="px-8 py-6 text-sm font-bold text-slate-600">{o.customerName}</td>
-                        <td className="px-8 py-6 font-mono font-black text-brand-blue">₵{o.total}</td>
+                        <td className="px-8 py-6 font-mono font-black text-brand-blue">{formatCedis(o.total)}</td>
                         <td className="px-8 py-6"><PaymentStatusBadge order={o} /></td>
                       </tr>
                     ))}
@@ -3528,7 +3318,7 @@ function AdminView({ user, orders, addNotification, activeTab, setActiveTab }: {
                  <div key={o.id} className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm">
                     <div className="flex justify-between items-start mb-4">
                        <h4 className="font-black text-lg tracking-tighter italic uppercase underline decoration-brand-blue/50">#{o.id.slice(-4)}</h4>
-                       <span className="font-mono font-black text-brand-blue">₵{o.total}</span>
+                       <span className="font-mono font-black text-brand-blue">{formatCedis(o.total)}</span>
                     </div>
                     <div className="flex justify-between items-center">
                        <div className="flex flex-col gap-1">
@@ -3561,7 +3351,7 @@ function AdminView({ user, orders, addNotification, activeTab, setActiveTab }: {
                         <td className="px-8 py-6 font-bold text-sm">{u.name}</td>
                         <td className="px-8 py-6"><span className={cn("px-3 py-1 rounded-lg text-[10px] font-black uppercase", u.role === 'admin' ? "bg-red-50 text-red-500" : "bg-slate-100 text-slate-500")}>{u.role}</span></td>
                         <td className="px-8 py-6 text-sm text-slate-500">{u.email}</td>
-                        <td className="px-8 py-6 font-mono font-black text-brand-green">₵{Number(u.balance).toFixed(2)}</td>
+                        <td className="px-8 py-6 font-mono font-black text-brand-green">{formatCedis(u.balance)}</td>
                          <td className="px-8 py-6">
                            <span className={cn(
                              "px-3 py-1 rounded-lg text-[10px] font-black uppercase",
@@ -3614,8 +3404,8 @@ function AdminView({ user, orders, addNotification, activeTab, setActiveTab }: {
                     <p className="text-[10px] text-slate-400 mb-4">{u.email}</p>
                     <div className="flex justify-between items-center">
                        <div className="flex flex-col">
-                          <span className="text-[8px] font-black text-slate-300 uppercase tracking-widest">Status</span>
-                          <span className="font-mono font-black text-brand-green text-sm">₵{Number(u.balance).toFixed(2)}</span>
+                          <span className="text-[8px] font-black text-slate-300 uppercase tracking-widest">Balance</span>
+                          <span className="font-mono font-black text-brand-green text-sm">{formatCedis(u.balance)}</span>
                        </div>
                        <div className="flex gap-2">
                            {u.status === 'pending' && (
@@ -3666,17 +3456,39 @@ function AdminView({ user, orders, addNotification, activeTab, setActiveTab }: {
                          <p className="text-slate-500 text-xs line-clamp-2 mb-6">{p.description}</p>
                       </div>
                       <div className="flex items-center justify-between gap-4">
-                         <span className="font-mono font-black text-brand-blue">₵{p.price}</span>
+                         <span className="font-mono font-black text-brand-blue">{formatCedis(p.price)}</span>
+                         <div className="flex gap-2 flex-1">
                          <button 
+                           type="button"
                            onClick={async () => {
-                             await axios.patch(`/api/admin/products/${p.id}/approve`);
-                             setPendingProducts(pendingProducts.filter(item => item.id !== p.id));
-                             addNotification('Product approved!', 'success');
+                             try {
+                               await axios.patch(`/api/admin/products/${p.id}/reject`);
+                               setPendingProducts(pendingProducts.filter(item => item.id !== p.id));
+                               addNotification('Product rejected', 'success');
+                             } catch (err) {
+                               addNotification(getApiError(err, 'Reject failed'), 'warning');
+                             }
                            }}
-                           className="flex-1 py-3 bg-brand-green text-white rounded-xl font-black uppercase tracking-widest text-[10px] hover:shadow-lg transition-all"
+                           className="flex-1 py-3 bg-slate-800 text-slate-300 rounded-xl font-bold text-[10px]"
+                         >
+                           Reject
+                         </button>
+                         <button 
+                           type="button"
+                           onClick={async () => {
+                             try {
+                               await axios.patch(`/api/admin/products/${p.id}/approve`);
+                               setPendingProducts(pendingProducts.filter(item => item.id !== p.id));
+                               addNotification('Product approved!', 'success');
+                             } catch (err) {
+                               addNotification(getApiError(err, 'Approve failed'), 'warning');
+                             }
+                           }}
+                           className="flex-1 py-3 bg-brand-green text-white rounded-xl font-bold text-[10px]"
                          >
                            Approve
                          </button>
+                         </div>
                       </div>
                    </div>
                  ))}
@@ -3685,16 +3497,18 @@ function AdminView({ user, orders, addNotification, activeTab, setActiveTab }: {
          </div>
        ) : activeTab === 'revenue' ? (
          <div className="space-y-10">
-            {revenueData && (
+            {revenueLoading && <p className="text-slate-400 text-sm">Loading revenue?</p>}
+            {revenueError && <ErrorBanner message={revenueError} onRetry={() => setActiveTab('revenue')} />}
+            {!revenueLoading && !revenueError && revenueData && (
               <>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
                    <div className="bg-slate-900 p-10 rounded-[3rem] text-white">
                       <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">Gross Revenue</p>
-                      <h3 className="text-5xl font-black tracking-tighter italic">₵{Number(revenueData.summary.gross_revenue || 0).toFixed(2)}</h3>
+                      <h3 className="text-5xl font-black tracking-tighter italic">{formatCedis(revenueData.summary.gross_revenue || 0)}</h3>
                    </div>
                    <div className="bg-brand-blue p-10 rounded-[3rem] text-white">
                       <p className="text-[10px] font-black uppercase tracking-widest text-white/50 mb-2">System Earnings (10%)</p>
-                      <h3 className="text-5xl font-black tracking-tighter italic">₵{Number(revenueData.summary.system_earnings || 0).toFixed(2)}</h3>
+                      <h3 className="text-5xl font-black tracking-tighter italic">{formatCedis(revenueData.summary.system_earnings || 0)}</h3>
                    </div>
                 </div>
 
@@ -3734,7 +3548,7 @@ function AdminView({ user, orders, addNotification, activeTab, setActiveTab }: {
                                   </td>
                                   <td className="px-10 py-6">
                                      <span className={cn("font-mono font-black", t.type === 'withdrawal' ? "text-red-500" : "text-brand-green")}>
-                                       {t.type === 'withdrawal' ? '-' : '+'}₵{Number(t.amount).toFixed(2)}
+                                       {t.type === 'withdrawal' ? '-' : '+'}{formatCedis(t.amount)}
                                      </span>
                                   </td>
                                   <td className="px-10 py-6">
@@ -3748,7 +3562,46 @@ function AdminView({ user, orders, addNotification, activeTab, setActiveTab }: {
                 </div>
               </>
             )}
+            {!revenueLoading && !revenueError && !revenueData && (
+              <EmptyState title="No revenue data" description="Delivered orders will appear here." />
+            )}
          </div>
+       ) : activeTab === 'settings' ? (
+         <DarkCard className="max-w-xl">
+           <h3 className="text-lg font-bold text-white mb-4">Platform settings</h3>
+           <form
+             className="space-y-4"
+             onSubmit={async (e) => {
+               e.preventDefault();
+               setSettingsSaving(true);
+               try {
+                 await axios.patch('/api/admin/settings', settings);
+                 addNotification('Settings saved', 'success');
+               } catch (err) {
+                 addNotification(getApiError(err, 'Failed to save settings'), 'warning');
+               } finally {
+                 setSettingsSaving(false);
+               }
+             }}
+           >
+             <DarkInput label="Paystack public key" value={settings.paystack_public_key} onChange={(e) => setSettings({ ...settings, paystack_public_key: e.target.value })} placeholder="pk_test_..." />
+             <DarkInput label="Paystack secret key" type="password" value={settings.paystack_secret_key} onChange={(e) => setSettings({ ...settings, paystack_secret_key: e.target.value })} placeholder="sk_test_... (leave blank to keep)" />
+             <DarkInput label="Platform fee %" value={settings.platform_fee_percent} onChange={(e) => setSettings({ ...settings, platform_fee_percent: e.target.value })} />
+             <DarkInput
+               label="Delivery price per km (₵)"
+               type="number"
+               step="0.01"
+               min="0.01"
+               value={settings.delivery_price_per_km}
+               onChange={(e) => setSettings({ ...settings, delivery_price_per_km: e.target.value })}
+               placeholder="4.00"
+             />
+             <p className="text-[10px] text-slate-500 font-bold">
+               Courier and food delivery fees = distance (km) × this rate. Zone min/max caps still apply when set.
+             </p>
+             <DarkButton type="submit" disabled={settingsSaving} className="w-full">{settingsSaving ? 'Saving…' : 'Save settings'}</DarkButton>
+           </form>
+         </DarkCard>
        ) : activeTab === 'zones' ? (
          <div className="space-y-6">
            {/* Zone Form Modal */}
@@ -3771,19 +3624,19 @@ function AdminView({ user, orders, addNotification, activeTab, setActiveTab }: {
                    </select>
                  </div>
                  <div className="space-y-1.5">
-                   <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Base Price (₵)</label>
+                   <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Base Price (?)</label>
                    <input type="number" step="0.01" placeholder="10.00" value={zoneForm.base_price} onChange={e => setZoneForm({...zoneForm, base_price: e.target.value})} className="w-full bg-slate-50 border border-slate-100 rounded-xl py-3 px-4 font-bold text-sm focus:outline-none focus:border-brand-blue focus:ring-4 focus:ring-brand-blue/10 transition-all" />
                  </div>
                  <div className="space-y-1.5">
-                   <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Price per KM (₵)</label>
+                   <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Price per KM (?)</label>
                    <input type="number" step="0.01" placeholder="2.00" value={zoneForm.price_per_km} onChange={e => setZoneForm({...zoneForm, price_per_km: e.target.value})} className="w-full bg-slate-50 border border-slate-100 rounded-xl py-3 px-4 font-bold text-sm focus:outline-none focus:border-brand-blue focus:ring-4 focus:ring-brand-blue/10 transition-all" />
                  </div>
                  <div className="space-y-1.5">
-                   <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Minimum Price (₵)</label>
+                   <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Minimum Price (?)</label>
                    <input type="number" step="0.01" placeholder="5.00" value={zoneForm.min_price} onChange={e => setZoneForm({...zoneForm, min_price: e.target.value})} className="w-full bg-slate-50 border border-slate-100 rounded-xl py-3 px-4 font-bold text-sm focus:outline-none focus:border-brand-blue focus:ring-4 focus:ring-brand-blue/10 transition-all" />
                  </div>
                  <div className="space-y-1.5">
-                   <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Maximum Price (₵) <span className="text-slate-300">• optional</span></label>
+                   <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Maximum Price (?) <span className="text-slate-300">? optional</span></label>
                    <input type="number" step="0.01" placeholder="No limit" value={zoneForm.max_price} onChange={e => setZoneForm({...zoneForm, max_price: e.target.value})} className="w-full bg-slate-50 border border-slate-100 rounded-xl py-3 px-4 font-bold text-sm focus:outline-none focus:border-brand-blue focus:ring-4 focus:ring-brand-blue/10 transition-all" />
                  </div>
                </div>
@@ -3827,19 +3680,19 @@ function AdminView({ user, orders, addNotification, activeTab, setActiveTab }: {
                      <div className="grid grid-cols-2 gap-3 mt-4">
                        <div className="bg-slate-50 rounded-xl p-3">
                          <span className="text-[8px] font-black uppercase tracking-widest text-slate-400 block">Base</span>
-                         <span className="font-mono font-black text-brand-blue text-sm">₵{Number(zone.base_price).toFixed(2)}</span>
+                         <span className="font-mono font-black text-brand-blue text-sm">{formatCedis(zone.base_price)}</span>
                        </div>
                        <div className="bg-slate-50 rounded-xl p-3">
                          <span className="text-[8px] font-black uppercase tracking-widest text-slate-400 block">Per KM</span>
-                         <span className="font-mono font-black text-brand-blue text-sm">₵{Number(zone.price_per_km).toFixed(2)}</span>
+                         <span className="font-mono font-black text-brand-blue text-sm">{formatCedis(zone.price_per_km)}</span>
                        </div>
                        <div className="bg-slate-50 rounded-xl p-3">
                          <span className="text-[8px] font-black uppercase tracking-widest text-slate-400 block">Min</span>
-                         <span className="font-mono font-black text-slate-600 text-sm">₵{Number(zone.min_price).toFixed(2)}</span>
+                         <span className="font-mono font-black text-slate-600 text-sm">{formatCedis(zone.min_price)}</span>
                        </div>
                        <div className="bg-slate-50 rounded-xl p-3">
                          <span className="text-[8px] font-black uppercase tracking-widest text-slate-400 block">Max</span>
-                         <span className="font-mono font-black text-slate-600 text-sm">{zone.max_price ? `₵${Number(zone.max_price).toFixed(2)}` : '∞'}</span>
+                         <span className="font-mono font-black text-slate-600 text-sm">{zone.max_price ? formatCedis(zone.max_price) : 'No limit'}</span>
                        </div>
                      </div>
                    </div>
