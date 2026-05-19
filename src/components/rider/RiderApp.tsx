@@ -1,5 +1,4 @@
 import { useState, useEffect, type Dispatch, type SetStateAction, type FormEvent } from 'react';
-import { Map, Marker, useMapsLibrary } from '@vis.gl/react-google-maps';
 import { motion, AnimatePresence } from 'motion/react';
 import axios from 'axios';
 import {
@@ -23,8 +22,9 @@ import { Order, OrderStatus } from '../../types';
 import { GHANA_REGIONS } from '../../lib/constants';
 import { socket } from '../../lib/socket';
 import { subscribeRiderPush, unsubscribeRiderPush } from '../../lib/pushNotifications';
-import { CLEAN_MAP_STYLE } from '../../lib/mapStyles';
-import { MapDirections } from './MapDirections';
+import { useMapsAvailable } from '../MapsProvider';
+import { RiderDriveMap } from './RiderDriveMap';
+import { RiderMapPlaceholder } from './RiderMapPlaceholder';
 import { LoadingIndicator } from '../UI';
 
 function cn(...inputs: ClassValue[]) {
@@ -79,7 +79,7 @@ export function RiderApp({
   onLogout: () => void;
   pendingApproval?: boolean;
 }) {
-  const mapsLib = useMapsLibrary('core');
+  const mapsAvailable = useMapsAvailable();
   const [tab, setTab] = useState<RiderTab>('drive');
   const [sheetTab, setSheetTab] = useState<'requests' | 'active'>('requests');
   const [isOnline, setIsOnline] = useState(user.status === 'active' || user.status === undefined);
@@ -263,63 +263,21 @@ export function RiderApp({
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
             >
-              <div className="flex-1 relative min-h-[40vh]">
-                <Map
-                  defaultCenter={riderPos}
-                  defaultZoom={15}
-                  gestureHandling="greedy"
-                  disableDefaultUI
-                  styles={CLEAN_MAP_STYLE}
-                  className="w-full h-full"
-                >
-                  <Marker
-                    position={riderPos}
-                    icon={
-                      mapsLib
-                        ? {
-                            path: google.maps.SymbolPath.CIRCLE,
-                            scale: 10,
-                            fillColor: '#10b981',
-                            fillOpacity: 1,
-                            strokeColor: '#fff',
-                            strokeWeight: 3,
-                          }
-                        : undefined
-                    }
+              <motion.div className="flex-1 relative min-h-[40vh] byzgo-map-shell">
+                {mapsAvailable ? (
+                  <RiderDriveMap
+                    riderPos={riderPos}
+                    navigatingTo={navigatingTo}
+                    isOnline={isOnline}
+                    availableOrders={availableOrders}
+                    getPickupCoords={getPickupCoords}
+                    onETAUpdate={setEta}
                   />
-                  {navigatingTo && (
-                    <>
-                      <MapDirections origin={riderPos} destination={navigatingTo} onETAUpdate={setEta} />
-                      <Marker position={navigatingTo} />
-                    </>
-                  )}
-                  {!navigatingTo &&
-                    isOnline &&
-                    availableOrders.map((order) => {
-                      const pickup = getPickupCoords(order);
-                      if (!pickup) return null;
-                      return (
-                        <Marker
-                          key={order.id}
-                          position={pickup}
-                          icon={
-                            mapsLib
-                              ? {
-                                  path: google.maps.SymbolPath.CIRCLE,
-                                  scale: 7,
-                                  fillColor: '#0ea5e9',
-                                  fillOpacity: 1,
-                                  strokeColor: '#fff',
-                                  strokeWeight: 2,
-                                }
-                              : undefined
-                          }
-                        />
-                      );
-                    })}
-                </Map>
+                ) : (
+                  <RiderMapPlaceholder riderPos={riderPos} navigatingTo={navigatingTo} eta={eta} />
+                )}
 
-                {navigatingTo && (
+                {navigatingTo && mapsAvailable && (
                   <div className="absolute top-3 left-3 right-3 flex items-center justify-between gap-2 p-3 rounded-2xl bg-slate-900/95 backdrop-blur border border-slate-700 shadow-xl">
                     <div className="flex items-center gap-2 min-w-0">
                       <Navigation className="text-brand-green shrink-0" size={18} />
@@ -355,7 +313,7 @@ export function RiderApp({
                     </div>
                   </div>
                 )}
-              </div>
+              </motion.div>
 
               {/* Bottom sheet */}
               <div className="shrink-0 bg-slate-900 rounded-t-[1.75rem] border-t border-slate-800 shadow-[0_-20px_60px_rgba(0,0,0,0.5)] max-h-[48vh] flex flex-col">

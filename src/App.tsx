@@ -7,7 +7,8 @@ import { motion, AnimatePresence } from 'motion/react';
 import axios from 'axios';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
-import { APIProvider, Map, Marker, useMap, useMapsLibrary } from '@vis.gl/react-google-maps';
+import { Map, Marker, useMap, useMapsLibrary } from '@vis.gl/react-google-maps';
+import { MapsProvider } from './components/MapsProvider';
 import { Modal, ConfirmationModal, LoadingIndicator } from './components/UI';
 import { auth, googleProvider } from './lib/firebase';
 import { signInWithPopup, signInWithRedirect, getRedirectResult } from 'firebase/auth';
@@ -641,7 +642,7 @@ function MainApp() {
 
   if (user.role === 'rider') {
     return (
-      <APIProvider apiKey={import.meta.env.VITE_GOOGLE_MAPS_API_KEY || ''} region="GH" language="en">
+      <MapsProvider>
         <InstallPermissionsOnboarding
           open={showDeviceSetup}
           role={user.role}
@@ -700,12 +701,12 @@ function MainApp() {
             pendingApproval={user.status === 'pending'}
           />
         </PullToRefresh>
-      </APIProvider>
+      </MapsProvider>
     );
   }
 
   return (
-    <APIProvider apiKey={import.meta.env.VITE_GOOGLE_MAPS_API_KEY || ''} region="GH" language="en">
+    <MapsProvider>
       <InstallPermissionsOnboarding
         open={showDeviceSetup}
         role={user.role}
@@ -1097,7 +1098,7 @@ function MainApp() {
           </AnimatePresence>
         )}
       </div>
-    </APIProvider>
+    </MapsProvider>
   );
 }
 

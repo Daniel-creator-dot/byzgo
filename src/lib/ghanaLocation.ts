@@ -21,9 +21,9 @@ export function isInGhanaBounds(lat: number, lng: number): boolean {
   );
 }
 
-export function getGoogleMapsApiKey(): string {
-  return import.meta.env.VITE_GOOGLE_MAPS_API_KEY || import.meta.env.GOOGLE_MAPS_API_KEY || '';
-}
+import { getGoogleMapsApiKey } from './googleMaps';
+
+export { getGoogleMapsApiKey };
 
 export async function reverseGeocodeGhana(lat: number, lng: number): Promise<string | null> {
   const key = getGoogleMapsApiKey();

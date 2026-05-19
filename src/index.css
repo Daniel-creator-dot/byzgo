@@ -38,3 +38,14 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: #d1d1d1;
 }
+
+/* Hide Google Maps "can't load correctly" billing/key overlay; app shows its own fallback */
+.byzgo-map-shell .gm-err-container,
+.byzgo-map-shell .gm-err-message,
+.byzgo-map-shell .gm-style-cc,
+.byzgo-map-shell .dismissButton {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
