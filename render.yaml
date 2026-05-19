@@ -1,7 +1,12 @@
-# BytzGo — API for the Flutter mobile app (Android/iOS). No Vite/React deploy here.
-# Apply: https://dashboard.render.com/blueprint/new?repo=https://github.com/Daniel-creator-dot/byzgo
+# BytzGo — Node Web Service for Flutter APK (NOT a Static Site).
 #
-# Flutter APK uses: MOBILE_API_URL=https://bytzgo.net
+# If https://bytzgo.net/api/health returns HTML, the domain is on a Static Site.
+# Apply this Blueprint, then attach bytzgo.net to THIS Web Service only.
+#
+# Apply: https://dashboard.render.com/blueprint/new?repo=https://github.com/Daniel-creator-dot/byzgo
+# Verify:  .\scripts\verify-render-api.ps1
+#
+# Flutter APK: MOBILE_API_URL=https://bytzgo.net
 
 services:
   - type: web
@@ -9,12 +14,17 @@ services:
     runtime: node
     plan: free
     region: oregon
-    buildCommand: npm install --prefix backend
-    startCommand: npm run start:render
+    # Run build/start inside backend/ so node_modules/.bin (tsx) is on PATH.
+    rootDir: backend
+    buildCommand: npm ci
+    startCommand: npm start
     healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV
         value: production
+      # API-only on Render — do not deploy Vite dist here (Static Site breaks /api/*).
+      - key: SERVE_WEB
+        value: "false"
       - key: DATABASE_URL
         sync: false
       - key: JWT_SECRET
