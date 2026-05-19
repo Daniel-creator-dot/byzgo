@@ -90,6 +90,7 @@ export function CustomerShell({
     (o) => o.customer_id === user.id && o.status !== 'delivered' && o.status !== 'cancelled'
   );
   const arrivedOrders = activeOrders.filter((o) => o.status === 'arrived');
+  const liveTrackOrder = activeOrders.find((o) => o.rider_id);
   const firstName = user.name.split(' ')[0] || user.name;
 
   const navItems: { id: CustomerTab; label: string; icon: typeof Zap }[] = [
@@ -100,7 +101,15 @@ export function CustomerShell({
   ];
 
   const headerTitle =
-    tab === 'courier' ? 'Book a delivery' : tab === 'menu' ? 'Shops' : tab === 'tracking' ? 'Your trips' : '';
+    tab === 'courier'
+      ? 'Book a delivery'
+      : tab === 'menu'
+        ? 'Shops'
+        : tab === 'tracking'
+          ? liveTrackOrder
+            ? 'Live trip'
+            : 'Your trips'
+          : '';
 
   return (
     <div className="min-h-[100dvh] bg-slate-950 text-white flex flex-col">
@@ -191,7 +200,14 @@ export function CustomerShell({
         ))}
       </div>
 
-      <main className="flex-1 overflow-y-auto px-4 py-4 pb-28">{children}</main>
+      <main
+        className={cn(
+          'flex-1 overflow-y-auto pb-28',
+          tab === 'tracking' && liveTrackOrder ? 'px-0 py-0' : 'px-4 py-4'
+        )}
+      >
+        {children}
+      </main>
 
       {tab === 'menu' && cart.length > 0 && (
         <button

@@ -23,6 +23,7 @@ export function TripCompletionCard({
   setPaystackKey,
   addNotification,
   refreshData,
+  embedded = false,
 }: {
   order: Order;
   user: { id: string; email: string; name: string; balance: number };
@@ -30,6 +31,7 @@ export function TripCompletionCard({
   setPaystackKey: (k: string) => void;
   addNotification: (m: string, t?: 'info' | 'success' | 'warning') => void;
   refreshData: () => void | Promise<void>;
+  embedded?: boolean;
 }) {
   const [paying, setPaying] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -119,9 +121,19 @@ export function TripCompletionCard({
     <motion.div
       initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
-      className="mb-6 rounded-3xl border-2 border-brand-green/40 bg-gradient-to-br from-brand-green/10 to-slate-900 overflow-hidden"
+      className={
+        embedded
+          ? 'rounded-2xl border border-amber-500/30 bg-amber-500/5 overflow-hidden'
+          : 'mb-6 rounded-3xl border-2 border-brand-green/40 bg-gradient-to-br from-brand-green/10 to-slate-900 overflow-hidden'
+      }
     >
-      <div className="p-5 border-b border-brand-green/20 bg-brand-green/5">
+      <div
+        className={
+          embedded
+            ? 'p-4 border-b border-amber-500/20'
+            : 'p-5 border-b border-brand-green/20 bg-brand-green/5'
+        }
+      >
         <p className="text-[10px] font-black uppercase tracking-[0.25em] text-brand-green animate-pulse">
           Driver has arrived
         </p>

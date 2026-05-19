@@ -623,10 +623,21 @@ function MainApp() {
     });
 
     socket.on('order:updated', (updatedOrder: Order) => {
+      const prevOrder = ordersRef.current.find((o) => o.id === updatedOrder.id);
       setOrders(prev => prev.map(o => o.id === updatedOrder.id ? updatedOrder : o));
       const u = userRef.current;
+      if (
+        u?.role === 'customer' &&
+        updatedOrder.customer_id === u.id &&
+        updatedOrder.rider_id &&
+        !prevOrder?.rider_id
+      ) {
+        addNotification('Your driver accepted — track them on the map', 'success');
+        setActiveTab('tracking');
+      }
       if (u?.role === 'customer' && updatedOrder.status === 'picked_up' && updatedOrder.customer_id === u.id) {
         addNotification('Your order has been picked up!', 'info');
+        setActiveTab('tracking');
       }
       if (u?.role === 'customer' && updatedOrder.status === 'arrived' && updatedOrder.customer_id === u.id) {
         addNotification('Your driver has arrived ? complete payment to get your PIN', 'info');
