@@ -16,6 +16,14 @@ body {
   @apply font-sans text-slate-900 bg-slate-50 antialiased;
 }
 
+.safe-area-inset-top {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+.safe-area-inset-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
 /* Custom scrollbar */
 ::-webkit-scrollbar {
   width: 6px;

@@ -13,6 +13,7 @@ import path from 'path';
 import fs from 'fs';
 import axios from 'axios';
 import { OAuth2Client } from 'google-auth-library';
+import webpush from 'web-push';
 
 dotenv.config({ path: path.join(__dirname, '.env') });
 dotenv.config({ path: path.join(__dirname, '..', '.env.local') });
@@ -221,6 +222,15 @@ const initDb = async () => {
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
         expires_at TIMESTAMP WITH TIME ZONE NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS push_subscriptions (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+        endpoint TEXT NOT NULL UNIQUE,
+        keys_p256dh TEXT NOT NULL,
+        keys_auth TEXT NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
     `);
 
     // Seed SMS gateway configurations
@@ -246,6 +256,112 @@ const initDb = async () => {
 };
 
 initDb();
+
+let vapidPublicKey = '';
+
+async function ensureVapidKeys() {
+  let publicKey = process.env.VAPID_PUBLIC_KEY;
+  let privateKey = process.env.VAPID_PRIVATE_KEY;
+
+  if (!publicKey || !privateKey) {
+    const stored = await getSetting('vapid_keys');
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored);
+        publicKey = parsed.publicKey;
+        privateKey = parsed.privateKey;
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  if (!publicKey || !privateKey) {
+    const generated = webpush.generateVAPIDKeys();
+    publicKey = generated.publicKey;
+    privateKey = generated.privateKey;
+    await pool.query(
+      `INSERT INTO system_settings (key, value) VALUES ('vapid_keys', $1)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+      [JSON.stringify({ publicKey, privateKey })]
+    );
+    console.log('[push] Generated VAPID keys (saved to system_settings). Set VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY in production.');
+  }
+
+  webpush.setVapidDetails(
+    process.env.VAPID_SUBJECT || 'mailto:support@bytzgo.com',
+    publicKey,
+    privateKey
+  );
+  vapidPublicKey = publicKey;
+}
+
+function isOfferableOrder(order: any) {
+  return order?.status === 'ready' && !order?.rider_id;
+}
+
+async function getActiveRiderIds(region?: string | null) {
+  const result = await pool.query(
+    `SELECT id FROM users
+     WHERE role = 'rider' AND status = 'active'
+     AND ($1::text IS NULL OR $1 = '' OR region = $1 OR region IS NULL)`,
+    [region || null]
+  );
+  return result.rows.map((r: { id: string }) => r.id);
+}
+
+async function sendPushToRiders(order: any, riderIds: string[]) {
+  if (!riderIds.length || !vapidPublicKey) return;
+
+  const subs = await pool.query(
+    `SELECT endpoint, keys_p256dh, keys_auth FROM push_subscriptions WHERE user_id = ANY($1::uuid[])`,
+    [riderIds]
+  );
+
+  const payload = JSON.stringify({
+    type: 'incoming-ride',
+    orderId: order.id,
+    total: order.total,
+    delivery_fee: order.delivery_fee,
+    address: order.address,
+    pickup_address: order.pickup_address,
+    order_type: order.order_type,
+  });
+
+  for (const sub of subs.rows) {
+    try {
+      await webpush.sendNotification(
+        {
+          endpoint: sub.endpoint,
+          keys: { p256dh: sub.keys_p256dh, auth: sub.keys_auth },
+        },
+        payload,
+        { urgency: 'high', TTL: 30 }
+      );
+    } catch (err: any) {
+      if (err.statusCode === 404 || err.statusCode === 410) {
+        await pool.query('DELETE FROM push_subscriptions WHERE endpoint = $1', [sub.endpoint]);
+      } else {
+        console.warn('[push] send failed:', err.statusCode || err.message);
+      }
+    }
+  }
+}
+
+async function broadcastRideOfferToRiders(order: any) {
+  if (!isOfferableOrder(order)) return;
+  try {
+    const riderIds = await getActiveRiderIds(order.region);
+    for (const riderId of riderIds) {
+      io.to(riderId).emit('ride:incoming', order);
+    }
+    await sendPushToRiders(order, riderIds);
+  } catch (err) {
+    console.error('[push] broadcast ride offer failed:', err);
+  }
+}
+
+ensureVapidKeys().catch((err) => console.error('[push] VAPID setup failed:', err));
 
 // Middleware
 const authenticateToken = (req: any, res: any, next: any) => {
@@ -945,7 +1061,25 @@ app.get('/api/orders', authenticateToken, async (req: any, res) => {
 });
 
 app.post('/api/orders', authenticateToken, async (req: any, res) => {
-  const { items, total, address, pickup, orderType, order_type, scheduledTime, vendorId, lat, lng, region: providedRegion, payment_reference, payment_method, delivery_fee } = req.body;
+  const {
+    items,
+    total,
+    address,
+    pickup,
+    orderType,
+    order_type,
+    scheduledTime,
+    scheduled_time,
+    vendorId,
+    lat,
+    lng,
+    pickup_lat,
+    pickup_lng,
+    region: providedRegion,
+    payment_reference,
+    payment_method,
+    delivery_fee,
+  } = req.body;
   
   let paymentStatus = 'pending';
   const finalPaymentMethod = payment_method || (payment_reference ? 'paystack' : 'pay_on_delivery');
@@ -1013,6 +1147,10 @@ app.post('/api/orders', authenticateToken, async (req: any, res) => {
         pickupLng = vendorResult.rows[0].lng;
         finalRegion = finalRegion || vendorResult.rows[0].region;
       }
+    } else if (finalOrderType === 'courier') {
+      finalPickup = pickup || finalPickup;
+      pickupLat = pickup_lat ?? pickupLat;
+      pickupLng = pickup_lng ?? pickupLng;
     }
 
     // Fallback to customer's region if still not found
@@ -1022,14 +1160,18 @@ app.post('/api/orders', authenticateToken, async (req: any, res) => {
     }
 
     const initialStatus = (finalOrderType === 'courier') ? 'ready' : 'pending';
+    const scheduled = scheduledTime || scheduled_time || null;
 
     const result = await pool.query(
       'INSERT INTO orders (customer_id, vendor_id, items, total, status, address, pickup_address, order_type, scheduled_time, lat, lng, pickup_lat, pickup_lng, region, payment_status, payment_method, delivery_fee) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) RETURNING *',
-      [req.user.id, vendorId, JSON.stringify(items), total, initialStatus, address || 'Customer Address', pickup || 'Vendor Address', finalOrderType, scheduledTime || null, lat, lng, 0, 0, providedRegion || req.user.region, paymentStatus, finalPaymentMethod, delivery_fee || 0]
+      [req.user.id, vendorId, JSON.stringify(items), total, initialStatus, address || 'Customer Address', finalPickup || 'Pickup', finalOrderType, scheduled, lat, lng, pickupLat, pickupLng, finalRegion, paymentStatus, finalPaymentMethod, delivery_fee || 0]
     );
     const order = result.rows[0];
     res.json(order);
     io.emit('order:new', order); // Notify vendors/admin
+    if (isOfferableOrder(order)) {
+      broadcastRideOfferToRiders(order);
+    }
   } catch (err) {
     console.error('Order creation error:', err);
     res.status(500).json({ message: 'Server error' });
@@ -1044,10 +1186,20 @@ app.patch('/api/orders/:id', authenticateToken, async (req: any, res) => {
     // Check if vendor/rider is active before allowing updates
     if (req.user.role === 'vendor' || req.user.role === 'rider') {
       const userRes = await pool.query('SELECT status FROM users WHERE id = $1', [req.user.id]);
-      if (userRes.rows[0]?.status !== 'active') {
-        return res.status(403).json({ message: 'Your account is pending approval.' });
+      const accountStatus = userRes.rows[0]?.status;
+      if (accountStatus !== 'active') {
+        const message =
+          accountStatus === 'pending'
+            ? 'Your account is pending approval.'
+            : 'Go online to accept and update rides.';
+        return res.status(403).json({ message });
       }
     }
+
+    if (riderId && req.user.role === 'rider' && riderId !== req.user.id) {
+      return res.status(403).json({ message: 'You can only accept rides for yourself.' });
+    }
+
     let updateQuery = 'UPDATE orders SET status = $1';
     const params: any[] = [status];
     
@@ -1056,16 +1208,27 @@ app.patch('/api/orders/:id', authenticateToken, async (req: any, res) => {
       params.push(riderId);
     }
     
-    updateQuery += `, updated_at = CURRENT_TIMESTAMP WHERE id = $${params.length + 1} RETURNING *`;
+    updateQuery += `, updated_at = CURRENT_TIMESTAMP WHERE id = $${params.length + 1}`;
+    if (riderId) {
+      updateQuery += ' AND rider_id IS NULL';
+    }
+    updateQuery += ' RETURNING *';
     params.push(orderId);
 
     const result = await pool.query(updateQuery, params);
     const order = result.rows[0];
+
+    if (!order && riderId) {
+      return res.status(409).json({ message: 'This ride was already taken by another rider.' });
+    }
     
     if (order) {
       res.json(order);
       io.emit('order:updated', order);
-      
+      if (isOfferableOrder(order)) {
+        broadcastRideOfferToRiders(order);
+      }
+
       // Handle payment logic when delivered
       if (status === 'delivered') {
         const total = parseFloat(order.total);
@@ -1374,6 +1537,47 @@ app.post('/api/delivery-zones/calculate', async (req, res) => {
   } catch (err) {
     console.error('Price calculation error:', err);
     res.status(500).json({ message: 'Failed to calculate price' });
+  }
+});
+
+// Web Push (background ride alerts for riders)
+app.get('/api/push/vapid-public-key', (_req, res) => {
+  res.json({ publicKey: vapidPublicKey });
+});
+
+app.post('/api/push/subscribe', authenticateToken, async (req: any, res) => {
+  const { endpoint, keys } = req.body;
+  if (!endpoint || !keys?.p256dh || !keys?.auth) {
+    return res.status(400).json({ message: 'Invalid subscription' });
+  }
+  if (req.user.role !== 'rider') {
+    return res.status(403).json({ message: 'Riders only' });
+  }
+  try {
+    await pool.query(
+      `INSERT INTO push_subscriptions (user_id, endpoint, keys_p256dh, keys_auth)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (endpoint) DO UPDATE SET user_id = $1, keys_p256dh = $3, keys_auth = $4`,
+      [req.user.id, endpoint, keys.p256dh, keys.auth]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Push subscribe error:', err);
+    res.status(500).json({ message: 'Failed to save subscription' });
+  }
+});
+
+app.delete('/api/push/subscribe', authenticateToken, async (req: any, res) => {
+  const { endpoint } = req.body;
+  if (!endpoint) return res.status(400).json({ message: 'endpoint required' });
+  try {
+    await pool.query(
+      'DELETE FROM push_subscriptions WHERE endpoint = $1 AND user_id = $2',
+      [endpoint, req.user.id]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to remove subscription' });
   }
 });
 
