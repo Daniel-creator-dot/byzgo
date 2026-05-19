@@ -32,13 +32,13 @@ if (-not $ApiUrl) {
 if (-not $ApiUrl) {
   $ApiUrl = Read-EnvValue "VITE_API_URL"
 }
-# Production default — same host as Render web+API (bytzgo.net)
+# Production default: same host as Render web+API (bytzgo.net)
 if (-not $ApiUrl) {
   $ApiUrl = "https://bytzgo.net"
 }
 
 $ApiUrl = $ApiUrl.TrimEnd("/")
-Write-Host "BytzGo APK — API_URL=$ApiUrl"
+Write-Host "BytzGo APK - API_URL=$ApiUrl"
 
 & (Join-Path $PSScriptRoot "sync_maps_key.ps1")
 
@@ -81,4 +81,4 @@ $apk = Join-Path $mobileRoot "build\app\outputs\flutter-apk\app-release.apk"
 Write-Host ""
 Write-Host "APK ready:" -ForegroundColor Green
 Write-Host "  $apk"
-Write-Host "Copy to your phone and install, or: adb install `"$apk`""
+Write-Host "Copy to your phone and install, or: adb install $apk"

@@ -4,6 +4,6 @@
     <item>
         <bitmap
             android:gravity="center"
-            android:src="@drawable/bytz_preloader" />
+            android:src="@mipmap/ic_launcher" />
     </item>
 </layer-list>
