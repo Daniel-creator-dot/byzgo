@@ -7,6 +7,7 @@ import '../../models/order.dart';
 import '../../shared/customer_trip.dart';
 import '../../shared/format.dart';
 import '../../shared/theme.dart';
+import '../../shared/widgets/biker_search_radar.dart';
 import '../../shared/widgets/ride_ui.dart';
 import '../orders/orders_repository.dart';
 import '../wallet/wallet_repository.dart';
@@ -30,6 +31,13 @@ class CustomerDeliveryTracker extends StatelessWidget {
         _StatusHero(order: order),
         const SizedBox(height: 16),
         DeliveryProgressTimeline(order: order),
+        if (customerCanCancelOrder(order)) ...[
+          const SizedBox(height: 16),
+          CustomerCancelRequestButton(
+            order: order,
+            onOrderUpdated: onOrderUpdated,
+          ),
+        ],
         if (order.status == 'arrived') ...[
           const SizedBox(height: 16),
           CustomerTripPaymentCard(
@@ -57,6 +65,7 @@ class _StatusHero extends StatelessWidget {
     final sub = customerTripSubline(order);
     final isArrived = order.status == 'arrived';
     final isDelivered = order.status == 'delivered';
+    final searching = customerIsSearchingBiker(order);
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -95,23 +104,25 @@ class _StatusHero extends StatelessWidget {
               color: BytzGoTheme.sheetBg,
               borderRadius: BorderRadius.circular(14),
             ),
-            child: Icon(
-              isDelivered
-                  ? Icons.check_circle
-                  : isArrived
-                      ? Icons.place
-                      : order.status == 'picked_up'
-                          ? Icons.two_wheeler
-                          : order.riderId != null
-                              ? Icons.person_pin_circle
-                              : Icons.radar,
-              color: isDelivered
-                  ? BytzGoTheme.accentDark
-                  : isArrived
-                      ? BytzGoTheme.warning
-                      : BytzGoTheme.brandBlue,
-              size: 28,
-            ),
+            child: searching
+                ? const BikerSearchRadar(size: 44, color: BytzGoTheme.brandBlue)
+                : Icon(
+                    isDelivered
+                        ? Icons.check_circle
+                        : isArrived
+                            ? Icons.place
+                            : order.status == 'picked_up'
+                                ? Icons.two_wheeler
+                                : order.riderId != null
+                                    ? Icons.person_pin_circle
+                                    : Icons.radar,
+                    color: isDelivered
+                        ? BytzGoTheme.accentDark
+                        : isArrived
+                            ? BytzGoTheme.warning
+                            : BytzGoTheme.brandBlue,
+                    size: 28,
+                  ),
           ),
           const SizedBox(width: 14),
           Expanded(
@@ -147,62 +158,189 @@ class DeliveryProgressTimeline extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final steps = customerTripSteps(order);
+    final searching = customerIsSearchingBiker(order);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Row(
           children: List.generate(steps.length, (i) {
             final active = steps[i].active;
+            final current = steps[i].current;
             return Expanded(
-              child: Container(
-                height: 4,
-                margin: EdgeInsets.only(right: i < steps.length - 1 ? 4 : 0),
-                decoration: BoxDecoration(
-                  color: active ? BytzGoTheme.accent : BytzGoTheme.sheetDivider,
-                  borderRadius: BorderRadius.circular(2),
-                ),
+              child: _AnimatedProgressSegment(
+                active: active,
+                pulse: searching && current,
+                marginRight: i < steps.length - 1 ? 4 : 0,
               ),
             );
           }),
         ),
         const SizedBox(height: 14),
-        ...steps.map((step) => _TimelineRow(step: step)),
+        ...steps.map((step) => _TimelineRow(step: step, searching: searching)),
       ],
     );
   }
 }
 
-class _TimelineRow extends StatelessWidget {
-  const _TimelineRow({required this.step});
+class _AnimatedProgressSegment extends StatefulWidget {
+  const _AnimatedProgressSegment({
+    required this.active,
+    required this.pulse,
+    required this.marginRight,
+  });
 
-  final CustomerTripStep step;
+  final bool active;
+  final bool pulse;
+  final double marginRight;
+
+  @override
+  State<_AnimatedProgressSegment> createState() => _AnimatedProgressSegmentState();
+}
+
+class _AnimatedProgressSegmentState extends State<_AnimatedProgressSegment>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    );
+    if (widget.pulse) _ctrl.repeat(reverse: true);
+  }
+
+  @override
+  void didUpdateWidget(covariant _AnimatedProgressSegment oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.pulse && !_ctrl.isAnimating) {
+      _ctrl.repeat(reverse: true);
+    } else if (!widget.pulse) {
+      _ctrl.stop();
+      _ctrl.reset();
+    }
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _ctrl,
+      builder: (context, child) {
+        final glow = widget.pulse ? 0.55 + _ctrl.value * 0.45 : 1.0;
+        return Container(
+          height: 4,
+          margin: EdgeInsets.only(right: widget.marginRight),
+          decoration: BoxDecoration(
+            color: widget.active
+                ? BytzGoTheme.accent.withValues(alpha: glow)
+                : BytzGoTheme.sheetDivider,
+            borderRadius: BorderRadius.circular(2),
+            boxShadow: widget.pulse
+                ? [
+                    BoxShadow(
+                      color: BytzGoTheme.accent.withValues(alpha: 0.35 * _ctrl.value),
+                      blurRadius: 6,
+                    ),
+                  ]
+                : null,
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _TimelineRow extends StatefulWidget {
+  const _TimelineRow({required this.step, required this.searching});
+
+  final CustomerTripStep step;
+  final bool searching;
+
+  @override
+  State<_TimelineRow> createState() => _TimelineRowState();
+}
+
+class _TimelineRowState extends State<_TimelineRow> with SingleTickerProviderStateMixin {
+  late final AnimationController _pulse;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulse = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1100),
+    );
+    if (widget.step.current && widget.searching) _pulse.repeat(reverse: true);
+  }
+
+  @override
+  void didUpdateWidget(covariant _TimelineRow oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.step.current && widget.searching) {
+      if (!_pulse.isAnimating) _pulse.repeat(reverse: true);
+    } else {
+      _pulse.stop();
+      _pulse.reset();
+    }
+  }
+
+  @override
+  void dispose() {
+    _pulse.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final step = widget.step;
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: Row(
         children: [
-          Container(
-            width: 28,
-            height: 28,
-            decoration: BoxDecoration(
-              color: step.active
-                  ? (step.current
-                      ? BytzGoTheme.accent
-                      : BytzGoTheme.accent.withValues(alpha: 0.2))
-                  : BytzGoTheme.sheetDivider.withValues(alpha: 0.5),
-              shape: BoxShape.circle,
-              border: step.current
-                  ? Border.all(color: BytzGoTheme.accentDark, width: 2)
-                  : null,
-            ),
-            child: Icon(
-              step.active ? Icons.check : Icons.circle_outlined,
-              size: step.active ? 16 : 14,
-              color: step.active
-                  ? (step.current ? BytzGoTheme.accentOn : BytzGoTheme.accentDark)
-                  : BytzGoTheme.sheetMuted,
+          AnimatedBuilder(
+            animation: _pulse,
+            builder: (context, child) {
+              final scale = step.current && widget.searching
+                  ? 1 + _pulse.value * 0.12
+                  : 1.0;
+              return Transform.scale(
+                scale: scale,
+                child: child,
+              );
+            },
+            child: Container(
+              width: 28,
+              height: 28,
+              decoration: BoxDecoration(
+                color: step.active
+                    ? (step.current
+                        ? BytzGoTheme.accent
+                        : BytzGoTheme.accent.withValues(alpha: 0.2))
+                    : BytzGoTheme.sheetDivider.withValues(alpha: 0.5),
+                shape: BoxShape.circle,
+                border: step.current
+                    ? Border.all(color: BytzGoTheme.accentDark, width: 2)
+                    : null,
+              ),
+              child: step.current && widget.searching
+                  ? const Padding(
+                      padding: EdgeInsets.all(4),
+                      child: BikerSearchRadar(size: 20, showIcon: false),
+                    )
+                  : Icon(
+                      step.active ? Icons.check : Icons.circle_outlined,
+                      size: step.active ? 16 : 14,
+                      color: step.active
+                          ? (step.current ? BytzGoTheme.accentOn : BytzGoTheme.accentDark)
+                          : BytzGoTheme.sheetMuted,
+                    ),
             ),
           ),
           const SizedBox(width: 12),
@@ -519,6 +657,96 @@ class _CustomerTripPaymentCardState extends State<CustomerTripPaymentCard> {
               ),
             ),
         ],
+      ),
+    );
+  }
+}
+
+class CustomerCancelRequestButton extends StatefulWidget {
+  const CustomerCancelRequestButton({
+    super.key,
+    required this.order,
+    required this.onOrderUpdated,
+  });
+
+  final Order order;
+  final ValueChanged<Order> onOrderUpdated;
+
+  @override
+  State<CustomerCancelRequestButton> createState() =>
+      _CustomerCancelRequestButtonState();
+}
+
+class _CustomerCancelRequestButtonState extends State<CustomerCancelRequestButton> {
+  bool _loading = false;
+
+  Future<void> _confirmAndCancel() async {
+    final order = widget.order;
+    final shortId = order.id.length > 6 ? order.id.substring(order.id.length - 6) : order.id;
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Cancel request?'),
+        content: Text(
+          order.riderId != null
+              ? 'Your biker will be notified. Trip #$shortId will be cancelled.'
+              : 'Stop searching for a biker and cancel trip #$shortId?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Keep trip'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: BytzGoTheme.danger),
+            child: const Text('Cancel request'),
+          ),
+        ],
+      ),
+    );
+
+    if (ok != true || !mounted) return;
+
+    setState(() => _loading = true);
+    HapticFeedback.mediumImpact();
+    try {
+      final updated =
+          await context.read<OrdersRepository>().cancelOrder(order.id);
+      if (!mounted) return;
+      widget.onOrderUpdated(updated);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(OrdersRepository.errorMessage(e)),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: BytzGoTheme.danger,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return OutlinedButton.icon(
+      onPressed: _loading ? null : _confirmAndCancel,
+      icon: _loading
+          ? const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : const Icon(Icons.close_rounded, size: 20),
+      label: Text(_loading ? 'Cancelling…' : 'Cancel request'),
+      style: OutlinedButton.styleFrom(
+        minimumSize: const Size.fromHeight(50),
+        foregroundColor: BytzGoTheme.danger,
+        side: BorderSide(color: BytzGoTheme.danger.withValues(alpha: 0.45)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       ),
     );
   }

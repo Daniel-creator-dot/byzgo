@@ -8,6 +8,8 @@ import '../../models/location_point.dart';
 
 import '../../models/order.dart';
 
+import '../../models/product.dart';
+
 import '../../models/vendor.dart';
 
 
@@ -66,7 +68,18 @@ class OrdersRepository {
 
   }
 
-
+  Future<List<Product>> fetchProducts({required String vendorId}) async {
+    final res = await _api.dio.get<dynamic>(
+      '/api/products',
+      queryParameters: {'vendor_id': vendorId},
+    );
+    final data = res.data;
+    if (data is! List) return [];
+    return data
+        .whereType<Map>()
+        .map((e) => Product.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
+  }
 
   Future<Order> createCourierOrder({
 
@@ -254,6 +267,15 @@ class OrdersRepository {
 
     await _api.dio.post('/api/orders/$orderId/decline');
 
+  }
+
+  Future<Order> cancelOrder(String orderId) async {
+    final res = await _api.dio.post<Map<String, dynamic>>(
+      '/api/orders/$orderId/cancel',
+    );
+    final data = res.data;
+    if (data == null) throw Exception('Empty cancel response');
+    return Order.fromJson(Map<String, dynamic>.from(data));
   }
 
   Future<Order> payAtDeliveryWallet(String orderId) async {

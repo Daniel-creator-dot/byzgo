@@ -12,6 +12,8 @@ class ApiClient {
         baseUrl: Env.apiBaseUrl,
         connectTimeout: const Duration(seconds: 20),
         receiveTimeout: const Duration(seconds: 30),
+        followRedirects: true,
+        maxRedirects: 5,
         headers: {'Content-Type': 'application/json'},
       ),
     );

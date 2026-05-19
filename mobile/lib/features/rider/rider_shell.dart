@@ -20,16 +20,17 @@ import '../../shared/format.dart';
 import '../../shared/ghana_regions.dart';
 import '../../shared/rider_trip.dart';
 import '../../shared/theme.dart';
-import '../../shared/widgets/ride_google_map.dart';
 import '../../shared/widgets/ride_map_background.dart';
 import '../../shared/widgets/ride_ui.dart';
 import 'delivery_pin_dialog.dart';
+import 'incoming_ride_overlay.dart';
+import 'rider_drive_map_layer.dart';
 
 enum _RiderTab { drive, trips, wallet, profile }
 
 enum _DriveSheet { requests, active }
 
-/// Full rider console — parity with web `RiderApp.tsx`.
+/// Native Flutter rider / driver console (not a WebView).
 class RiderShell extends StatefulWidget {
   const RiderShell({super.key});
 
@@ -51,13 +52,17 @@ class _RiderShellState extends State<RiderShell> {
   bool _refreshing = false;
   int _offerTick = 0;
 
-  LocationPoint? _myPosition;
+  final _myPositionNotifier = ValueNotifier<LocationPoint?>(null);
   StreamSubscription<Position>? _posSub;
   Timer? _pollTimer;
   Timer? _offerTimer;
+  DateTime? _lastGpsUiUpdate;
 
   final _withdrawAmount = TextEditingController();
   final _withdrawPhone = TextEditingController();
+  final _withdrawBank = TextEditingController();
+  final _withdrawAccName = TextEditingController();
+  final _withdrawAccNum = TextEditingController();
   final _profilePhone = TextEditingController();
   String _withdrawMethod = 'momo';
   String _withdrawNetwork = 'mtn';
@@ -148,8 +153,12 @@ class _RiderShellState extends State<RiderShell> {
     _posSub?.cancel();
     _pollTimer?.cancel();
     _offerTimer?.cancel();
+    _myPositionNotifier.dispose();
     _withdrawAmount.dispose();
     _withdrawPhone.dispose();
+    _withdrawBank.dispose();
+    _withdrawAccName.dispose();
+    _withdrawAccNum.dispose();
     _profilePhone.dispose();
     _socket.clearHandlers();
     super.dispose();
@@ -197,8 +206,8 @@ class _RiderShellState extends State<RiderShell> {
     };
   }
 
-  Future<void> _refreshAll() async {
-    setState(() => _refreshing = true);
+  Future<void> _refreshAll({bool silent = false}) async {
+    if (!silent) setState(() => _refreshing = true);
     try {
       final orders = await _ordersRepo.fetchOrders();
       final vendors = await _ordersRepo.fetchVendors(region: _user.region);
@@ -209,27 +218,30 @@ class _RiderShellState extends State<RiderShell> {
       });
       _syncOfferTimer();
     } catch (e) {
-      _snack(OrdersRepository.errorMessage(e));
+      if (!silent) _snack(OrdersRepository.errorMessage(e));
     } finally {
-      if (mounted) setState(() => _refreshing = false);
+      if (mounted && !silent) setState(() => _refreshing = false);
     }
   }
 
   void _syncOfferTimer() {
     _offerTimer?.cancel();
+    if (_tab != _RiderTab.drive) return;
     final hasExpiring = _orders.any(
       (o) => o.status == 'ready' && o.riderId == null && o.expiresAt != null,
     );
     if (!hasExpiring) return;
     _offerTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (!mounted) return;
+      if (!mounted || _tab != _RiderTab.drive) return;
       setState(() => _offerTick++);
     });
   }
 
   void _startPolling() {
     _pollTimer?.cancel();
-    _pollTimer = Timer.periodic(const Duration(seconds: 6), (_) => _refreshAll());
+    _pollTimer = Timer.periodic(const Duration(seconds: 15), (_) {
+      if (_isOnline && mounted) _refreshAll(silent: true);
+    });
   }
 
   void _stopPolling() {
@@ -243,7 +255,7 @@ class _RiderShellState extends State<RiderShell> {
     if (!ok) return;
     final userId = _user.id;
     _posSub = _location.positionStream().listen((pos) {
-      _myPosition = LocationPoint(
+      final point = LocationPoint(
         address: 'You',
         lat: pos.latitude,
         lng: pos.longitude,
@@ -255,7 +267,15 @@ class _RiderShellState extends State<RiderShell> {
           lng: pos.longitude,
         );
       }
-      if (mounted) setState(() {});
+      final now = DateTime.now();
+      final throttle = _tab == _RiderTab.drive
+          ? const Duration(seconds: 2)
+          : const Duration(seconds: 8);
+      if (_lastGpsUiUpdate == null ||
+          now.difference(_lastGpsUiUpdate!) >= throttle) {
+        _lastGpsUiUpdate = now;
+        _myPositionNotifier.value = point;
+      }
     });
   }
 
@@ -373,7 +393,10 @@ class _RiderShellState extends State<RiderShell> {
       _snack('No navigation target for this trip');
       return;
     }
-    final ok = await openTurnByTurnNavigation(target, origin: _myPosition);
+    final ok = await openTurnByTurnNavigation(
+      target,
+      origin: _myPositionNotifier.value,
+    );
     if (!ok) _snack('Could not open maps');
   }
 
@@ -457,31 +480,43 @@ class _RiderShellState extends State<RiderShell> {
     return null;
   }
 
+  Widget _buildCurrentTab(AuthUser user) {
+    switch (_tab) {
+      case _RiderTab.drive:
+        return _buildDriveTab();
+      case _RiderTab.trips:
+        return _buildTripsTab();
+      case _RiderTab.wallet:
+        return _buildWalletTab(user);
+      case _RiderTab.profile:
+        return _buildProfileTab(user);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    final user = context.watch<Session>().user!;
-    final showRoute = (_incoming != null || _primaryActive != null) &&
-        _mapPickup() != null &&
-        _mapDestination() != null;
+    final user = context.select<Session, AuthUser?>((s) => s.user)!;
 
     return Scaffold(
       backgroundColor: const Color(0xFF020617),
       body: SafeArea(
-        child: Column(
+        child: Stack(
+          fit: StackFit.expand,
           children: [
-            _buildHeader(user),
-            Expanded(
-              child: IndexedStack(
-                index: _tab.index,
-                children: [
-                  _buildDriveTab(showRoute),
-                  _buildTripsTab(),
-                  _buildWalletTab(user),
-                  _buildProfileTab(user),
-                ],
-              ),
+            Column(
+              children: [
+                _buildHeader(user),
+                Expanded(child: _buildCurrentTab(user)),
+                _buildBottomNav(),
+              ],
             ),
-            _buildBottomNav(),
+            if (_incoming != null && _tab == _RiderTab.drive)
+              IncomingRideOverlay(
+                order: _incoming!,
+                accepting: _accepting,
+                onAccept: () => _acceptOrder(_incoming!),
+                onDecline: _declineRide,
+              ),
           ],
         ),
       ),
@@ -565,7 +600,10 @@ class _RiderShellState extends State<RiderShell> {
           const SizedBox(height: 10),
           Row(
             children: [
-              _headerStat('Balance', formatCedis(user.balance)),
+              _headerStat(
+                'Balance',
+                formatCedis(context.select<Session, double>((s) => s.user?.balance ?? 0)),
+              ),
               const SizedBox(width: 8),
               _headerStat('Active', '${_activeOrders.length}'),
               const SizedBox(width: 8),
@@ -613,14 +651,20 @@ class _RiderShellState extends State<RiderShell> {
     );
   }
 
-  Widget _buildDriveTab(bool showRoute) {
+  Widget _buildDriveTab() {
+    final showRoute = (_incoming != null || _primaryActive != null) &&
+        _mapPickup() != null &&
+        _mapDestination() != null;
+    final pickup = _mapPickup();
+    final destination = _mapDestination() ?? _myPositionNotifier.value;
+
     return Stack(
       fit: StackFit.expand,
       children: [
-        RideGoogleMap(
-          pickup: _mapPickup(),
-          destination: _mapDestination() ?? _myPosition,
-          riderPosition: _myPosition,
+        RiderDriveMapLayer(
+          riderPosition: _myPositionNotifier,
+          pickup: pickup,
+          destination: destination,
           showRoute: showRoute,
         ),
         if (!_isOnline)
@@ -663,13 +707,75 @@ class _RiderShellState extends State<RiderShell> {
             alignment: const Alignment(0, -0.2),
             child: MapPulseMarker(),
           ),
+        if (_primaryActive != null && _incoming == null)
+          Align(
+            alignment: Alignment.topCenter,
+            child: SafeArea(
+              bottom: false,
+              child: _activeTripHud(_primaryActive!),
+            ),
+          ),
         Align(
           alignment: Alignment.bottomCenter,
-          child: _incoming != null
-              ? _incomingSheet(_incoming!)
-              : _driveBottomSheet(),
+          child: _driveBottomSheet(),
         ),
       ],
+    );
+  }
+
+  Widget _activeTripHud(Order order) {
+    final nav = navigationTarget(order, _vendors);
+    final phase = tripPhase(order);
+    final label = phase == TripPhase.toPickup ? 'Head to pickup' : 'Head to drop-off';
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+      child: Material(
+        color: const Color(0xFF0F172A).withValues(alpha: 0.92),
+        borderRadius: BorderRadius.circular(16),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      label,
+                      style: const TextStyle(
+                        color: BytzGoTheme.accent,
+                        fontWeight: FontWeight.w900,
+                        fontSize: 12,
+                      ),
+                    ),
+                    if (nav != null)
+                      Text(
+                        nav.label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.75),
+                          fontSize: 12,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              FilledButton.icon(
+                onPressed: nav == null ? null : () => _openNavigation(order),
+                icon: const Icon(Icons.navigation, size: 16),
+                label: const Text('Navigate'),
+                style: FilledButton.styleFrom(
+                  backgroundColor: BytzGoTheme.accent,
+                  foregroundColor: const Color(0xFF020617),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
@@ -715,7 +821,7 @@ class _RiderShellState extends State<RiderShell> {
             const SizedBox(height: 12),
             Row(
               children: [
-                _statCard('Today', formatCedis(_earningsToday)),
+                _statCard('Earnings', formatCedis(_earningsToday)),
                 const SizedBox(width: 10),
                 _statCard('Trips', '$_tripsToday'),
                 const SizedBox(width: 10),
@@ -965,71 +1071,6 @@ class _RiderShellState extends State<RiderShell> {
     );
   }
 
-  Widget _incomingSheet(Order order) {
-    final fee = order.deliveryFee ?? order.total;
-    final secs = offerSecondsRemaining(order);
-    return RideSheet(
-      padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  color: BytzGoTheme.warning.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: const Text(
-                  'INCOMING',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w800,
-                    fontSize: 12,
-                    color: BytzGoTheme.warning,
-                  ),
-                ),
-              ),
-              if (secs != null) ...[
-                const SizedBox(width: 8),
-                Text('${secs}s', style: const TextStyle(fontWeight: FontWeight.w800)),
-              ],
-              const Spacer(),
-              Text(
-                formatCedis(fee),
-                style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w900),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          if (order.pickup != null) Text('Pickup: ${order.pickup}', style: BytzGoTheme.sheetBody()),
-          Text('Drop-off: ${order.address}', style: BytzGoTheme.sheetBody()),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: _accepting ? null : _declineRide,
-                  child: const Text('Decline'),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                flex: 2,
-                child: RideAccentButton(
-                  label: 'Accept',
-                  loading: _accepting,
-                  onPressed: () => _acceptOrder(order),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _buildTripsTab() {
     final trips = _completedTrips;
     return RefreshIndicator(
@@ -1264,11 +1305,23 @@ class _RiderShellState extends State<RiderShell> {
       });
       return;
     }
+    final payoutPhone = _withdrawMethod == 'momo'
+        ? _withdrawPhone.text.trim()
+        : '${_withdrawBank.text.trim()} | ${_withdrawAccName.text.trim()} | ${_withdrawAccNum.text.trim()}';
+    if (payoutPhone.isEmpty) {
+      setState(() {
+        _walletMsg = _withdrawMethod == 'momo'
+            ? 'Enter MoMo phone number'
+            : 'Enter bank details';
+        _walletOk = false;
+      });
+      return;
+    }
     setState(() => _withdrawing = true);
     try {
       final balance = await _wallet.withdraw(
         amount: amount,
-        phone: _withdrawPhone.text.trim(),
+        phone: payoutPhone,
         method: _withdrawMethod,
         network: _withdrawNetwork,
       );
@@ -1354,6 +1407,17 @@ class _RiderShellState extends State<RiderShell> {
           label: _profileSaving ? 'Saving…' : 'Save profile',
           onPressed: _profileSaving ? null : _saveProfile,
         ),
+        const SizedBox(height: 12),
+        OutlinedButton.icon(
+          onPressed: _confirmLogout,
+          icon: const Icon(Icons.logout),
+          label: const Text('Sign out'),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: Colors.white70,
+            side: const BorderSide(color: Color(0xFF334155)),
+            padding: const EdgeInsets.symmetric(vertical: 14),
+          ),
+        ),
       ],
     );
   }
@@ -1399,7 +1463,10 @@ class _RiderShellState extends State<RiderShell> {
             final selected = _tab == tab;
             return Expanded(
               child: InkWell(
-                onTap: () => setState(() => _tab = tab),
+                onTap: () {
+          setState(() => _tab = tab);
+          _syncOfferTimer();
+        },
                 child: Padding(
                   padding: const EdgeInsets.symmetric(vertical: 10),
                   child: Column(

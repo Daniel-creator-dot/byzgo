@@ -11,10 +11,18 @@ class Env {
   static const String googleWebClientId = String.fromEnvironment(
     'GOOGLE_WEB_CLIENT_ID',
     defaultValue:
-        '1032098732502-0epk23vau4pdg9o253mq9hh04ccf9upo.apps.googleusercontent.com',
+        '568487483843-99c0bucqujokf2h1vtmno1ku0jea7b4f.apps.googleusercontent.com',
   );
 
-  static String get apiBaseUrl => apiUrl.replaceAll(RegExp(r'/$'), '');
+  /// Render redirects apex → www; Dio fails on 307 for POST unless we use www directly.
+  static String get apiBaseUrl {
+    var url = apiUrl.replaceAll(RegExp(r'/$'), '');
+    final uri = Uri.tryParse(url);
+    if (uri != null && uri.host == 'bytzgo.net') {
+      return uri.replace(host: 'www.bytzgo.net').toString();
+    }
+    return url;
+  }
 
   static bool get isGoogleSignInEnabled =>
       googleWebClientId.trim().contains('.apps.googleusercontent.com');

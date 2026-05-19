@@ -4,9 +4,9 @@ import 'package:provider/provider.dart';
 import '../../core/session.dart';
 import '../../models/location_point.dart';
 import '../../models/vendor.dart';
-import '../../shared/rider_trip.dart';
 import '../../shared/theme.dart';
 import '../orders/orders_repository.dart';
+import 'customer_vendor_menu_screen.dart';
 class CustomerShopsTab extends StatefulWidget {
   const CustomerShopsTab({
     super.key,
@@ -71,26 +71,15 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
         .toList();
   }
 
-  void _selectVendor(Vendor vendor) {
-    if (vendor.lat == null ||
-        vendor.lng == null ||
-        !hasValidCoords(vendor.lat!, vendor.lng!)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('This shop has no map location yet'),
-          behavior: SnackBarBehavior.floating,
+  void _openVendorMenu(Vendor vendor) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (ctx) => CustomerVendorMenuScreen(
+          vendor: vendor,
+          onBookPickup: widget.onShopPickup,
         ),
-      );
-      return;
-    }
-    final point = LocationPoint(
-      address: vendor.address?.isNotEmpty == true
-          ? vendor.address!
-          : vendor.name,
-      lat: vendor.lat!,
-      lng: vendor.lng!,
+      ),
     );
-    widget.onShopPickup(point);
   }
 
   @override
@@ -147,7 +136,7 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
                                       .withValues(alpha: 0.35),
                                   borderRadius: BorderRadius.circular(16),
                                   child: InkWell(
-                                    onTap: () => _selectVendor(v),
+                                    onTap: () => _openVendorMenu(v),
                                     borderRadius: BorderRadius.circular(16),
                                     child: Padding(
                                       padding: const EdgeInsets.all(14),
@@ -198,7 +187,7 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
                                             ),
                                           ),
                                           const Icon(
-                                            Icons.delivery_dining,
+                                            Icons.chevron_right,
                                             color: BytzGoTheme.brandBlue,
                                           ),
                                         ],

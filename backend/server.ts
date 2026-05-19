@@ -23,7 +23,7 @@ const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || 'bytzgo-72f1c';
 const GOOGLE_WEB_CLIENT_ID =
   process.env.GOOGLE_WEB_CLIENT_ID?.trim() ||
   process.env.VITE_GOOGLE_CLIENT_ID?.trim() ||
-  '1032098732502-0epk23vau4pdg9o253mq9hh04ccf9upo.apps.googleusercontent.com';
+  '568487483843-99c0bucqujokf2h1vtmno1ku0jea7b4f.apps.googleusercontent.com';
 const googleOAuthClient = new OAuth2Client();
 let firebaseAdminHasCredentials = false;
 
@@ -2464,35 +2464,50 @@ app.post('/api/orders/:id/rate', authenticateToken, async (req: any, res) => {
   }
 });
 
+const CUSTOMER_CANCELLABLE_STATUSES = ['pending', 'ready', 'preparing'];
+
 app.post('/api/orders/:id/cancel', authenticateToken, async (req: any, res) => {
   const orderId = req.params.id;
   try {
-    const orderRes = await pool.query('SELECT status, total, customer_id FROM orders WHERE id = $1', [orderId]);
+    const orderRes = await pool.query('SELECT * FROM orders WHERE id = $1', [orderId]);
     if (orderRes.rowCount === 0) return res.status(404).json({ message: 'Order not found' });
-    
-    const order = orderRes.rows[0];
-    if (order.status !== 'pending') {
-      return res.status(400).json({ message: 'Only pending orders can be cancelled' });
-    }
 
+    const order = orderRes.rows[0];
     if (order.customer_id !== req.user.id) {
       return res.status(403).json({ message: 'Unauthorized' });
     }
+    if (!CUSTOMER_CANCELLABLE_STATUSES.includes(order.status)) {
+      return res.status(400).json({
+        message: 'This trip can no longer be cancelled (package already picked up or delivered).',
+      });
+    }
 
-    await pool.query('UPDATE orders SET status = $1 WHERE id = $2', ['cancelled', orderId]);
-    
-    // Only refund if the order was paid online
-    if (order.payment_status === 'paid') {
-      const bRes = await pool.query('UPDATE users SET balance = balance + $1 WHERE id = $2 RETURNING balance', [order.total, req.user.id]);
+    const prevRiderId = order.rider_id;
+    const updated = await pool.query(
+      `UPDATE orders SET status = 'cancelled', rider_id = NULL, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1 RETURNING *`,
+      [orderId]
+    );
+    const cancelled = updated.rows[0];
+
+    if (cancelled.payment_status === 'paid') {
+      const bRes = await pool.query(
+        'UPDATE users SET balance = balance + $1 WHERE id = $2 RETURNING balance',
+        [cancelled.total, req.user.id]
+      );
       await pool.query(
         'INSERT INTO wallet_transactions (user_id, amount, type, reference) VALUES ($1, $2, $3, $4)',
-        [req.user.id, order.total, 'topup', `Refund for cancelled order #${orderId.slice(-6)}`]
+        [req.user.id, cancelled.total, 'topup', `Refund for cancelled order #${orderId.slice(-6)}`]
       );
       io.to(req.user.id).emit('wallet:updated', { balance: parseFloat(bRes.rows[0].balance) });
     }
 
-    res.json({ message: 'Order cancelled successfully' });
-    io.emit('order:updated', { ...order, status: 'cancelled' });
+    if (prevRiderId) {
+      await notifyRideTaken(orderId, prevRiderId);
+    }
+
+    res.json(sanitizeOrderForRole(cancelled, req.user.role, req.user.id));
+    broadcastOrderUpdated(cancelled);
   } catch (err) {
     console.error('Cancel order error:', err);
     res.status(500).json({ message: 'Server error' });
@@ -2802,8 +2817,7 @@ io.on('connection', (socket) => {
 
 /** Production: serve Vite build so bytzgo.net serves web + /api (Flutter uses same host). */
 function attachWebApp() {
-  const shouldServe =
-    process.env.SERVE_WEB === 'true' || process.env.NODE_ENV === 'production';
+  const shouldServe = process.env.SERVE_WEB === 'true';
   if (!shouldServe) return;
 
   const distDir = path.join(__dirname, '..', 'dist');

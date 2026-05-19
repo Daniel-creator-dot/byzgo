@@ -91,7 +91,7 @@ Write-Host "Updated lib/core/maps_key.dart"
 
 # dart_defines.json (merge maps key; preserve API_URL + Google OAuth client)
 $definesFile = Join-Path $mobileRoot "dart_defines.json"
-$defaultApiUrl = "https://bytzgo.net"
+$defaultApiUrl = "https://www.bytzgo.net"
 foreach ($line in (Get-Content $envFile -ErrorAction SilentlyContinue)) {
     $t = $line.Trim()
     if ($t -match '^\s*MOBILE_API_URL\s*=\s*(.+)$') {
@@ -110,7 +110,7 @@ foreach ($line in (Get-Content $envFile -ErrorAction SilentlyContinue)) {
 $defines = @{
     GOOGLE_MAPS_API_KEY = $key
     API_URL = $defaultApiUrl
-    GOOGLE_WEB_CLIENT_ID = "1032098732502-0epk23vau4pdg9o253mq9hh04ccf9upo.apps.googleusercontent.com"
+    GOOGLE_WEB_CLIENT_ID = "568487483843-99c0bucqujokf2h1vtmno1ku0jea7b4f.apps.googleusercontent.com"
 }
 if (Test-Path $definesFile) {
     try {

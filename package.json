@@ -5,7 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "npm run flutter:android",
+    "dev:web": "vite",
+    "dev:admin": "vite --open /admin",
     "backend": "npm --prefix backend run dev",
+    "create:admin": "node backend/scripts/create-admin.mjs",
     "app": "npm run flutter:android",
     "icons": "python mobile/scripts/generate_app_icon.py",
     "flutter:chrome": "cd mobile && ..\\.flutter-sdk\\bin\\flutter run -d chrome --dart-define-from-file=dart_defines.json",

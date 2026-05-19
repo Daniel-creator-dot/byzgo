@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -19,6 +21,7 @@ import '../../shared/widgets/bytz_brand.dart';
 import '../../shared/widgets/ride_google_map.dart';
 import '../../shared/widgets/ride_ui.dart';
 import '../orders/orders_repository.dart';
+import '../riders/riders_repository.dart';
 import '../../shared/widgets/location_autocomplete_field.dart';
 import 'customer_trip_tracking.dart';
 
@@ -63,9 +66,12 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
   String? _error;
   double _pricePerKm = defaultDeliveryPricePerKm;
   LocationPoint? _riderPosition;
+  List<LocationPoint> _nearbyRiders = [];
+  Timer? _nearbyPoll;
   SocketService? _socket;
 
   OrdersRepository get _ordersRepo => context.read<OrdersRepository>();
+  RidersRepository get _ridersRepo => context.read<RidersRepository>();
   Session get _session => context.read<Session>();
   LocationService get _location => context.read<LocationService>();
   PlacesService get _places => context.read<PlacesService>();
@@ -131,8 +137,60 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
     }
   }
 
+  bool get _searchingBiker {
+    final active = _activeCourier;
+    return active != null && customerIsSearchingBiker(active);
+  }
+
+  LocationPoint? _pickupForOrder(Order order) {
+    if (order.pickupLat != null &&
+        order.pickupLng != null &&
+        hasValidCoords(order.pickupLat!, order.pickupLng!)) {
+      return LocationPoint(
+        address: order.pickupAddress ?? order.pickup ?? '',
+        lat: order.pickupLat!,
+        lng: order.pickupLng!,
+      );
+    }
+    return _pickup;
+  }
+
+  void _syncNearbyPoll() {
+    if (_searchingBiker) {
+      if (_nearbyPoll == null) {
+        _fetchNearbyRiders();
+        _nearbyPoll = Timer.periodic(
+          const Duration(seconds: 5),
+          (_) => _fetchNearbyRiders(),
+        );
+      }
+    } else {
+      _nearbyPoll?.cancel();
+      _nearbyPoll = null;
+      if (_nearbyRiders.isNotEmpty && mounted) {
+        setState(() => _nearbyRiders = []);
+      }
+    }
+  }
+
+  Future<void> _fetchNearbyRiders() async {
+    final active = _activeCourier;
+    if (active == null || !customerIsSearchingBiker(active)) return;
+    final center = _pickupForOrder(active);
+    if (center == null || !center.hasCoords) return;
+    try {
+      final riders = await _ridersRepo.fetchNearby(
+        lat: center.lat,
+        lng: center.lng,
+      );
+      if (!mounted) return;
+      setState(() => _nearbyRiders = riders);
+    } catch (_) {}
+  }
+
   @override
   void dispose() {
+    _nearbyPoll?.cancel();
     _socket?.clearHandlers();
     _pickupCtrl.dispose();
     _dropoffCtrl.dispose();
@@ -159,9 +217,10 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
         _snack('Delivered — thanks for using BytzGO!', success: true);
       } else if (order.status == 'arrived' && prev?.status != 'arrived') {
         _snack('Driver arrived — complete payment for your PIN', success: true);
-      } else if (order.riderId != null && prev?.riderId == null) {
+      } else       if (order.riderId != null && prev?.riderId == null) {
         _snack('Biker found — they\'re on the way', success: true);
       }
+      _syncNearbyPoll();
     };
     socket.onWalletUpdated = (balance) {
       if (!mounted) return;
@@ -189,7 +248,15 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
       } else {
         _orders = [order, ..._orders];
       }
+      if (order.status == 'cancelled') {
+        _riderPosition = null;
+        _nearbyRiders = [];
+      }
     });
+    _syncNearbyPoll();
+    if (order.status == 'cancelled') {
+      _snack('Delivery request cancelled', success: true);
+    }
   }
 
   Future<void> _detectPickup() async {
@@ -279,6 +346,7 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
             : list.where((o) => o.customerId == userId).toList();
         _loading = false;
       });
+      _syncNearbyPoll();
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -364,6 +432,7 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
       setState(() {
         _orders = [order, ..._orders];
       });
+      _syncNearbyPoll();
       _snack('Bike requested — waiting for a rider', success: true);
     } catch (e) {
       _snack(OrdersRepository.errorMessage(e));
@@ -387,13 +456,17 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
     final active = _activeCourier;
     final tracking = active != null;
     final fee = _deliveryFee;
+    final searching = tracking && customerIsSearchingBiker(active);
+    final mapPickup = tracking ? (_pickupForOrder(active) ?? _pickup) : _pickup;
 
     return RideShell(
       mapChild: RideGoogleMap(
-        pickup: _pickup,
+        pickup: mapPickup,
         destination: _destination,
         riderPosition: _riderPosition,
-        showRoute: _pickup != null && _destination != null,
+        nearbyRiders: searching ? _nearbyRiders : const [],
+        showSearchRadar: searching,
+        showRoute: mapPickup != null && _destination != null,
         mapPickMode: _pickMode,
         onMapTap: tracking ? null : _onMapTap,
       ),
@@ -405,6 +478,8 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
                   padding: const EdgeInsets.only(top: 64),
                   child: TripStatusChip(
                     label: customerTripHeadline(active),
+                    searching: searching,
+                    nearbyCount: searching ? _nearbyRiders.length : null,
                   ),
                 ),
               ),

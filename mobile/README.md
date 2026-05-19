@@ -140,8 +140,23 @@ Email login works **without** Firebase.
    flutterfire configure
    ```
    This replaces [`lib/firebase_options.dart`](lib/firebase_options.dart). Set `isConfigured = true` in the generated file (or remove the stub flag per FlutterFire output).
-3. Add `google-services.json` (Android) and `GoogleService-Info.plist` (iOS).
-4. Run with web client ID:
+3. **Android Google Sign-In (required for “Continue with Google” on APK):**
+
+   Error `PlatformException(sign_in_failed … : 10)` means the APK signing certificate is not in Google Cloud.
+
+   ```powershell
+   .\mobile\scripts\print_google_signin_android.ps1
+   ```
+
+   Then [Google Cloud Credentials](https://console.cloud.google.com/apis/credentials?project=bytzgo-72f1c) → **Create credentials** → **OAuth client ID** → **Android**:
+
+   - Package: `com.bytzgo.bytzgo_mobile`
+   - SHA-1: from the script (debug keystore if you install the release APK built on this PC)
+
+   Keep your existing **Web** client for `GOOGLE_WEB_CLIENT_ID` / `serverClientId`.
+
+4. Optional: add `google-services.json` (Android) and `GoogleService-Info.plist` (iOS) via `flutterfire configure`.
+5. Run with web client ID:
    ```powershell
    flutter run ^
      --dart-define=API_URL=http://10.0.2.2:3000 ^

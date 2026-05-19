@@ -32,9 +32,9 @@ if (-not $ApiUrl) {
 if (-not $ApiUrl) {
   $ApiUrl = Read-EnvValue "VITE_API_URL"
 }
-# Production default: same host as Render web+API (bytzgo.net)
+# Production default: www avoids Render 307 apex→www redirect on POST (Dio login).
 if (-not $ApiUrl) {
-  $ApiUrl = "https://bytzgo.net"
+  $ApiUrl = "https://www.bytzgo.net"
 }
 
 $ApiUrl = $ApiUrl.TrimEnd("/")

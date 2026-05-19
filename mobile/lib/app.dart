@@ -10,6 +10,7 @@ import 'core/session.dart';
 import 'core/socket_service.dart';
 import 'features/auth/auth_repository.dart';
 import 'features/orders/orders_repository.dart';
+import 'features/riders/riders_repository.dart';
 import 'features/wallet/wallet_repository.dart';
 import 'routing/app_router.dart';
 import 'shared/theme.dart';
@@ -67,6 +68,7 @@ class _BytzGoAppState extends State<BytzGoApp> {
         ChangeNotifierProvider<Session>.value(value: _session),
         Provider(create: (ctx) => AuthRepository(ctx.read<ApiClient>())),
         Provider(create: (ctx) => OrdersRepository(ctx.read<ApiClient>())),
+        Provider(create: (ctx) => RidersRepository(ctx.read<ApiClient>())),
         Provider(create: (ctx) => WalletRepository(ctx.read<ApiClient>())),
         Provider(create: (ctx) => ConfigRepository(ctx.read<ApiClient>())),
         Provider(create: (_) => LocationService()),

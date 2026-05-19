@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'biker_search_radar.dart';
 import 'ride_map_background.dart';
 import '../theme.dart';
 
@@ -465,10 +466,14 @@ class TripStatusChip extends StatelessWidget {
     super.key,
     required this.label,
     this.icon = Icons.two_wheeler,
+    this.searching = false,
+    this.nearbyCount,
   });
 
   final String label;
   final IconData icon;
+  final bool searching;
+  final int? nearbyCount;
 
   @override
   Widget build(BuildContext context) {
@@ -477,6 +482,9 @@ class TripStatusChip extends StatelessWidget {
       decoration: BoxDecoration(
         color: BytzGoTheme.sheetBg,
         borderRadius: BorderRadius.circular(24),
+        border: searching
+            ? Border.all(color: BytzGoTheme.brandBlue.withValues(alpha: 0.35))
+            : null,
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.2),
@@ -488,15 +496,29 @@ class TripStatusChip extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 18, color: BytzGoTheme.accent),
+          if (searching)
+            const BikerSearchRadar(size: 28, color: BytzGoTheme.brandBlue)
+          else
+            Icon(icon, size: 18, color: BytzGoTheme.accent),
           const SizedBox(width: 8),
-          Text(
-            label,
-            style: const TextStyle(
-              fontWeight: FontWeight.w700,
-              fontSize: 14,
-              color: BytzGoTheme.sheetText,
-            ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                label,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 14,
+                  color: BytzGoTheme.sheetText,
+                ),
+              ),
+              if (searching && nearbyCount != null && nearbyCount! > 0)
+                Text(
+                  '$nearbyCount biker${nearbyCount == 1 ? '' : 's'} nearby',
+                  style: BytzGoTheme.sheetBody(11),
+                ),
+            ],
           ),
         ],
       ),

@@ -1024,10 +1024,15 @@ function loginRejectedMessage(actualRole: Role, expectedRole: Role): string {
   return `This account is registered as ${actualRole}. Use ${rolePortalHint(actualRole)}, or sign up as ${expectedRole} on this page.`;
 }
 
+function isValidGhanaPhoneClient(phone: string): boolean {
+  const d = phone.trim().replace(/\s+/g, '');
+  return /^0\d{9}$/.test(d) || /^233\d{9}$/.test(d) || /^\d{9}$/.test(d);
+}
+
 function mapAuthError(err: unknown, fallback: string): string {
   const e = err as { code?: string; response?: { data?: { message?: string } }; message?: string };
   if (e.code === 'auth/popup-closed-by-user') return 'Sign-in was cancelled.';
-  if (e.code === 'auth/popup-blocked') return 'Pop-up blocked. Allow pop-ups for localhost and try again.';
+  if (e.code === 'auth/popup-blocked') return 'Redirecting to Google sign-in…';
   if (e.code === 'auth/cancelled-popup-request') return 'Please wait and try Google sign-in again.';
   return e.response?.data?.message || e.message || fallback;
 }
@@ -1046,6 +1051,7 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [adminInviteSecret, setAdminInviteSecret] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -1074,6 +1080,10 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
         setError('Phone number is required for verification.');
         return;
       }
+      if (!isValidGhanaPhoneClient(phone)) {
+        setError('Enter a valid Ghana phone number (e.g. 0247904675).');
+        return;
+      }
       setLoading(true);
       try {
         await axios.post('/api/auth/send-signup-otp', { phone, email });
@@ -1089,12 +1099,26 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
       return;
     }
 
+    if (!isLogin && role === 'admin' && !adminInviteSecret.trim()) {
+      setError('Admin invite code is required.');
+      return;
+    }
+
     // Standard Login / Non-customer signup flow
     setLoading(true);
     try {
       const endpoint = isLogin ? '/api/auth/login' : '/api/auth/register';
-      const payload = isLogin ? { email, password } : { name, email, password, role, phone };
-      
+      const payload = isLogin
+        ? { email, password }
+        : {
+            name,
+            email,
+            password,
+            role,
+            ...(role === 'customer' ? { phone } : {}),
+            ...(role === 'admin' ? { adminInviteSecret: adminInviteSecret.trim() } : {}),
+          };
+
       const res = await axios.post(endpoint, payload);
       const accepted = onLogin(res.data.user, res.data.token);
       if (accepted === false) {
@@ -1141,7 +1165,12 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
       setError('Registered phone number is required.');
       return;
     }
+    if (!isValidGhanaPhoneClient(phone)) {
+      setError('Enter a valid Ghana phone number (e.g. 0247904675).');
+      return;
+    }
     setLoading(true);
+    setOtpError('');
     try {
       await axios.post('/api/auth/send-forgot-otp', { phone });
       setOtpPurpose('forgot_password');
@@ -1149,6 +1178,7 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
       setOtp('');
       setNewPassword('');
       setConfirmPassword('');
+      setError('');
     } catch (err: any) {
       setError(err.response?.data?.message || 'Failed to send recovery code. Phone number might not be registered.');
     } finally {
@@ -1158,6 +1188,7 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
 
   const handleResendOtp = async () => {
     setOtpError('');
+    setError('');
     setResendLoading(true);
     try {
       await axios.post('/api/auth/resend-otp', {
@@ -1166,7 +1197,12 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
         ...(otpPurpose === 'signup_verify' ? { email } : {}),
       });
       setOtpError('');
-      alert('A new verification code was sent to your phone.');
+      if (isForgotPassword) {
+        setError('');
+        alert('A new reset code was sent to your phone.');
+      } else {
+        alert('A new verification code was sent to your phone.');
+      }
     } catch (err: unknown) {
       const e = err as { response?: { data?: { message?: string } } };
       setOtpError(e.response?.data?.message || 'Could not resend code. Try again shortly.');
@@ -1178,6 +1214,7 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
   const handleResetPassword = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    setOtpError('');
     if (!otp) {
       setError('Verification code is required.');
       return;
@@ -1206,38 +1243,99 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
     }
   };
 
+  const finishGoogleLogin = async (idToken: string) => {
+    const res = await axios.post('/api/auth/google', {
+      credential: idToken,
+      role,
+    });
+    const accepted = onLogin(res.data.user, res.data.token);
+    if (accepted === false) {
+      setError(loginRejectedMessage(res.data.user.role as Role, forcedRole || role));
+    }
+  };
+
+  const handleGoogleSignIn = async () => {
+    setLoading(true);
+    setError('');
+    try {
+      localStorage.setItem('google_login_role', role);
+      let result;
+      try {
+        result = await signInWithPopup(auth, googleProvider);
+      } catch (popupErr: unknown) {
+        const code = (popupErr as { code?: string }).code;
+        if (code === 'auth/popup-blocked') {
+          await signInWithRedirect(auth, googleProvider);
+          return;
+        }
+        throw popupErr;
+      }
+      await finishGoogleLogin(await result.user.getIdToken());
+    } catch (err: unknown) {
+      console.error('Google sign-in failed:', err);
+      setError(mapAuthError(err, 'Google sign-in failed. Try email and password instead.'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const heroImage =
+    forcedRole === 'rider'
+      ? '/branding/hero_rider.png'
+      : forcedRole === 'vendor'
+        ? '/branding/hero_delivery.png'
+        : '/branding/hero_login.png';
+
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4">
-      <motion.div 
+    <>
+    <motion.div className="min-h-screen relative overflow-hidden bg-slate-950">
+      <motion.div
+        className="absolute inset-0 bg-cover bg-center scale-105"
+        style={{ backgroundImage: `url(${heroImage})` }}
+        aria-hidden
+      />
+      <div className="absolute inset-0 bg-gradient-to-b from-black/40 via-black/55 to-black/90" aria-hidden />
+      <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        className="max-w-md w-full"
+        className="relative z-10 min-h-screen flex flex-col items-center justify-end sm:justify-center p-4 pb-8"
       >
-        <div className="text-center mb-10">
-          <div className="flex justify-center mb-6">
-            <div className="w-20 h-20 bg-white shadow-2xl shadow-brand-blue/20 rounded-3xl flex items-center justify-center transform rotate-6 border border-slate-100">
-              <MotorIcon size={40} className="text-brand-blue transform -scale-x-100" />
-            </div>
-          </div>
-          <h1 className="text-5xl font-black tracking-tighter mb-2">
-            <span className="text-brand-blue">bytz</span>
-            <span className="text-brand-green">go</span>
+        <motion.div className="w-full max-w-md mb-6 sm:mb-8 text-center px-2">
+          <h1 className="text-5xl sm:text-6xl font-black tracking-tighter mb-2 drop-shadow-lg">
+            <span className="text-brand-blue">Bytz</span>
+            <span className="text-brand-green">GO</span>
           </h1>
-          <p className="text-slate-500 font-medium italic">
-            {forcedRole === 'rider' ? 'Rider driver app' : forcedRole === 'vendor' ? 'Vendor portal' : 'Your daily delivery partner'}
+          <p className="text-white/90 font-semibold text-sm sm:text-base drop-shadow">
+            {forcedRole === 'rider'
+              ? 'Rider driver app'
+              : forcedRole === 'vendor'
+                ? 'Vendor portal'
+                : forcedRole === 'admin'
+                  ? 'Platform admin — approve vendors, menu items, and settings'
+                  : 'Fast bike delivery — track every trip live'}
           </p>
-          {forcedRole === 'rider' && (
-            <motion.div className="mt-4 mx-auto max-w-sm p-3 rounded-2xl bg-slate-900 text-left border border-slate-800">
-              <p className="text-[10px] font-black uppercase tracking-widest text-brand-green mb-1">Rider sign-in</p>
-              <p className="text-xs text-slate-400 leading-relaxed">
-                Use a <strong className="text-white">rider</strong> account here. A Google account registered as customer must use the home app, or tap Join to register as rider.
+          {forcedRole === 'admin' && (
+            <motion.div className="mt-4 mx-auto max-w-sm p-3 rounded-2xl bg-black/50 backdrop-blur-md text-left border border-white/10">
+              <p className="text-[10px] font-black uppercase tracking-widest text-red-400 mb-1">Admin sign-in</p>
+              <p className="text-xs text-slate-200 leading-relaxed">
+                Use an <strong className="text-white">admin</strong> account only. Run{' '}
+                <code className="text-[10px] bg-black/40 px-1 rounded">npm run create:admin</code> for a local account, or Join with your invite code.
               </p>
-              <p className="text-[10px] text-slate-500 mt-2 font-mono">Demo: rider@bytzgo.com / Test@1234</p>
+              <p className="text-[10px] text-slate-400 mt-2 font-mono">Default: admin@bytzgo.net / Admin@2026</p>
             </motion.div>
           )}
-        </div>
+          {forcedRole === 'rider' && (
+            <motion.div className="mt-4 mx-auto max-w-sm p-3 rounded-2xl bg-black/50 backdrop-blur-md text-left border border-white/10">
+              <p className="text-[10px] font-black uppercase tracking-widest text-brand-green mb-1">Rider sign-in</p>
+              <p className="text-xs text-slate-200 leading-relaxed">
+                Use a <strong className="text-white">rider</strong> account here. A Google account registered as customer must use the home app, or tap Join to register as rider.
+              </p>
+              <p className="text-[10px] text-slate-400 mt-2 font-mono">Demo: rider@bytzgo.net / Rider@2026</p>
+            </motion.div>
+          )}
+        </motion.div>
 
-        <div className="bg-white p-8 rounded-[2.5rem] shadow-xl shadow-slate-200/50 border border-slate-100">
+        <motion.div className="w-full max-w-md bg-white/95 backdrop-blur-md p-8 rounded-[2.5rem] shadow-2xl shadow-black/40 border border-white/20">
           {isForgotPassword ? (
             // Forgot Password Flow
             <div className="space-y-6">
@@ -1245,6 +1343,12 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
                 <h3 className="text-xl font-black italic tracking-tighter text-slate-800 uppercase">Recover Password</h3>
                 <p className="text-xs font-medium text-slate-400 mt-1 uppercase tracking-widest">Via INTEK SMS OTP Verification</p>
               </div>
+
+              {(error || otpError) && (
+                <p className="text-[10px] font-black text-red-500 uppercase tracking-widest text-center px-2">
+                  {error || otpError}
+                </p>
+              )}
 
               {forgotStep === 1 ? (
                 <form onSubmit={handleSendForgotOtp} className="space-y-6">
@@ -1420,7 +1524,7 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
                   </div>
                 </div>
 
-                {!isLogin && (
+                {!isLogin && role === 'customer' && (
                   <div className="space-y-2">
                     <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-4">Phone Number</label>
                     <div className="relative">
@@ -1431,6 +1535,23 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
                         value={phone}
                         onChange={(e) => setPhone(e.target.value)}
                         placeholder="e.g. 024XXXXXXX"
+                        className="w-full bg-slate-50 border border-slate-100 p-4 pl-12 rounded-2xl focus:outline-none focus:border-brand-blue font-bold text-sm"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {!isLogin && forcedRole === 'admin' && (
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-4">Admin invite code</label>
+                    <div className="relative">
+                      <Shield className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" size={18} />
+                      <input
+                        type="password"
+                        required
+                        value={adminInviteSecret}
+                        onChange={(e) => setAdminInviteSecret(e.target.value)}
+                        placeholder="From ADMIN_INVITE_SECRET in backend/.env"
                         className="w-full bg-slate-50 border border-slate-100 p-4 pl-12 rounded-2xl focus:outline-none focus:border-brand-blue font-bold text-sm"
                       />
                     </div>
@@ -1477,12 +1598,13 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
                 <button 
                   type="submit"
                   disabled={loading}
-                  className="w-full py-4 bg-brand-blue text-white rounded-2xl font-black uppercase tracking-widest text-xs hover:scale-[1.02] active:scale-[0.98] transition-all shadow-xl shadow-brand-blue/20 flex items-center justify-center gap-2"
+                  className="w-full py-4 bg-brand-green text-slate-900 rounded-2xl font-black uppercase tracking-widest text-xs hover:scale-[1.02] active:scale-[0.98] transition-all shadow-xl shadow-brand-green/30 flex items-center justify-center gap-2"
                 >
                   {loading ? <LoadingIndicator size="sm" variant="white" /> : (isLogin ? 'Sign In' : 'Create Account')}
                 </button>
               </form>
 
+              {forcedRole !== 'admin' && (
               <div className="mt-6">
                 <div className="flex items-center gap-4 mb-5">
                   <div className="flex-1 h-px bg-slate-200"></div>
@@ -1491,28 +1613,8 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
                 </div>
                 <div className="flex justify-center">
                   <button
-                    onClick={async () => {
-                      setLoading(true);
-                      setError('');
-                      try {
-                        localStorage.setItem('google_login_role', role);
-                        const result = await signInWithPopup(auth, googleProvider);
-                        const idToken = await result.user.getIdToken();
-                        const res = await axios.post('/api/auth/google', {
-                          credential: idToken,
-                          role,
-                        });
-                        const accepted = onLogin(res.data.user, res.data.token);
-                        if (accepted === false) {
-                          setError(loginRejectedMessage(res.data.user.role as Role, forcedRole || role));
-                        }
-                      } catch (err: unknown) {
-                        console.error('Google sign-in failed:', err);
-                        setError(mapAuthError(err, 'Google sign-in failed. Try email and password instead.'));
-                      } finally {
-                        setLoading(false);
-                      }
-                    }}
+                    type="button"
+                    onClick={handleGoogleSignIn}
                     className="w-full max-w-[320px] py-4 bg-white border border-slate-200 rounded-full font-black uppercase tracking-widest text-[10px] flex items-center justify-center gap-3 hover:bg-slate-50 transition-all shadow-sm disabled:opacity-50"
                     disabled={loading}
                   >
@@ -1532,10 +1634,12 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
                   </button>
                 </div>
               </div>
+              )}
             </>
           )}
-        </div>
+        </motion.div>
       </motion.div>
+    </motion.div>
 
       {/* Global Error Modal */}
       <Modal 
@@ -1616,7 +1720,7 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
           </div>
         </form>
       </Modal>
-    </div>
+    </>
   );
 }
 
@@ -1932,6 +2036,13 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
                {walletTab === 'topup' ? (
                  <>
                    <h3 className="text-xl font-black italic tracking-tighter mb-4 text-white">Top Up Wallet</h3>
+                   {typeof window !== 'undefined' &&
+                     (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') &&
+                     paystackKey.startsWith('pk_live_') && (
+                       <p className="mb-4 p-3 rounded-xl bg-amber-500/15 border border-amber-500/40 text-[11px] text-amber-200 leading-relaxed">
+                         Live Paystack keys often fail on localhost. For local testing, set <strong>pk_test_</strong> keys in Admin → Settings.
+                       </p>
+                     )}
                    <div className="mb-5 p-4 rounded-2xl bg-slate-800/80 border border-slate-700">
                      <p className="text-[10px] font-black uppercase tracking-widest text-amber-400 mb-2">Already paid?</p>
                      <p className="text-[11px] text-slate-500 mb-2">

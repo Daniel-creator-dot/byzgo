@@ -20,10 +20,23 @@ bool customerCanShowDeliveryPin(Order order) {
   return ack == 'cash' || ack == 'wallet' || ack == 'paystack';
 }
 
+bool customerIsSearchingBiker(Order order) {
+  if (order.riderId != null) return false;
+  return const {'pending', 'ready', 'preparing'}.contains(order.status);
+}
+
 bool customerNeedsPayment(Order order) {
   return order.status == 'arrived' &&
       order.paymentStatus != 'paid' &&
       (order.customerPaymentAck == null || order.customerPaymentAck!.isEmpty);
+}
+
+/// Before pickup — includes courier trips that start as `ready`.
+bool customerCanCancelOrder(Order order) {
+  if (['delivered', 'cancelled', 'picked_up', 'arrived'].contains(order.status)) {
+    return false;
+  }
+  return const {'pending', 'ready', 'preparing'}.contains(order.status);
 }
 
 String customerTripHeadline(Order order) {

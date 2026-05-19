@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import 'package:flutter/services.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 
 import '../../core/api_client.dart';
@@ -121,8 +122,22 @@ class AuthRepository {
 
     final googleSignIn = GoogleSignIn(
       serverClientId: Env.googleWebClientId,
+      scopes: const ['email', 'profile', 'openid'],
     );
-    final account = await googleSignIn.signIn();
+    late final GoogleSignInAccount? account;
+    try {
+      account = await googleSignIn.signIn();
+    } on PlatformException catch (e) {
+      if (e.code == 'sign_in_failed' && (e.message?.contains(': 10') ?? false)) {
+        throw Exception(
+          'Google Sign-In is not registered for this Android app. '
+          'In Google Cloud (project bytzgo-72f1c), create an Android OAuth client with '
+          'package com.bytzgo.bytzgo_mobile and your APK SHA-1. '
+          'On PC run: mobile/scripts/print_google_signin_android.ps1',
+        );
+      }
+      rethrow;
+    }
     if (account == null) {
       throw Exception('Google sign-in cancelled');
     }
