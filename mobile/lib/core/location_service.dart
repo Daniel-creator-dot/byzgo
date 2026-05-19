@@ -31,12 +31,15 @@ class LocationService {
       ),
     );
 
-    if (!isInGhanaBounds(pos.latitude, pos.longitude)) {
-      // Still return — user may be near border
+    if (!isUsableGhanaLocation(pos.latitude, pos.longitude)) {
+      final fallback = accraDefaultPoint(
+        address: 'Accra, Ghana — set pickup on map',
+      );
+      return fallback;
     }
 
     return LocationPoint(
-      address: formatCoordAddress(pos.latitude, pos.longitude),
+      address: '',
       lat: pos.latitude,
       lng: pos.longitude,
     );

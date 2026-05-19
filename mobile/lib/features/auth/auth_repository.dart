@@ -28,6 +28,90 @@ class AuthRepository {
     return _parseAuthResponse(res.data);
   }
 
+  Future<void> sendSignupOtp({
+    required String phone,
+    required String email,
+  }) async {
+    await _api.dio.post<Map<String, dynamic>>(
+      '/api/auth/send-signup-otp',
+      data: {'phone': phone.trim(), 'email': email.trim()},
+    );
+  }
+
+  Future<void> sendForgotPasswordOtp(String phone) async {
+    await _api.dio.post<Map<String, dynamic>>(
+      '/api/auth/send-forgot-otp',
+      data: {'phone': phone.trim()},
+    );
+  }
+
+  Future<void> resendOtp({
+    required String phone,
+    required String purpose,
+    String? email,
+  }) async {
+    await _api.dio.post<Map<String, dynamic>>(
+      '/api/auth/resend-otp',
+      data: {
+        'phone': phone.trim(),
+        'purpose': purpose,
+        if (email != null) 'email': email.trim(),
+      },
+    );
+  }
+
+  Future<void> verifyOtp({
+    required String phone,
+    required String otp,
+    required String purpose,
+  }) async {
+    await _api.dio.post<Map<String, dynamic>>(
+      '/api/auth/verify-otp',
+      data: {
+        'phone': phone.trim(),
+        'otp': otp.trim(),
+        'purpose': purpose,
+      },
+    );
+  }
+
+  Future<AuthResult> register({
+    required String name,
+    required String email,
+    required String password,
+    required AppRole role,
+    String? phone,
+    String? otp,
+  }) async {
+    final res = await _api.dio.post<Map<String, dynamic>>(
+      '/api/auth/register',
+      data: {
+        'name': name.trim(),
+        'email': email.trim(),
+        'password': password,
+        'role': role.name,
+        if (phone != null && phone.isNotEmpty) 'phone': phone.trim(),
+        if (otp != null) 'otp': otp.trim(),
+      },
+    );
+    return _parseAuthResponse(res.data);
+  }
+
+  Future<void> resetPasswordWithOtp({
+    required String phone,
+    required String otp,
+    required String newPassword,
+  }) async {
+    await _api.dio.post<Map<String, dynamic>>(
+      '/api/auth/reset-password-otp',
+      data: {
+        'phone': phone.trim(),
+        'otp': otp.trim(),
+        'newPassword': newPassword,
+      },
+    );
+  }
+
   Future<AuthResult> signInWithGoogle({AppRole role = AppRole.customer}) async {
     if (!Env.isGoogleSignInEnabled) {
       throw Exception(
@@ -58,12 +142,20 @@ class AuthRepository {
   Future<AuthResult> updateProfile({
     String? phone,
     String? region,
+    String? address,
+    double? lat,
+    double? lng,
+    String? email,
   }) async {
     final res = await _api.dio.patch<Map<String, dynamic>>(
       '/api/auth/profile',
       data: {
         if (phone != null) 'phone': phone,
         if (region != null) 'region': region,
+        if (address != null) 'address': address,
+        if (lat != null) 'lat': lat,
+        if (lng != null) 'lng': lng,
+        if (email != null) 'email': email,
       },
     );
     return _parseAuthResponse(res.data);

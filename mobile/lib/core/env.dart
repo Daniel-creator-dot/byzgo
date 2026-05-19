@@ -7,15 +7,17 @@ class Env {
     defaultValue: 'http://10.0.2.2:3000',
   );
 
-  /// OAuth web client ID for Google Sign-In (required for Google button).
+  /// OAuth web client ID for Google Sign-In (public; override via --dart-define).
   static const String googleWebClientId = String.fromEnvironment(
     'GOOGLE_WEB_CLIENT_ID',
-    defaultValue: '',
+    defaultValue:
+        '1032098732502-0epk23vau4pdg9o253mq9hh04ccf9upo.apps.googleusercontent.com',
   );
 
   static String get apiBaseUrl => apiUrl.replaceAll(RegExp(r'/$'), '');
 
-  static bool get isGoogleSignInEnabled => googleWebClientId.trim().isNotEmpty;
+  static bool get isGoogleSignInEnabled =>
+      googleWebClientId.trim().contains('.apps.googleusercontent.com');
 
   /// Google Maps key — dart-define, then [MapsKey.resolved] from sync script.
   static String get googleMapsApiKey {

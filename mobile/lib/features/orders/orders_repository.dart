@@ -256,6 +256,38 @@ class OrdersRepository {
 
   }
 
+  Future<Order> payAtDeliveryWallet(String orderId) async {
+    final res = await _api.dio.post<Map<String, dynamic>>(
+      '/api/orders/$orderId/pay-at-delivery',
+      data: {'payment_method': 'wallet'},
+    );
+    final data = res.data;
+    if (data == null) throw Exception('Empty payment response');
+    return Order.fromJson(Map<String, dynamic>.from(data));
+  }
+
+  Future<Order> payAtDeliveryReference({
+    required String orderId,
+    required String paymentReference,
+  }) async {
+    final res = await _api.dio.post<Map<String, dynamic>>(
+      '/api/orders/$orderId/pay-at-delivery',
+      data: {'payment_reference': paymentReference.trim()},
+    );
+    final data = res.data;
+    if (data == null) throw Exception('Empty payment response');
+    return Order.fromJson(Map<String, dynamic>.from(data));
+  }
+
+  Future<Order> ackCashPayment(String orderId) async {
+    final res = await _api.dio.post<Map<String, dynamic>>(
+      '/api/orders/$orderId/ack-cash',
+    );
+    final data = res.data;
+    if (data == null) throw Exception('Empty ack response');
+    return Order.fromJson(Map<String, dynamic>.from(data));
+  }
+
 
 
   static String errorMessage(Object err) {

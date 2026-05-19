@@ -8,6 +8,11 @@ class ConfigRepository {
 
   final ApiClient _api;
 
+  Future<String> fetchPaystackPublicKey() async {
+    final res = await _api.dio.get<Map<String, dynamic>>('/api/config/paystack');
+    return res.data?['publicKey']?.toString().trim() ?? '';
+  }
+
   Future<double> fetchPricePerKm() async {
     try {
       final res = await _api.dio.get<Map<String, dynamic>>('/api/config/pricing');

@@ -89,9 +89,42 @@ class MapsKey {
 [System.IO.File]::WriteAllText($mapsKeyDart, $dartContent)
 Write-Host "Updated lib/core/maps_key.dart"
 
-# dart_defines.json
+# dart_defines.json (merge maps key; preserve API_URL + Google OAuth client)
 $definesFile = Join-Path $mobileRoot "dart_defines.json"
-$json = "{`n  `"GOOGLE_MAPS_API_KEY`": `"$key`"`n}"
+$defaultApiUrl = "http://10.0.2.2:3000"
+foreach ($line in (Get-Content $envFile -ErrorAction SilentlyContinue)) {
+    $t = $line.Trim()
+    if ($t -match '^\s*MOBILE_API_URL\s*=\s*(.+)$') {
+        $defaultApiUrl = $Matches[1].Trim().Trim('"').Trim("'").TrimEnd('/')
+        break
+    }
+    if ($t -match '^\s*VITE_API_URL\s*=\s*(.+)$') {
+        $v = $Matches[1].Trim().Trim('"').Trim("'").TrimEnd('/')
+        if ($v) { $defaultApiUrl = $v }
+    }
+}
+
+$defines = @{
+    GOOGLE_MAPS_API_KEY = $key
+    API_URL = $defaultApiUrl
+    GOOGLE_WEB_CLIENT_ID = "1032098732502-0epk23vau4pdg9o253mq9hh04ccf9upo.apps.googleusercontent.com"
+}
+if (Test-Path $definesFile) {
+    try {
+        $existing = Get-Content $definesFile -Raw | ConvertFrom-Json
+        if ($existing.API_URL) { $defines.API_URL = $existing.API_URL }
+        if ($existing.GOOGLE_WEB_CLIENT_ID) { $defines.GOOGLE_WEB_CLIENT_ID = $existing.GOOGLE_WEB_CLIENT_ID }
+    } catch { }
+}
+$googleClient = $null
+Get-Content $envFile | ForEach-Object {
+    $line = $_.Trim()
+    if ($line -match '^(?:GOOGLE_WEB_CLIENT_ID|VITE_GOOGLE_CLIENT_ID)\s*=\s*(.+)$') {
+        $googleClient = $Matches[1].Trim().Trim('"').Trim("'")
+    }
+}
+if ($googleClient) { $defines.GOOGLE_WEB_CLIENT_ID = $googleClient }
+$json = ($defines | ConvertTo-Json -Depth 3)
 [System.IO.File]::WriteAllText($definesFile, $json)
 Write-Host "Wrote dart_defines.json"
 Write-Host "Run: flutter run --dart-define-from-file=dart_defines.json"

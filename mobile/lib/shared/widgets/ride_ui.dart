@@ -53,44 +53,166 @@ class RideShell extends StatelessWidget {
   }
 }
 
-/// White rounded top sheet container.
+/// White rounded bottom sheet — scrollable body + optional pinned footer (CTA).
 class RideSheet extends StatelessWidget {
   const RideSheet({
     super.key,
     required this.child,
-    this.padding = const EdgeInsets.fromLTRB(20, 12, 20, 28),
+    this.footer,
+    this.padding = const EdgeInsets.fromLTRB(20, 8, 20, 12),
+    this.footerPadding = const EdgeInsets.fromLTRB(20, 0, 20, 12),
+    this.maxHeightFraction = 0.62,
+    this.bottomInset = 0,
   });
 
   final Widget child;
+  /// Pinned below scroll (e.g. primary CTA) — always visible and tappable.
+  final Widget? footer;
   final EdgeInsetsGeometry padding;
+  final EdgeInsetsGeometry footerPadding;
+  /// Max fraction of screen height for the whole sheet (handle + body + footer).
+  final double maxHeightFraction;
+  /// Subtract from max height (e.g. tab bar overlap).
+  final double bottomInset;
 
   @override
   Widget build(BuildContext context) {
-    final bottom = MediaQuery.paddingOf(context).bottom;
-    return Container(
-      width: double.infinity,
-      decoration: BytzGoTheme.sheetDecoration(),
-      child: Padding(
-        padding: padding.add(EdgeInsets.only(bottom: bottom > 0 ? bottom : 16)),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Center(
-              child: Container(
+    final media = MediaQuery.of(context);
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final screenH = media.size.height;
+        final parentH = constraints.maxHeight;
+        final capFromScreen = screenH * maxHeightFraction - bottomInset;
+        final capFromParent = parentH.isFinite && parentH > 0
+            ? parentH - bottomInset
+            : capFromScreen;
+        final maxH = (capFromParent < capFromScreen ? capFromParent : capFromScreen)
+            .clamp(220.0, screenH);
+
+        return Container(
+          width: double.infinity,
+          constraints: BoxConstraints(maxHeight: maxH),
+          decoration: BoxDecoration(
+            color: BytzGoTheme.sheetBg,
+            borderRadius: const BorderRadius.vertical(
+              top: Radius.circular(BytzGoTheme.sheetRadius),
+            ),
+            border: Border(
+              top: BorderSide(color: BytzGoTheme.sheetDivider.withValues(alpha: 0.8)),
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.18),
+                blurRadius: 28,
+                offset: const Offset(0, -8),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.max,
+            children: [
+              const SizedBox(height: 10),
+              Container(
                 width: 40,
                 height: 4,
-                margin: const EdgeInsets.only(bottom: 16),
                 decoration: BoxDecoration(
                   color: BytzGoTheme.sheetDivider,
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
-            ),
-            child,
-          ],
-        ),
+              const SizedBox(height: 8),
+              Expanded(
+                child: SingleChildScrollView(
+                  physics: const BouncingScrollPhysics(
+                    parent: AlwaysScrollableScrollPhysics(),
+                  ),
+                  padding: padding,
+                  child: child,
+                ),
+              ),
+              if (footer != null)
+                Padding(
+                  padding: footerPadding.add(
+                    EdgeInsets.only(bottom: media.padding.bottom * 0.15),
+                  ),
+                  child: footer!,
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// Subtle press scale for sharp tactile feedback.
+class PressableScale extends StatefulWidget {
+  const PressableScale({
+    super.key,
+    required this.child,
+    required this.onTap,
+    this.enabled = true,
+  });
+
+  final Widget child;
+  final VoidCallback? onTap;
+  final bool enabled;
+
+  @override
+  State<PressableScale> createState() => _PressableScaleState();
+}
+
+class _PressableScaleState extends State<PressableScale> {
+  bool _pressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTapDown: widget.enabled ? (_) => setState(() => _pressed = true) : null,
+      onTapUp: widget.enabled ? (_) => setState(() => _pressed = false) : null,
+      onTapCancel: widget.enabled ? () => setState(() => _pressed = false) : null,
+      onTap: widget.enabled ? widget.onTap : null,
+      child: AnimatedScale(
+        scale: _pressed ? 0.97 : 1,
+        duration: const Duration(milliseconds: 120),
+        curve: Curves.easeOutCubic,
+        child: widget.child,
       ),
+    );
+  }
+}
+
+/// Fade + slide in when child appears (e.g. price quote).
+class RideAnimatedReveal extends StatelessWidget {
+  const RideAnimatedReveal({
+    super.key,
+    required this.visible,
+    required this.child,
+  });
+
+  final bool visible;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 320),
+      switchInCurve: Curves.easeOutCubic,
+      switchOutCurve: Curves.easeInCubic,
+      transitionBuilder: (child, animation) {
+        return FadeTransition(
+          opacity: animation,
+          child: SlideTransition(
+            position: Tween<Offset>(
+              begin: const Offset(0, 0.08),
+              end: Offset.zero,
+            ).animate(animation),
+            child: child,
+          ),
+        );
+      },
+      child: visible ? child : const SizedBox.shrink(key: ValueKey('hidden')),
     );
   }
 }
@@ -185,14 +307,18 @@ class RidePrimaryButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final bg = color ?? BytzGoTheme.sheetText;
-    final fg = bg == BytzGoTheme.accent ? BytzGoTheme.accentOn : BytzGoTheme.sheetBg;
-    return Material(
-      color: bg,
-      borderRadius: BorderRadius.circular(14),
-      child: InkWell(
-        onTap: loading ? null : onPressed,
+    final bg = color ?? BytzGoTheme.accent;
+    final fg = (bg == BytzGoTheme.accent || bg == BytzGoTheme.accentDark)
+        ? BytzGoTheme.accentOn
+        : BytzGoTheme.sheetBg;
+    return PressableScale(
+      enabled: !loading && onPressed != null,
+      onTap: onPressed,
+      child: Material(
+        color: bg,
         borderRadius: BorderRadius.circular(14),
+        elevation: 2,
+        shadowColor: bg.withValues(alpha: 0.45),
         child: Container(
           height: BytzGoTheme.buttonHeight,
           alignment: Alignment.center,
@@ -395,17 +521,28 @@ class ServiceTypeTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOutCubic,
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: selected
-            ? BytzGoTheme.accent.withValues(alpha: 0.08)
-            : BytzGoTheme.sheetDivider.withValues(alpha: 0.5),
+            ? BytzGoTheme.accent.withValues(alpha: 0.1)
+            : BytzGoTheme.sheetDivider.withValues(alpha: 0.45),
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
           color: selected ? BytzGoTheme.accent : BytzGoTheme.sheetDivider,
           width: selected ? 2 : 1,
         ),
+        boxShadow: selected
+            ? [
+                BoxShadow(
+                  color: BytzGoTheme.accent.withValues(alpha: 0.15),
+                  blurRadius: 12,
+                  offset: const Offset(0, 4),
+                ),
+              ]
+            : null,
       ),
       child: Row(
         children: [

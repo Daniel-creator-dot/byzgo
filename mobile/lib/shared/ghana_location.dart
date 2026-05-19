@@ -26,6 +26,27 @@ String formatCoordAddress(double lat, double lng) {
   return '${lat.toStringAsFixed(5)}, ${lng.toStringAsFixed(5)}';
 }
 
+/// Android emulator / iOS simulator default (Google HQ) — not usable for Ghana delivery.
+bool isSimulatorDefaultLocation(double lat, double lng) {
+  return (lat - 37.421998).abs() < 0.02 && (lng - (-122.084)).abs() < 0.02;
+}
+
+bool isUsableGhanaLocation(double lat, double lng) {
+  return isInGhanaBounds(lat, lng) && !isSimulatorDefaultLocation(lat, lng);
+}
+
+LocationPoint accraDefaultPoint({String address = 'Accra, Ghana'}) {
+  return LocationPoint(address: address, lat: ghanaCenterLat, lng: ghanaCenterLng);
+}
+
+/// Prefer a human label; never show raw coordinates in the UI.
+String displayLocationLabel(String? address, double lat, double lng) {
+  final a = address?.trim() ?? '';
+  if (a.isNotEmpty && !looksLikeCoordinates(a)) return a;
+  if (isInGhanaBounds(lat, lng)) return 'Pinned location, Ghana';
+  return 'Selected on map';
+}
+
 double courierFeeBetween(LocationPoint pickup, LocationPoint destination, double pricePerKm) {
   final km = haversineDistanceKm(
     pickup.lat,

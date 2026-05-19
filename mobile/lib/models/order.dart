@@ -54,6 +54,8 @@ class Order {
 
     this.customerPaymentAck,
 
+    this.deliveryCode,
+
     this.rating,
 
   });
@@ -105,6 +107,8 @@ class Order {
   final String? paymentMethod;
 
   final String? customerPaymentAck;
+
+  final String? deliveryCode;
 
   final int? rating;
 
@@ -183,6 +187,8 @@ class Order {
       paymentMethod: json['payment_method']?.toString(),
 
       customerPaymentAck: json['customer_payment_ack']?.toString(),
+
+      deliveryCode: json['delivery_code']?.toString(),
 
       rating: parseJsonInt(json['rating']),
 

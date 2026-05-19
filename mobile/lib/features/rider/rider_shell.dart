@@ -1266,7 +1266,12 @@ class _RiderShellState extends State<RiderShell> {
     }
     setState(() => _withdrawing = true);
     try {
-      final balance = await _wallet.withdraw(amount);
+      final balance = await _wallet.withdraw(
+        amount: amount,
+        phone: _withdrawPhone.text.trim(),
+        method: _withdrawMethod,
+        network: _withdrawNetwork,
+      );
       _session.patchBalance(balance);
       if (!mounted) return;
       setState(() {

@@ -21,6 +21,7 @@ dependencies:
   geolocator: ^13.0.2
   permission_handler: ^11.3.1
   url_launcher: ^6.3.1
+  webview_flutter: ^4.10.0
 
 dev_dependencies:
   flutter_test:
@@ -32,3 +33,6 @@ flutter:
   assets:
     - assets/branding/app_icon.png
     - assets/branding/preloader.png
+    - assets/branding/hero_login.png
+    - assets/branding/hero_delivery.png
+    - assets/branding/hero_rider.png

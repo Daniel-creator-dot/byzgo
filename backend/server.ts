@@ -20,19 +20,36 @@ dotenv.config({ path: path.join(__dirname, '.env') });
 dotenv.config({ path: path.join(__dirname, '..', '.env.local') });
 
 const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || 'bytzgo-72f1c';
+const GOOGLE_WEB_CLIENT_ID =
+  process.env.GOOGLE_WEB_CLIENT_ID?.trim() ||
+  process.env.VITE_GOOGLE_CLIENT_ID?.trim() ||
+  '1032098732502-0epk23vau4pdg9o253mq9hh04ccf9upo.apps.googleusercontent.com';
 const googleOAuthClient = new OAuth2Client();
+let firebaseAdminHasCredentials = false;
+
+function googleTokenAudiences(): string[] {
+  return [...new Set([FIREBASE_PROJECT_ID, GOOGLE_WEB_CLIENT_ID].filter(Boolean))];
+}
 
 async function verifyGoogleIdToken(idToken: string) {
+  const audiences = googleTokenAudiences();
+
+  if (firebaseAdminHasCredentials) {
+    try {
+      return await admin.auth().verifyIdToken(idToken);
+    } catch {
+      // Fall through to Google public cert verification.
+    }
+  }
+
   try {
-    return await admin.auth().verifyIdToken(idToken);
-  } catch {
-    const ticket = await googleOAuthClient.verifyIdToken({
-      idToken,
-      audience: FIREBASE_PROJECT_ID,
-    });
+    const ticket = await googleOAuthClient.verifyIdToken({ idToken, audience: audiences });
     const payload = ticket.getPayload();
     if (!payload?.email) throw new Error('Invalid Google token');
     return payload;
+  } catch (err) {
+    console.error('Google ID token verification failed:', err);
+    throw new Error('Invalid Google token');
   }
 }
 
@@ -43,13 +60,13 @@ try {
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount)
     });
+    firebaseAdminHasCredentials = true;
     console.log('Firebase Admin initialized successfully with service account certificate.');
   } else {
-    // Fallback for hosting platforms where secrets are gitignored
     admin.initializeApp({
-      projectId: "bytzgo-72f1c"
+      projectId: FIREBASE_PROJECT_ID
     });
-    console.warn('Firebase Admin initialized with fallback projectId (private key file missing).');
+    console.warn('Firebase Admin: no service account; Google ID tokens verified via public certs.');
   }
 } catch (err) {
   console.error('Failed to initialize Firebase Admin:', err);
@@ -150,6 +167,68 @@ async function verifyPaystackTransaction(reference: string) {
     }
     throw err;
   }
+}
+
+function paystackPaymentEmail(user: { email?: string; phone?: string; id: string }): string {
+  const email = user.email?.trim();
+  if (email && email.includes('@')) return email;
+  const digits = (user.phone || '').replace(/\D/g, '');
+  if (digits.length >= 9) return `user${digits}@bytzgo.app`;
+  return `user${String(user.id).replace(/-/g, '').slice(0, 12)}@bytzgo.app`;
+}
+
+async function initializePaystackTopup(amountGhs: number, user: { id: string; email?: string; phone?: string }) {
+  const secretKey = await getPaystackSecretKey();
+  if (!secretKey) {
+    throw new Error('Paystack is not configured. Add keys in Admin → Settings.');
+  }
+
+  const publicKey = await getPaystackPublicKey();
+  if (publicKey && !paystackKeysMatch(publicKey, secretKey)) {
+    throw new Error('Paystack public and secret keys must both be test or both be live.');
+  }
+
+  const amount = Math.round(amountGhs * 100);
+  if (!Number.isFinite(amount) || amount < 100) {
+    throw new Error('Minimum top-up is ₵1');
+  }
+
+  const reference = `bytzgo_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+  const callbackBase =
+    process.env.PAYSTACK_CALLBACK_URL?.trim() ||
+    process.env.APP_URL?.trim() ||
+    'https://bytzgo.net';
+  const callbackUrl = `${callbackBase.replace(/\/$/, '')}/paystack/callback`;
+
+  const response = await axios.post(
+    'https://api.paystack.co/transaction/initialize',
+    {
+      email: paystackPaymentEmail(user),
+      amount,
+      currency: 'GHS',
+      reference,
+      callback_url: callbackUrl,
+      channels: ['card', 'mobile_money', 'bank'],
+      metadata: { type: 'wallet_topup', user_id: user.id },
+    },
+    { headers: { Authorization: `Bearer ${secretKey}` } }
+  );
+
+  if (!response.data?.status) {
+    throw new Error(response.data?.message || 'Could not start Paystack checkout');
+  }
+
+  const data = response.data.data;
+  if (!data?.authorization_url || !data?.reference) {
+    throw new Error('Paystack did not return a checkout URL');
+  }
+
+  return {
+    reference: data.reference as string,
+    authorizationUrl: data.authorization_url as string,
+    accessCode: data.access_code as string | undefined,
+    amountGhs,
+  };
 }
 
 // Database Initialization
@@ -995,13 +1074,32 @@ async function createAndSendOtp(
   return { otpSent: true, phone: storePhone };
 }
 
+function phoneMatchSql(column: string, paramIndex: number): string {
+  return `(
+    ${column} = ANY($${paramIndex})
+    OR regexp_replace(COALESCE(${column}, ''), '[^0-9]', '', 'g') = ANY(
+      SELECT regexp_replace(v, '[^0-9]', '', 'g') FROM unnest($${paramIndex}::text[]) AS v
+    )
+  )`;
+}
+
 async function findValidOtp(phone: string, otp: string, purpose: string) {
-  const variants = phoneLookupVariants(phone);
+  const normalized = formatGhanaPhone(phone);
+  const variants = [...new Set([...phoneLookupVariants(phone), normalized])];
   const result = await pool.query(
     `SELECT id FROM otps
-     WHERE phone = ANY($1) AND otp = $2 AND purpose = $3 AND expires_at > NOW()
+     WHERE ${phoneMatchSql('phone', 1)} AND otp = $2 AND purpose = $3 AND expires_at > NOW()
      ORDER BY created_at DESC LIMIT 1`,
-    [variants, otp, purpose]
+    [variants, String(otp).trim(), purpose]
+  );
+  return result.rows[0]?.id as string | undefined;
+}
+
+async function findUserIdByPhone(phone: string): Promise<string | undefined> {
+  const variants = phoneLookupVariants(phone);
+  const result = await pool.query(
+    `SELECT id FROM users WHERE ${phoneMatchSql('phone', 1)} LIMIT 1`,
+    [variants]
   );
   return result.rows[0]?.id as string | undefined;
 }
@@ -1054,9 +1152,8 @@ app.post('/api/auth/send-forgot-otp', async (req, res) => {
   }
 
   try {
-    const lookups = phoneLookupVariants(phone);
-    const checkUser = await pool.query('SELECT id FROM users WHERE phone = ANY($1)', [lookups]);
-    if (!checkUser.rowCount) {
+    const userId = await findUserIdByPhone(phone);
+    if (!userId) {
       return res.status(404).json({ message: 'Phone number is not registered' });
     }
 
@@ -1102,9 +1199,8 @@ app.post('/api/auth/resend-otp', async (req, res) => {
         (code) => `Your BytzGo verification code is: ${code}. Valid for 10 minutes.`
       );
     } else {
-      const lookups = phoneLookupVariants(phone);
-      const checkUser = await pool.query('SELECT id FROM users WHERE phone = ANY($1)', [lookups]);
-      if (!checkUser.rowCount) {
+      const userId = await findUserIdByPhone(phone);
+      if (!userId) {
         return res.status(404).json({ message: 'Phone number is not registered' });
       }
       await createAndSendOtp(
@@ -1155,10 +1251,14 @@ app.post('/api/auth/reset-password-otp', async (req, res) => {
 
     const hashedPassword = await bcrypt.hash(newPassword, 10);
     const lookups = phoneLookupVariants(phone);
+    const userId = await findUserIdByPhone(phone);
+    if (!userId) {
+      return res.status(404).json({ message: 'User not found' });
+    }
 
     const updateResult = await pool.query(
-      'UPDATE users SET password = $1 WHERE phone = ANY($2) RETURNING id',
-      [hashedPassword, lookups]
+      'UPDATE users SET password = $1 WHERE id = $2 RETURNING id',
+      [hashedPassword, userId]
     );
 
     if (updateResult.rowCount === 0) {
@@ -1398,6 +1498,42 @@ app.post('/api/upload', authenticateToken, upload.single('image'), (req: any, re
   res.json({ url: base64 });
 });
 
+app.post('/api/wallet/topup/initialize', authenticateToken, async (req: any, res) => {
+  const amountGhs = Number(req.body?.amount);
+  if (!Number.isFinite(amountGhs) || amountGhs < 1) {
+    return res.status(400).json({ message: 'Minimum top-up is ₵1' });
+  }
+
+  try {
+    const userRes = await pool.query(
+      'SELECT id, email, phone, status FROM users WHERE id = $1',
+      [req.user.id]
+    );
+    const row = userRes.rows[0];
+    if (!row || row.status === 'disabled') {
+      return res.status(403).json({ message: 'Your account is disabled.' });
+    }
+
+    const checkout = await initializePaystackTopup(amountGhs, {
+      id: row.id,
+      email: row.email,
+      phone: row.phone,
+    });
+
+    res.json({
+      reference: checkout.reference,
+      authorization_url: checkout.authorizationUrl,
+      access_code: checkout.accessCode,
+      amount: checkout.amountGhs,
+    });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Could not start payment';
+    console.error('Paystack initialize error:', message);
+    const status = message.includes('not configured') ? 503 : 400;
+    res.status(status).json({ message });
+  }
+});
+
 app.post('/api/wallet/topup', authenticateToken, async (req: any, res) => {
   const reference = typeof req.body?.reference === 'string' ? req.body.reference.trim() : '';
   if (!reference) {
@@ -1476,11 +1612,118 @@ app.get('/api/config/paystack', async (_req, res) => {
   }
 });
 
-app.get('/api/config/maps-health', async (_req, res) => {
-  const key =
+function mapsApiKey(): string {
+  return (
     process.env.VITE_GOOGLE_MAPS_API_KEY?.trim() ||
     process.env.GOOGLE_MAPS_API_KEY?.trim() ||
-    '';
+    ''
+  );
+}
+
+const GEOCODE_PREFERRED_TYPES = [
+  'street_address',
+  'premise',
+  'route',
+  'establishment',
+  'point_of_interest',
+  'sublocality',
+  'neighborhood',
+  'locality',
+  'administrative_area_level_2',
+  'administrative_area_level_1',
+];
+
+function pickBestGeocodeAddress(results: { formatted_address?: string; types?: string[] }[]): string | null {
+  if (!results?.length) return null;
+  for (const type of GEOCODE_PREFERRED_TYPES) {
+    const hit = results.find((r) => r.types?.includes(type));
+    if (hit?.formatted_address) return hit.formatted_address;
+  }
+  const inGhana = results.find((r) => /ghana/i.test(r.formatted_address || ''));
+  return (inGhana || results[0]).formatted_address || null;
+}
+
+app.get('/api/maps/autocomplete', authenticateToken, async (req: any, res) => {
+  try {
+    const input = String(req.query.input || '').trim();
+    if (input.length < 2) return res.json({ predictions: [] });
+    const key = mapsApiKey();
+    if (!key) return res.status(503).json({ predictions: [], message: 'Maps not configured' });
+    const url = new URL('https://maps.googleapis.com/maps/api/place/autocomplete/json');
+    url.searchParams.set('input', input);
+    url.searchParams.set('key', key);
+    url.searchParams.set('components', 'country:gh');
+    url.searchParams.set('location', '5.6037,-0.1870');
+    url.searchParams.set('radius', '500000');
+    const { data } = await axios.get(url.toString());
+    if (data.status !== 'OK' && data.status !== 'ZERO_RESULTS') {
+      return res.json({ predictions: [], message: data.error_message || data.status });
+    }
+    const predictions = (data.predictions || []).map((p: { place_id: string; description: string }) => ({
+      placeId: p.place_id,
+      description: p.description,
+    }));
+    res.json({ predictions });
+  } catch (err) {
+    console.error('Maps autocomplete error:', err);
+    res.status(500).json({ predictions: [], message: 'Autocomplete failed' });
+  }
+});
+
+app.get('/api/maps/place-details', authenticateToken, async (req: any, res) => {
+  try {
+    const placeId = String(req.query.place_id || '').trim();
+    if (!placeId) return res.status(400).json({ message: 'place_id required' });
+    const key = mapsApiKey();
+    if (!key) return res.status(503).json({ message: 'Maps not configured' });
+    const url = new URL('https://maps.googleapis.com/maps/api/place/details/json');
+    url.searchParams.set('place_id', placeId);
+    url.searchParams.set('fields', 'formatted_address,geometry,name');
+    url.searchParams.set('key', key);
+    const { data } = await axios.get(url.toString());
+    if (data.status !== 'OK' || !data.result?.geometry?.location) {
+      return res.status(400).json({ message: data.error_message || 'Place not found' });
+    }
+    const loc = data.result.geometry.location;
+    res.json({
+      address: data.result.formatted_address || data.result.name || '',
+      lat: loc.lat,
+      lng: loc.lng,
+    });
+  } catch (err) {
+    console.error('Maps place details error:', err);
+    res.status(500).json({ message: 'Place lookup failed' });
+  }
+});
+
+app.get('/api/maps/reverse-geocode', authenticateToken, async (req: any, res) => {
+  try {
+    const lat = parseFloat(String(req.query.lat ?? ''));
+    const lng = parseFloat(String(req.query.lng ?? ''));
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      return res.status(400).json({ message: 'lat and lng required' });
+    }
+    const key = mapsApiKey();
+    if (!key) return res.status(503).json({ message: 'Maps not configured' });
+    const url = new URL('https://maps.googleapis.com/maps/api/geocode/json');
+    url.searchParams.set('latlng', `${lat},${lng}`);
+    url.searchParams.set('key', key);
+    url.searchParams.set('region', 'gh');
+    url.searchParams.set('language', 'en');
+    const { data } = await axios.get(url.toString());
+    if (data.status !== 'OK' || !data.results?.length) {
+      return res.json({ address: null });
+    }
+    const address = pickBestGeocodeAddress(data.results);
+    res.json({ address });
+  } catch (err) {
+    console.error('Maps reverse geocode error:', err);
+    res.status(500).json({ message: 'Reverse geocode failed' });
+  }
+});
+
+app.get('/api/config/maps-health', async (_req, res) => {
+  const key = mapsApiKey();
   if (!key) {
     return res.json({ ok: false, message: 'No GOOGLE_MAPS_API_KEY in backend env', keyHint: '' });
   }

@@ -4,7 +4,7 @@ import 'package:go_router/go_router.dart';
 import '../core/session.dart';
 import '../features/admin/admin_home_screen.dart';
 import '../features/auth/login_screen.dart';
-import '../features/customer/customer_home_screen.dart';
+import '../features/customer/customer_shell.dart';
 import '../features/rider/rider_home_screen.dart';
 import '../features/vendor/vendor_home_screen.dart';
 import '../models/role.dart';
@@ -49,7 +49,7 @@ GoRouter createAppRouter(Session session) {
       ),
       GoRoute(
         path: '/customer',
-        builder: (context, state) => const CustomerHomeScreen(),
+        builder: (context, state) => const CustomerShell(),
       ),
       GoRoute(
         path: '/rider',

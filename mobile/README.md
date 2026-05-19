@@ -165,6 +165,31 @@ mobile/lib/
   shared/
 ```
 
+## Build APK for your phone
+
+Physical devices cannot use `localhost` or `10.0.2.2`. Point the app at a **reachable** API:
+
+1. In repo [`.env.local`](../.env.local) set:
+   ```properties
+   MOBILE_API_URL=https://your-public-api-host
+   ```
+   (Or `http://<your-PC-LAN-IP>:3000` if the phone is on the same Wi‑Fi and `npm run backend` is running.)
+
+2. Sync keys and build:
+   ```powershell
+   npm run flutter:build:apk
+   ```
+
+3. Install:
+   ```powershell
+   adb install mobile\build\app\outputs\flutter-apk\app-release.apk
+   ```
+   Or copy `app-release.apk` to the phone and open it.
+
+Template for local defines: [`dart_defines.json.example`](dart_defines.json.example) (copy to `dart_defines.json`, gitignored).
+
+**Google Cloud:** For release APKs, restrict your Maps key to Android app `com.bytzgo.bytzgo_mobile` + your release SHA-1. Enable **Places API** and **Geocoding API** (address search uses the backend).
+
 ## Troubleshooting
 
 | Issue | Fix |
@@ -173,6 +198,8 @@ mobile/lib/
 | No `android/` / incomplete `ios/` | Run `.\scripts\setup_platform.ps1` or `flutter create . --org com.bytzgo --project-name bytzgo_mobile` |
 | `flutter.sdk not set` | Create `android/local.properties` from example |
 | Connection refused (emulator) | Use `10.0.2.2:3000`, not `localhost` |
+| Connection refused (phone APK) | Rebuild with `MOBILE_API_URL` set to your public API or PC LAN IP |
+| Address search empty | Backend needs `GOOGLE_MAPS_API_KEY`; enable Places + Geocoding APIs |
 | CardTheme / analyzer errors | Run `flutter pub get` after pulling |
 | Google button missing | Expected until `GOOGLE_WEB_CLIENT_ID` is passed |
 

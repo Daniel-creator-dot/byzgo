@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/config_repository.dart';
 import '../../core/location_service.dart';
+import '../../core/places_service.dart';
 import '../../core/session.dart';
 import '../../core/socket_service.dart';
 import '../../models/location_point.dart';
@@ -12,14 +12,34 @@ import '../../models/order.dart';
 import '../../shared/format.dart';
 import '../../shared/delivery_pricing.dart';
 import '../../shared/ghana_location.dart';
+import '../../shared/rider_trip.dart';
+import '../../shared/customer_trip.dart';
 import '../../shared/theme.dart';
+import '../../shared/widgets/bytz_brand.dart';
 import '../../shared/widgets/ride_google_map.dart';
 import '../../shared/widgets/ride_ui.dart';
 import '../orders/orders_repository.dart';
+import '../../shared/widgets/location_autocomplete_field.dart';
+import 'customer_trip_tracking.dart';
 
 /// Customer home — map + book bike delivery + track active trips.
 class CustomerHomeScreen extends StatefulWidget {
-  const CustomerHomeScreen({super.key});
+  const CustomerHomeScreen({
+    super.key,
+    this.embedded = false,
+    this.initialPickup,
+    this.onOpenShops,
+    this.onOpenWallet,
+    this.onOpenActivity,
+    this.onOpenProfile,
+  });
+
+  final bool embedded;
+  final LocationPoint? initialPickup;
+  final VoidCallback? onOpenShops;
+  final VoidCallback? onOpenWallet;
+  final VoidCallback? onOpenActivity;
+  final VoidCallback? onOpenProfile;
 
   @override
   State<CustomerHomeScreen> createState() => _CustomerHomeScreenState();
@@ -38,15 +58,23 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
   bool _loading = true;
   bool _booking = false;
   bool _locatingPickup = false;
+  bool _resolvingPickup = false;
+  bool _resolvingDropoff = false;
   String? _error;
-  String? _socketHint;
   double _pricePerKm = defaultDeliveryPricePerKm;
   LocationPoint? _riderPosition;
+  SocketService? _socket;
 
   OrdersRepository get _ordersRepo => context.read<OrdersRepository>();
-  SocketService get _socket => context.read<SocketService>();
   Session get _session => context.read<Session>();
   LocationService get _location => context.read<LocationService>();
+  PlacesService get _places => context.read<PlacesService>();
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _socket ??= context.read<SocketService>();
+  }
 
   double get _deliveryFee {
     if (_pickup == null || _destination == null) return 0;
@@ -69,6 +97,13 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
   @override
   void initState() {
     super.initState();
+    final seed = widget.initialPickup;
+    if (seed != null) {
+      final label = displayLocationLabel(seed.address, seed.lat, seed.lng);
+      _pickup = seed.copyWith(address: label);
+      _pickupCtrl.text = label;
+      _pickMode = MapPickMode.pickup;
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _init();
@@ -82,11 +117,23 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
     } catch (_) {}
     await _loadOrders();
     await _detectPickup();
+    if (!mounted) return;
+    final p = _pickup;
+    if (p != null &&
+        p.hasCoords &&
+        (looksLikeCoordinates(p.address) || p.address.isEmpty)) {
+      await _applyCoordsFromMap(
+        isPickup: true,
+        lat: p.lat,
+        lng: p.lng,
+        existing: p.address,
+      );
+    }
   }
 
   @override
   void dispose() {
-    _socket.clearHandlers();
+    _socket?.clearHandlers();
     _pickupCtrl.dispose();
     _dropoffCtrl.dispose();
     _itemCtrl.dispose();
@@ -94,9 +141,12 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
   }
 
   void _wireSocket() {
-    _socket.clearHandlers();
-    _socket.onOrderUpdated = (order) {
+    final socket = _socket;
+    if (socket == null) return;
+    socket.clearHandlers();
+    socket.onOrderUpdated = (order) {
       if (!mounted) return;
+      final prev = _orders.where((o) => o.id == order.id).firstOrNull;
       setState(() {
         final i = _orders.indexWhere((o) => o.id == order.id);
         if (i >= 0) {
@@ -104,14 +154,20 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
         } else {
           _orders = [order, ..._orders];
         }
-        _socketHint = _statusMessage(order.status, order.riderId != null);
       });
+      if (order.status == 'delivered' && prev?.status != 'delivered') {
+        _snack('Delivered — thanks for using BytzGO!', success: true);
+      } else if (order.status == 'arrived' && prev?.status != 'arrived') {
+        _snack('Driver arrived — complete payment for your PIN', success: true);
+      } else if (order.riderId != null && prev?.riderId == null) {
+        _snack('Biker found — they\'re on the way', success: true);
+      }
     };
-    _socket.onWalletUpdated = (balance) {
+    socket.onWalletUpdated = (balance) {
       if (!mounted) return;
       _session.patchBalance(balance);
     };
-    _socket.onLocationUpdated = (riderId, lat, lng) {
+    socket.onLocationUpdated = (riderId, lat, lng) {
       final active = _activeCourier;
       if (active?.riderId != riderId) return;
       if (!mounted) return;
@@ -125,38 +181,86 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
     };
   }
 
-  String _statusMessage(String status, bool hasRider) {
-    if (hasRider && status != 'delivered') {
-      return 'Your rider is on the way — track on map';
-    }
-    switch (status) {
-      case 'pending':
-      case 'ready':
-        return 'Finding a bike rider nearby…';
-      case 'picked_up':
-        return 'Package picked up — on the way';
-      case 'arrived':
-        return 'Rider has arrived';
-      case 'delivered':
-        return 'Delivered';
-      default:
-        return 'Trip updated';
-    }
+  void _replaceOrder(Order order) {
+    setState(() {
+      final i = _orders.indexWhere((o) => o.id == order.id);
+      if (i >= 0) {
+        _orders[i] = order;
+      } else {
+        _orders = [order, ..._orders];
+      }
+    });
   }
 
   Future<void> _detectPickup() async {
-    setState(() => _locatingPickup = true);
-    try {
-      final loc = await _location.getCurrentLocation();
-      if (loc != null && mounted) {
-        setState(() {
-          _pickup = loc;
-          _pickupCtrl.text = loc.address;
-        });
-      }
-    } finally {
-      if (mounted) setState(() => _locatingPickup = false);
+    await _applyCurrentLocation(toPickup: true);
+  }
+
+  Future<void> _applyCurrentLocation({required bool toPickup}) async {
+    if (toPickup) {
+      setState(() => _locatingPickup = true);
     }
+    try {
+      LocationPoint? loc = await _location.getCurrentLocation();
+      final user = _session.user;
+      if (loc == null &&
+          user?.lat != null &&
+          user?.lng != null &&
+          hasValidCoords(user!.lat!, user.lng!)) {
+        loc = LocationPoint(
+          address: user.address ?? '',
+          lat: user.lat!,
+          lng: user.lng!,
+        );
+      }
+      if (loc == null || !mounted) return;
+
+      await _applyCoordsFromMap(
+        isPickup: toPickup,
+        lat: loc.lat,
+        lng: loc.lng,
+        existing: loc.address,
+      );
+    } finally {
+      if (mounted && toPickup) setState(() => _locatingPickup = false);
+    }
+  }
+
+  Future<void> _applyCoordsFromMap({
+    required bool isPickup,
+    required double lat,
+    required double lng,
+    String? existing,
+  }) async {
+    if (!mounted) return;
+    setState(() {
+      if (isPickup) {
+        _resolvingPickup = true;
+        _pickup = LocationPoint(address: '', lat: lat, lng: lng);
+        _pickupCtrl.text = 'Finding address…';
+        _pickMode = MapPickMode.pickup;
+      } else {
+        _resolvingDropoff = true;
+        _destination = LocationPoint(address: '', lat: lat, lng: lng);
+        _dropoffCtrl.text = 'Finding address…';
+        _pickMode = MapPickMode.destination;
+      }
+    });
+
+    final label = await _places.resolveAddressLabel(lat, lng, existing: existing);
+    if (!mounted) return;
+    final point = LocationPoint(address: label, lat: lat, lng: lng);
+    setState(() {
+      if (isPickup) {
+        _pickup = point;
+        _pickupCtrl.text = label;
+        _resolvingPickup = false;
+      } else {
+        _destination = point;
+        _dropoffCtrl.text = label;
+        _resolvingDropoff = false;
+      }
+    });
   }
 
   Future<void> _loadOrders() async {
@@ -185,29 +289,48 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
   }
 
   void _onMapTap(double lat, double lng) {
-    final point = LocationPoint(
-      address: formatCoordAddress(lat, lng),
-      lat: lat,
-      lng: lng,
-    );
+    final isPickup = _pickMode == MapPickMode.pickup;
+    _applyCoordsFromMap(isPickup: isPickup, lat: lat, lng: lng);
+  }
+
+  void _onPickupLocation(LocationPoint point) {
+    final label = displayLocationLabel(point.address, point.lat, point.lng);
     setState(() {
-      if (_pickMode == MapPickMode.pickup) {
-        _pickup = point;
-        _pickupCtrl.text = point.address;
+      _pickup = point.copyWith(address: label);
+      _pickupCtrl.text = label;
+      _pickMode = MapPickMode.pickup;
+    });
+  }
+
+  void _onDropoffLocation(LocationPoint point) {
+    final label = displayLocationLabel(point.address, point.lat, point.lng);
+    setState(() {
+      _destination = point.copyWith(address: label);
+      _dropoffCtrl.text = label;
+      _pickMode = MapPickMode.destination;
+    });
+  }
+
+  void _onAddressEdited({required bool isPickup, required String text}) {
+    final current = isPickup ? _pickup : _destination;
+    if (current != null && text.trim() == current.address.trim()) return;
+    final draft = LocationPoint(address: text, lat: 0, lng: 0);
+    setState(() {
+      if (isPickup) {
+        _pickup = draft;
       } else {
-        _destination = point;
-        _dropoffCtrl.text = point.address;
+        _destination = draft;
       }
     });
   }
 
   Future<void> _requestDelivery() async {
     if (_pickup == null || !_pickup!.hasCoords) {
-      _snack('Set a pickup location (GPS or tap map)');
+      _snack('Set pickup — allow location, search, or pick a shop');
       return;
     }
     if (_destination == null || !_destination!.hasCoords) {
-      _snack('Set a drop-off — tap map or enter address');
+      _snack('Choose a drop-off from search or tap the map');
       return;
     }
     final fee = _deliveryFee;
@@ -240,7 +363,6 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
       if (!mounted) return;
       setState(() {
         _orders = [order, ..._orders];
-        _socketHint = 'Finding a bike rider nearby…';
       });
       _snack('Bike requested — waiting for a rider', success: true);
     } catch (e) {
@@ -260,14 +382,8 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
     );
   }
 
-  Future<void> _logout() async {
-    await _session.clear();
-    if (mounted) context.go('/login');
-  }
-
   @override
   Widget build(BuildContext context) {
-    final user = context.watch<Session>().user!;
     final active = _activeCourier;
     final tracking = active != null;
     final fee = _deliveryFee;
@@ -281,16 +397,6 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
         mapPickMode: _pickMode,
         onMapTap: tracking ? null : _onMapTap,
       ),
-      topBar: Row(
-        children: [
-          _circleIcon(Icons.menu, onTap: _logout),
-          const Spacer(),
-          TripStatusChip(
-            label: formatCedisCompact(user.balance),
-            icon: Icons.account_balance_wallet_outlined,
-          ),
-        ],
-      ),
       floatingMapChild: tracking
           ? SafeArea(
               child: Align(
@@ -298,39 +404,57 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
                 child: Padding(
                   padding: const EdgeInsets.only(top: 64),
                   child: TripStatusChip(
-                    label: _statusMessage(
-                      active.status,
-                      active.riderId != null,
-                    ),
+                    label: customerTripHeadline(active),
                   ),
                 ),
               ),
             )
           : null,
       sheet: RideSheet(
+        maxHeightFraction: widget.embedded ? 0.52 : 0.68,
+        bottomInset: widget.embedded ? 4 : 0,
+        footer: !tracking
+            ? RidePrimaryButton(
+                label: 'Request bike',
+                icon: Icons.two_wheeler,
+                loading: _booking,
+                onPressed: _requestDelivery,
+              )
+            : null,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           mainAxisSize: MainAxisSize.min,
           children: [
+            if (!tracking && !widget.embedded) ...[
+              _quickActions(),
+              const SizedBox(height: 10),
+            ],
             Text(
               tracking ? 'Track delivery' : 'Bike delivery',
               style: BytzGoTheme.sheetTitle(),
             ),
             const SizedBox(height: 4),
-            Text(
-              tracking
-                  ? active.address
-                  : 'Tap map to set pickup & drop-off',
-              style: BytzGoTheme.sheetBody(14),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
-            if (_socketHint != null) ...[
-              const SizedBox(height: 10),
-              _hintBanner(_socketHint!),
+            if (!tracking)
+              Text(
+                'Search an address or tap the map',
+                style: BytzGoTheme.sheetBody(14),
+              ),
+            if (tracking) ...[
+              const SizedBox(height: 12),
+              CustomerDeliveryTracker(
+                order: active,
+                onOrderUpdated: _replaceOrder,
+              ),
             ],
             if (!tracking) ...[
-              const SizedBox(height: 16),
+              if (!widget.embedded) ...[
+                const SizedBox(height: 10),
+                const BrandPromoBanner(
+                  title: 'Trusted handoffs',
+                  subtitle: 'Real riders. Live tracking. Pay on delivery.',
+                ),
+              ],
+              const SizedBox(height: 12),
               Row(
                 children: [
                   _pickChip('Pickup', MapPickMode.pickup),
@@ -338,9 +462,9 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
                   _pickChip('Drop-off', MapPickMode.destination),
                 ],
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 10),
               _locationCard(),
-              const SizedBox(height: 12),
+              const SizedBox(height: 10),
               TextField(
                 controller: _itemCtrl,
                 style: const TextStyle(
@@ -358,43 +482,20 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
                   ),
                 ),
               ),
-              const SizedBox(height: 12),
-              if (fee > 0)
-                ServiceTypeTile(
+              const SizedBox(height: 10),
+              RideAnimatedReveal(
+                visible: fee > 0,
+                child: ServiceTypeTile(
+                  key: ValueKey('fee-$fee'),
                   title: 'Bike courier',
                   subtitle: 'Pay when rider arrives',
                   price: formatCedis(fee),
-                ),
-              const SizedBox(height: 16),
-              RidePrimaryButton(
-                label: 'Request bike',
-                icon: Icons.two_wheeler,
-                loading: _booking,
-                onPressed: _requestDelivery,
-              ),
-            ] else ...[
-              const SizedBox(height: 16),
-              ActiveTripTile(
-                address: active.address,
-                status: active.status,
-                price: formatCedis(active.total),
-                onTap: () {},
-              ),
-              const SizedBox(height: 12),
-              TextButton(
-                onPressed: _loadOrders,
-                child: const Text(
-                  'Refresh status',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w700,
-                    color: BytzGoTheme.accentDark,
-                  ),
                 ),
               ),
             ],
             if (_loading)
               const Padding(
-                padding: EdgeInsets.only(top: 16),
+                padding: EdgeInsets.only(top: 12),
                 child: Center(
                   child: SizedBox(
                     width: 24,
@@ -414,26 +515,95 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
     );
   }
 
+  Widget _quickActions() {
+    return SizedBox(
+      height: 76,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        children: [
+          _quickAction(Icons.storefront_outlined, 'Shops', widget.onOpenShops),
+          _quickAction(Icons.add_card, 'Top up', widget.onOpenWallet),
+          _quickAction(Icons.route_outlined, 'Trips', widget.onOpenActivity),
+          _quickAction(Icons.person_outline, 'Profile', widget.onOpenProfile),
+          _quickAction(Icons.headset_mic_outlined, 'Help', () {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Support: support@bytzgo.com'),
+                behavior: SnackBarBehavior.floating,
+              ),
+            );
+          }),
+        ],
+      ),
+    );
+  }
+
+  Widget _quickAction(IconData icon, String label, VoidCallback? onTap) {
+    return Padding(
+      padding: const EdgeInsets.only(right: 10),
+      child: PressableScale(
+        onTap: onTap,
+        child: Container(
+          width: 72,
+          decoration: BoxDecoration(
+            color: BytzGoTheme.sheetBg,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: BytzGoTheme.sheetDivider),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.04),
+                blurRadius: 8,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, color: BytzGoTheme.brandBlue, size: 22),
+              const SizedBox(height: 5),
+              Text(
+                label,
+                style: const TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w800,
+                  color: BytzGoTheme.sheetText,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _pickChip(String label, MapPickMode mode) {
     final selected = _pickMode == mode;
     return Expanded(
-      child: Material(
-        color: selected
-            ? BytzGoTheme.accent.withValues(alpha: 0.15)
-            : BytzGoTheme.sheetDivider.withValues(alpha: 0.4),
-        borderRadius: BorderRadius.circular(10),
-        child: InkWell(
-          onTap: () => setState(() => _pickMode = mode),
-          borderRadius: BorderRadius.circular(10),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 10),
-            child: Text(
-              label,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontWeight: FontWeight.w700,
-                color: selected ? BytzGoTheme.accentDark : BytzGoTheme.sheetMuted,
-              ),
+      child: PressableScale(
+        onTap: () => setState(() => _pickMode = mode),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeOutCubic,
+          decoration: BoxDecoration(
+            color: selected
+                ? BytzGoTheme.accent.withValues(alpha: 0.18)
+                : BytzGoTheme.sheetDivider.withValues(alpha: 0.4),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: selected ? BytzGoTheme.accent : Colors.transparent,
+              width: 1.5,
+            ),
+          ),
+          padding: const EdgeInsets.symmetric(vertical: 11),
+          child: Text(
+            label,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontWeight: FontWeight.w800,
+              fontSize: 13,
+              color: selected ? BytzGoTheme.accentDark : BytzGoTheme.sheetMuted,
             ),
           ),
         ),
@@ -444,71 +614,44 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
   Widget _locationCard() {
     return Container(
       decoration: BoxDecoration(
+        color: BytzGoTheme.sheetBg,
         border: Border.all(color: BytzGoTheme.sheetDivider),
         borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 10,
+            offset: const Offset(0, 2),
+          ),
+        ],
       ),
       child: Column(
         children: [
-          LocationRow(
+          LocationAutocompleteField(
             icon: pickupDot(),
-            iconColor: BytzGoTheme.accent,
-            hint: _locatingPickup ? 'Getting location…' : 'Pickup',
+            hint: 'Current location or address',
             controller: _pickupCtrl,
+            locating: _locatingPickup,
+            resolving: _resolvingPickup,
+            showUseMyLocation: true,
+            onUseMyLocation: () => _applyCurrentLocation(toPickup: true),
             onTap: () => setState(() => _pickMode = MapPickMode.pickup),
+            onLocation: _onPickupLocation,
+            onAddressEdited: (text) => _onAddressEdited(isPickup: true, text: text),
           ),
           Divider(height: 1, color: BytzGoTheme.sheetDivider.withValues(alpha: 0.8)),
-          LocationRow(
+          LocationAutocompleteField(
             icon: dropoffSquare(),
-            iconColor: BytzGoTheme.sheetText,
             hint: 'Where to?',
             controller: _dropoffCtrl,
+            resolving: _resolvingDropoff,
             onTap: () => setState(() => _pickMode = MapPickMode.destination),
+            onLocation: _onDropoffLocation,
+            onAddressEdited: (text) => _onAddressEdited(isPickup: false, text: text),
           ),
         ],
       ),
     );
   }
 
-  Widget _hintBanner(String text) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: BytzGoTheme.accent.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Row(
-        children: [
-          const Icon(Icons.two_wheeler, size: 18, color: BytzGoTheme.accentDark),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              text,
-              style: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                color: BytzGoTheme.accentDark,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _circleIcon(IconData icon, {VoidCallback? onTap}) {
-    return Material(
-      color: BytzGoTheme.sheetBg,
-      shape: const CircleBorder(),
-      elevation: 4,
-      shadowColor: Colors.black26,
-      child: InkWell(
-        onTap: onTap,
-        customBorder: const CircleBorder(),
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Icon(icon, color: BytzGoTheme.sheetText, size: 22),
-        ),
-      ),
-    );
-  }
 }

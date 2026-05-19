@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import 'core/api_client.dart';
 import 'core/config_repository.dart';
 import 'core/location_service.dart';
+import 'core/places_service.dart';
 import 'core/session.dart';
 import 'core/socket_service.dart';
 import 'features/auth/auth_repository.dart';
@@ -69,6 +70,7 @@ class _BytzGoAppState extends State<BytzGoApp> {
         Provider(create: (ctx) => WalletRepository(ctx.read<ApiClient>())),
         Provider(create: (ctx) => ConfigRepository(ctx.read<ApiClient>())),
         Provider(create: (_) => LocationService()),
+        Provider(create: (ctx) => PlacesService(ctx.read<ApiClient>())),
       ],
       child: MaterialApp.router(
         title: 'BytzGo',

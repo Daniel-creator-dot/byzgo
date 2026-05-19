@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../theme.dart';
+import 'bytz_brand.dart';
 
 /// Branded splash / loading screen using `assets/branding/preloader.png`.
 class BytzPreloader extends StatefulWidget {
@@ -38,27 +39,24 @@ class _BytzPreloaderState extends State<BytzPreloader>
 
   @override
   Widget build(BuildContext context) {
-    final width = MediaQuery.sizeOf(context).width;
-    final logoWidth = (width * 0.62).clamp(200.0, 320.0);
-
-    return ColoredBox(
-      color: Colors.black,
-      child: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            ScaleTransition(
-              scale: Tween<double>(begin: 0.96, end: 1.0).animate(
-                CurvedAnimation(parent: _pulse, curve: Curves.easeInOut),
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        const BrandHeroBackground(
+          asset: 'assets/branding/hero_rider.png',
+          bottomFade: 0.85,
+        ),
+        Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              ScaleTransition(
+                scale: Tween<double>(begin: 0.96, end: 1.0).animate(
+                  CurvedAnimation(parent: _pulse, curve: Curves.easeInOut),
+                ),
+                child: const BytzGoLogo(fontSize: 52, alignment: Alignment.center),
               ),
-              child: Image.asset(
-                'assets/branding/preloader.png',
-                width: logoWidth,
-                fit: BoxFit.contain,
-                filterQuality: FilterQuality.high,
-              ),
-            ),
-            if (widget.showSpinner) ...[
+              if (widget.showSpinner) ...[
               const SizedBox(height: 32),
               const SizedBox(
                 width: 28,
@@ -68,8 +66,8 @@ class _BytzPreloaderState extends State<BytzPreloader>
                   color: BytzGoTheme.accent,
                 ),
               ),
-            ],
-            if (widget.message != null) ...[
+              ],
+              if (widget.message != null) ...[
               const SizedBox(height: 16),
               Text(
                 widget.message!,
@@ -79,10 +77,11 @@ class _BytzPreloaderState extends State<BytzPreloader>
                   fontWeight: FontWeight.w600,
                 ),
               ),
+              ],
             ],
-          ],
+          ),
         ),
-      ),
+      ],
     );
   }
 }

@@ -19,10 +19,12 @@ class BytzGoTheme {
   static const Color sheetMuted = Color(0xFF6B7280);
   static const Color sheetDivider = Color(0xFFE5E7EB);
 
-  // Brand — Bolt green
-  static const Color accent = Color(0xFF00D170);
-  static const Color accentDark = Color(0xFF00B35C);
-  static const Color accentOn = Color(0xFF000000);
+  // Brand — BytzGO blue + lime (from marketing assets)
+  static const Color brandBlue = Color(0xFF1E60C2);
+  static const Color brandBlueBright = Color(0xFF2B7FE8);
+  static const Color accent = Color(0xFF9AE234);
+  static const Color accentDark = Color(0xFF82D91E);
+  static const Color accentOn = Color(0xFF0A0A0A);
 
   static const Color danger = Color(0xFFEF4444);
   static const Color warning = Color(0xFFF59E0B);
@@ -42,8 +44,10 @@ class BytzGoTheme {
       scaffoldBackgroundColor: background,
       fontFamily: 'Roboto',
       colorScheme: const ColorScheme.dark(
-        primary: accent,
-        onPrimary: accentOn,
+        primary: brandBlue,
+        secondary: accent,
+        onPrimary: Colors.white,
+        onSecondary: accentOn,
         surface: surface,
         onSurface: textPrimary,
         error: danger,
