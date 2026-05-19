@@ -22,6 +22,7 @@ import { Order, OrderStatus } from '../../types';
 import { GHANA_REGIONS } from '../../lib/constants';
 import { socket } from '../../lib/socket';
 import { subscribeRiderPush, unsubscribeRiderPush } from '../../lib/pushNotifications';
+import { unlockIncomingRideAudio } from '../../lib/incomingRideAudio';
 import { useMapsAvailable } from '../MapsProvider';
 import { RiderDriveMap } from './RiderDriveMap';
 import { RiderMapPlaceholder } from './RiderMapPlaceholder';
@@ -198,6 +199,12 @@ export function RiderApp({
     }
   }, [primaryActiveOrder?.id, navigatingTo]);
 
+  useEffect(() => {
+    if (user.status === 'active' || user.status === undefined) {
+      unlockIncomingRideAudio();
+    }
+  }, [user.status]);
+
   const toggleOnline = async () => {
     const next = isOnline ? 'offline' : 'active';
     try {
@@ -205,8 +212,10 @@ export function RiderApp({
       user.status = next;
       setIsOnline(!isOnline);
       setUser((u) => (u ? { ...u, status: next } : u));
-      if (next === 'active') await subscribeRiderPush();
-      else await unsubscribeRiderPush();
+      if (next === 'active') {
+        unlockIncomingRideAudio();
+        await subscribeRiderPush();
+      } else await unsubscribeRiderPush();
     } catch (e) {
       console.error(e);
     }

@@ -49,11 +49,11 @@ self.addEventListener('notificationclick', (event) => {
 
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
-      for (const client of clientList) {
-        if (client.url.includes(self.location.origin)) {
-          client.postMessage({ type: 'incoming-ride', orderId, action });
-          return client.focus();
-        }
+      const origin = self.location.origin;
+      const appClient = clientList.find((c) => c.url && c.url.startsWith(origin));
+      if (appClient) {
+        appClient.postMessage({ type: 'incoming-ride', orderId, action });
+        return appClient.focus();
       }
       return clients.openWindow(url.toString());
     })

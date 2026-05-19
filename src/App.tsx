@@ -48,6 +48,11 @@ import {
   haversineDistanceKm,
 } from './lib/deliveryPricing';
 import { getApiError } from './lib/api';
+import {
+  unlockIncomingRideAudio,
+  playIncomingRidePulse,
+  closeIncomingRideAudio,
+} from './lib/incomingRideAudio';
 import { DarkAppShell, type NavItem } from './components/shared/DarkAppShell';
 import { DarkCard, DarkButton, DarkInput, StatusBadge, EmptyState, ErrorBanner } from './components/shared/ui';
 
@@ -262,15 +267,49 @@ function MainApp() {
   useEffect(() => { ordersRef.current = orders; }, [orders]);
 
   const isOfferableToRider = (order: Order) =>
-    order.status === 'ready' && !order.rider_id && !(order as any).riderId;
+    order.status === 'ready' && !order.rider_id && !(order as Order & { riderId?: string }).riderId;
+
+  const pickBestRideOffer = useCallback((list: Order[]) => {
+    return list
+      .filter(
+        (o) =>
+          isOfferableToRider(o) &&
+          (!o.expiresAt || new Date(o.expiresAt).getTime() > Date.now())
+      )
+      .sort((a, b) => {
+        const ea = a.expiresAt ? new Date(a.expiresAt).getTime() : Number.MAX_SAFE_INTEGER;
+        const eb = b.expiresAt ? new Date(b.expiresAt).getTime() : Number.MAX_SAFE_INTEGER;
+        return ea - eb;
+      })[0];
+  }, []);
 
   const triggerIncomingRideCall = useCallback((order: Order) => {
     const u = userRef.current;
     if (!u || u.role !== 'rider' || u.status !== 'active' || !isOfferableToRider(order)) return;
     if (order.expiresAt && new Date(order.expiresAt).getTime() <= Date.now()) return;
-    setIncomingRideOffer(prev => (prev?.id === order.id ? { ...prev, ...order } : order));
+    let isNewOffer = false;
+    setIncomingRideOffer((prev) => {
+      if (prev?.id === order.id) return { ...prev, ...order };
+      isNewOffer = true;
+      return order;
+    });
+    if (!isNewOffer) return;
     setActiveTab('dashboard');
+    unlockIncomingRideAudio();
+    playIncomingRidePulse();
     if (navigator.vibrate) navigator.vibrate([400, 200, 400, 200, 400]);
+    if (typeof document !== 'undefined' && document.hidden && Notification.permission === 'granted') {
+      const earnings = (order as Order & { delivery_fee?: number }).delivery_fee ?? order.total;
+      try {
+        new Notification('BytzGo — Incoming ride', {
+          body: `${formatCedis(earnings)} · ${order.address || 'New pickup'}`,
+          tag: `ride-${order.id}`,
+          requireInteraction: true,
+        });
+      } catch {
+        /* Notification constructor blocked */
+      }
+    }
   }, []);
 
   const refreshData = async () => {
@@ -385,10 +424,27 @@ function MainApp() {
 
   useEffect(() => {
     if (showDeviceSetup || user?.role !== 'rider' || user.status !== 'active' || !token) return;
+    unlockIncomingRideAudio();
     if (Notification.permission === 'granted') {
       subscribeRiderPush().catch(err => console.warn('Push subscribe failed', err));
     }
   }, [user?.id, user?.role, user?.status, token, showDeviceSetup]);
+
+  // Show incoming-call UI for active dispatch offers (socket backup + refresh)
+  useEffect(() => {
+    if (user?.role !== 'rider' || user.status !== 'active') return;
+    const best = pickBestRideOffer(orders);
+    if (best) triggerIncomingRideCall(best);
+  }, [orders, user?.role, user?.status, pickBestRideOffer, triggerIncomingRideCall]);
+
+  // Poll offers while online so missed socket events still ring
+  useEffect(() => {
+    if (showDeviceSetup || user?.role !== 'rider' || user.status !== 'active' || !token) return;
+    const poll = setInterval(() => {
+      axios.get<Order[]>('/api/orders').then((res) => setOrders(res.data)).catch(() => {});
+    }, 6000);
+    return () => clearInterval(poll);
+  }, [user?.role, user?.status, token, showDeviceSetup]);
 
   useEffect(() => {
     return onServiceWorkerRideMessage(msg => {
@@ -496,9 +552,15 @@ function MainApp() {
   // Fetch initial data and setup sockets when token is available
   useEffect(() => {
     if (!token) {
+      socket.disconnect();
       setLoading(false);
       return;
     }
+
+    const joinSocketRoom = () => {
+      const storedUser = JSON.parse(localStorage.getItem('user') || '{}');
+      if (storedUser?.id) socket.emit('join', storedUser.id);
+    };
 
     const init = async () => {
       try {
@@ -510,8 +572,8 @@ function MainApp() {
         else if (storedUser.role === 'admin') setActiveTab('orders');
         else setActiveTab('courier');
 
-        socket.connect();
-        socket.emit('join', storedUser.id);
+        if (!socket.connected) socket.connect();
+        joinSocketRoom();
       } catch (err: any) {
         console.error('Initialization failed', err);
         if (err.response && (err.response.status === 401 || err.response.status === 403)) {
@@ -523,6 +585,8 @@ function MainApp() {
     };
 
     init();
+
+    socket.on('connect', joinSocketRoom);
 
     socket.on('ride:incoming', (order: Order) => {
       if (order.expiresAt && new Date(order.expiresAt).getTime() <= Date.now()) return;
@@ -600,15 +664,15 @@ function MainApp() {
     });
 
     return () => {
+      socket.off('connect', joinSocketRoom);
       socket.off('ride:incoming');
       socket.off('ride:taken');
       socket.off('order:new');
       socket.off('order:updated');
       socket.off('location:updated');
       socket.off('wallet:updated');
-      socket.disconnect();
     };
-  }, [token]);
+  }, [token, triggerIncomingRideCall]);
 
   // Re-fetch region-specific data when user region changes
   useEffect(() => {
@@ -2963,34 +3027,11 @@ function IncomingRideCallModal({
       navigator.wakeLock.request('screen').then(w => { wakeLock = w; }).catch(() => {});
     }
 
-    let audioCtx: AudioContext | null = null;
-    try {
-      audioCtx = new AudioContext();
-    } catch {
-      /* audio unavailable */
-    }
-
-    const playPulse = () => {
-      if (!audioCtx || ringStopRef.current) return;
-      const t = audioCtx.currentTime;
-      [523.25, 659.25].forEach((freq, i) => {
-        const osc = audioCtx!.createOscillator();
-        const gain = audioCtx!.createGain();
-        osc.type = 'sine';
-        osc.frequency.value = freq;
-        gain.gain.setValueAtTime(0.0001, t + i * 0.22);
-        gain.gain.exponentialRampToValueAtTime(0.35, t + i * 0.22 + 0.02);
-        gain.gain.exponentialRampToValueAtTime(0.0001, t + i * 0.22 + 0.18);
-        osc.connect(gain);
-        gain.connect(audioCtx!.destination);
-        osc.start(t + i * 0.22);
-        osc.stop(t + i * 0.22 + 0.2);
-      });
-    };
-
-    playPulse();
+    unlockIncomingRideAudio();
+    playIncomingRidePulse();
     const ringInterval = setInterval(() => {
-      playPulse();
+      if (ringStopRef.current) return;
+      playIncomingRidePulse();
       if (navigator.vibrate) navigator.vibrate([300, 150, 300]);
     }, 1400);
 
@@ -3008,7 +3049,6 @@ function IncomingRideCallModal({
       ringStopRef.current = true;
       clearInterval(ringInterval);
       clearInterval(countdown);
-      audioCtx?.close().catch(() => {});
       wakeLock?.release().catch(() => {});
     };
 

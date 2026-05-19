@@ -2359,7 +2359,14 @@ app.post('/api/delivery-zones/calculate', async (req, res) => {
 });
 
 // Web Push (background ride alerts for riders)
-app.get('/api/push/vapid-public-key', (_req, res) => {
+app.get('/api/push/vapid-public-key', async (_req, res) => {
+  if (!vapidPublicKey) {
+    try {
+      await ensureVapidKeys();
+    } catch (err) {
+      console.error('[push] VAPID key load failed:', err);
+    }
+  }
   res.json({ publicKey: vapidPublicKey });
 });
 
