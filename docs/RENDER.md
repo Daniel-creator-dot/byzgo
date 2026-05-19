@@ -1,49 +1,55 @@
-# Deploy BytzGo for Android + web (one host)
+# Render — API for the Flutter app
 
-**bytzgo.net** must run the **Node Web Service** (API + web), not a static site only.  
-Then the Flutter APK can use:
+The **customer/rider app is Flutter** (`mobile/`). Render hosts the **Express API only** — not the old React/Vite site in `src/`.
 
-```properties
-MOBILE_API_URL=https://bytzgo.net
-```
+## Flutter on your phone
 
-## Deploy on Render
-
-1. Push `main` with `render.yaml`.
-2. Open: **https://dashboard.render.com/blueprint/new?repo=https://github.com/Daniel-creator-dot/byzgo**
-3. If you already have a **Static Site** named `byzgo`:
-   - Either delete it and apply this Blueprint, **or**
-   - Change it to a **Web Service** with:
-     - Build: `npm install && npm run build && npm install --prefix backend`
-     - Start: `npm run start:render`
-     - Health: `/api/health`
-4. Set secrets: `DATABASE_URL`, `JWT_SECRET`, `GOOGLE_MAPS_API_KEY`, Paystack, SMS.
-5. Custom domain: **bytzgo.net** / **www.bytzgo.net** on this service.
-
-## Verify (required for Android)
-
-```bash
-curl https://bytzgo.net/api/health
-```
-
-Expected: `{"ok":true,"service":"bytzgo-api"}` — **not** HTML.
-
-## Build Android APK
+APK (production API baked in):
 
 ```powershell
 npm run flutter:build:apk
-```
-
-Uses `https://bytzgo.net` by default. Install:
-
-```powershell
 adb install mobile\build\app\outputs\flutter-apk\app-release.apk
 ```
 
-## Local emulator (PC backend)
+Default API: `https://bytzgo.net`
+
+## Flutter on emulator (PC backend)
+
+```powershell
+npm run backend          # terminal 1
+npm run app              # terminal 2 — same as flutter:android
+```
+
+Or Chrome (Flutter web):
 
 ```powershell
 npm run backend
-cd mobile
-..\.flutter-sdk\bin\flutter run -d emulator-5554 --dart-define-from-file=dart_defines.json --dart-define=API_URL=http://10.0.2.2:3000
+npm run flutter:chrome
 ```
+
+Do **not** use `npm run dev` for the mobile app — that starts Vite (legacy web UI).
+
+## Deploy API on Render
+
+1. In Render Dashboard, change **byzgo** from **Static Site** → **Web Service** (or apply Blueprint after push).
+2. Settings:
+   - **Build:** `npm install --prefix backend`
+   - **Start:** `npm run start:render`
+   - **Health:** `/api/health`
+3. Env: `DATABASE_URL`, `JWT_SECRET`, `GOOGLE_MAPS_API_KEY`, Paystack, SMS (from `backend/.env`).
+4. Custom domain **bytzgo.net** on this service.
+
+Verify:
+
+```bash
+curl https://bytzgo.net/api/health
+# {"ok":true,"service":"bytzgo-api","client":"flutter"}
+```
+
+## Repo layout
+
+| Path | What it is |
+|------|------------|
+| `mobile/` | **Flutter app** (use this) |
+| `backend/` | API + Socket.IO for Flutter |
+| `src/` | Legacy React web (not used for mobile) |

@@ -1,8 +1,7 @@
-# BytzGo — one Web Service: Express API + Vite web on the same host (bytzgo.net).
+# BytzGo — API for the Flutter mobile app (Android/iOS). No Vite/React deploy here.
 # Apply: https://dashboard.render.com/blueprint/new?repo=https://github.com/Daniel-creator-dot/byzgo
 #
-# Replaces static-only deploy so /api/* works for Flutter Android + web.
-# Flutter APK: MOBILE_API_URL=https://bytzgo.net
+# Flutter APK uses: MOBILE_API_URL=https://bytzgo.net
 
 services:
   - type: web
@@ -10,14 +9,12 @@ services:
     runtime: node
     plan: free
     region: oregon
-    buildCommand: npm install && npm run build && npm install --prefix backend
+    buildCommand: npm install --prefix backend
     startCommand: npm run start:render
     healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV
         value: production
-      - key: SERVE_WEB
-        value: "true"
       - key: DATABASE_URL
         sync: false
       - key: JWT_SECRET
@@ -42,6 +39,3 @@ services:
         value: https://www.inteksms.top/api/v1
       - key: SMS_SENDER_ID
         value: bytzee
-      # Same-origin API for Vite build (see src/lib/api.ts)
-      - key: VITE_API_URL
-        value: ""

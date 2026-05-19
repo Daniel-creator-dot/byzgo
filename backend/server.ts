@@ -85,7 +85,15 @@ app.use(cors());
 app.use(express.json());
 
 app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, service: 'bytzgo-api' });
+  res.json({ ok: true, service: 'bytzgo-api', client: 'flutter' });
+});
+
+app.get('/', (_req, res) => {
+  res.json({
+    name: 'BytzGo API',
+    client: 'Flutter mobile app (Android/iOS)',
+    health: '/api/health',
+  });
 });
 
 
