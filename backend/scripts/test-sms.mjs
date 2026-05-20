@@ -15,13 +15,24 @@ const headers = {
   Authorization: `Bearer ${apiKey}`,
   apikey: apiKey,
   'Content-Type': 'application/json',
+  Accept: 'application/json',
 };
 
-const res = await axios.post(`${baseUrl}/messages/send`, {
-  recipients: [formattedPhone],
-  message,
-  sender: senderId,
-}, { headers, timeout: 15000 });
+console.log('Config:', { baseUrl, senderId, keyHint: apiKey.slice(0, 12) + '…' });
 
-console.log('Sent to', formattedPhone);
-console.log(JSON.stringify(res.data, null, 2));
+try {
+  const res = await axios.post(
+    `${baseUrl}/messages/send`,
+    { recipients: [formattedPhone], message, sender: senderId },
+    { headers, timeout: 20000 }
+  );
+  console.log('Sent to', formattedPhone);
+  console.log(JSON.stringify(res.data, null, 2));
+  if (res.data?.ok !== true && res.data?.data?.status !== 'sent') {
+    console.warn('Gateway response may indicate failure — check INTEK dashboard.');
+    process.exit(1);
+  }
+} catch (err) {
+  console.error('SMS failed:', err.response?.status, err.response?.data || err.message);
+  process.exit(1);
+}

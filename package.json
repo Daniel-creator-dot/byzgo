@@ -9,6 +9,8 @@
     "dev:admin": "vite --open /admin",
     "backend": "npm --prefix backend run dev",
     "create:admin": "node backend/scripts/create-admin.mjs",
+    "seed:primecare": "node backend/scripts/seed-primecare-pharmacy.mjs",
+    "parse:formulary": "python scripts/parse_drug_formulary.py",
     "app": "npm run flutter:android",
     "icons": "python mobile/scripts/generate_app_icon.py",
     "flutter:chrome": "cd mobile && ..\\.flutter-sdk\\bin\\flutter run -d chrome --dart-define-from-file=dart_defines.json",
