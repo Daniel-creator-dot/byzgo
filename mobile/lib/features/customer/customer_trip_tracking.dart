@@ -19,17 +19,30 @@ class CustomerDeliveryTracker extends StatelessWidget {
     super.key,
     required this.order,
     required this.onOrderUpdated,
+    this.etaPhrase,
+    this.pickupLabel,
+    this.dropoffLabel,
   });
 
   final Order order;
   final ValueChanged<Order> onOrderUpdated;
+  final String? etaPhrase;
+  final String? pickupLabel;
+  final String? dropoffLabel;
 
   @override
   Widget build(BuildContext context) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _StatusHero(order: order),
+        _StatusHero(order: order, etaPhrase: etaPhrase),
+        if (pickupLabel != null || dropoffLabel != null) ...[
+          const SizedBox(height: 10),
+          _AddressSummary(
+            pickup: pickupLabel,
+            dropoff: dropoffLabel,
+          ),
+        ],
         if (tripAllowsContact(order)) ...[
           const SizedBox(height: 12),
           TripContactActions(
@@ -66,15 +79,72 @@ class CustomerDeliveryTracker extends StatelessWidget {
   }
 }
 
+class _AddressSummary extends StatelessWidget {
+  const _AddressSummary({this.pickup, this.dropoff});
+
+  final String? pickup;
+  final String? dropoff;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: BytzGoTheme.sheetDivider.withValues(alpha: 0.35),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (pickup != null && pickup!.trim().isNotEmpty)
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                pickupDot(),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    pickup!,
+                    style: BytzGoTheme.sheetBody(12),
+                  ),
+                ),
+              ],
+            ),
+          if (pickup != null &&
+              dropoff != null &&
+              pickup!.trim().isNotEmpty &&
+              dropoff!.trim().isNotEmpty)
+            const SizedBox(height: 8),
+          if (dropoff != null && dropoff!.trim().isNotEmpty)
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                dropoffSquare(),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    dropoff!,
+                    style: BytzGoTheme.sheetBody(12),
+                  ),
+                ),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+}
+
 class _StatusHero extends StatelessWidget {
-  const _StatusHero({required this.order});
+  const _StatusHero({required this.order, this.etaPhrase});
 
   final Order order;
+  final String? etaPhrase;
 
   @override
   Widget build(BuildContext context) {
     final headline = customerTripHeadline(order);
-    final sub = customerTripSubline(order);
+    final sub = customerTripSubline(order, etaPhrase: etaPhrase);
     final isArrived = order.status == 'arrived';
     final isDelivered = order.status == 'delivered';
     final searching = customerIsSearchingBiker(order);

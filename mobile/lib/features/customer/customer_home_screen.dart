@@ -5,10 +5,13 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/config_repository.dart';
+import '../../core/directions_service.dart';
 import '../../core/location_service.dart';
 import '../../core/places_service.dart';
+import '../../core/push_notification_service.dart';
 import '../../core/session.dart';
 import '../../core/socket_service.dart';
+import '../../models/trip_message.dart';
 import '../../models/location_point.dart';
 import '../../models/order.dart';
 import '../../shared/format.dart';
@@ -67,14 +70,23 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
   double _pricePerKm = defaultDeliveryPricePerKm;
   LocationPoint? _riderPosition;
   List<LocationPoint> _nearbyRiders = [];
+  List<LocationPoint> _routePoints = [];
+  String? _etaPhrase;
+  String? _trackingPickupLabel;
+  String? _trackingDropoffLabel;
   Timer? _nearbyPoll;
+  Timer? _etaPoll;
+  DateTime? _lastEtaFetch;
+  LocationPoint? _lastEtaOrigin;
   SocketService? _socket;
+  OrderMessageHandler? _chatNotifyHandler;
 
   OrdersRepository get _ordersRepo => context.read<OrdersRepository>();
   RidersRepository get _ridersRepo => context.read<RidersRepository>();
   Session get _session => context.read<Session>();
   LocationService get _location => context.read<LocationService>();
   PlacesService get _places => context.read<PlacesService>();
+  DirectionsService get _directions => context.read<DirectionsService>();
 
   @override
   void didChangeDependencies() {
@@ -191,6 +203,10 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
   @override
   void dispose() {
     _nearbyPoll?.cancel();
+    _etaPoll?.cancel();
+    if (_chatNotifyHandler != null) {
+      _socket?.removeOrderMessageListener(_chatNotifyHandler!);
+    }
     _socket?.clearHandlers();
     _pickupCtrl.dispose();
     _dropoffCtrl.dispose();
@@ -202,6 +218,12 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
     final socket = _socket;
     if (socket == null) return;
     socket.clearHandlers();
+    if (_chatNotifyHandler != null) {
+      socket.removeOrderMessageListener(_chatNotifyHandler!);
+    }
+    _chatNotifyHandler = (orderId, message) => _onTripChatMessage(orderId, message);
+    socket.addOrderMessageListener(_chatNotifyHandler!);
+
     socket.onOrderUpdated = (order) {
       if (!mounted) return;
       final prev = _orders.where((o) => o.id == order.id).firstOrNull;
@@ -213,14 +235,46 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
           _orders = [order, ..._orders];
         }
       });
+      if (order.customerId == _session.user?.id) {
+        if (order.status == 'delivered' && prev?.status != 'delivered') {
+          unawaited(PushNotificationService.instance.showTripAlert(
+            title: 'Delivered',
+            body: 'Your delivery is complete',
+            orderId: order.id,
+          ));
+        } else if (order.status == 'arrived' && prev?.status != 'arrived') {
+          unawaited(PushNotificationService.instance.showTripAlert(
+            title: 'Biker arrived',
+            body: 'Complete payment to get your delivery PIN',
+            orderId: order.id,
+            highPriority: true,
+          ));
+        } else if (order.riderId != null && prev?.riderId == null) {
+          unawaited(PushNotificationService.instance.showTripAlert(
+            title: 'Biker found',
+            body: 'Your biker is on the way',
+            orderId: order.id,
+          ));
+        } else if (order.status == 'picked_up' && prev?.status != 'picked_up') {
+          unawaited(PushNotificationService.instance.showTripAlert(
+            title: 'On the way',
+            body: 'Your biker is heading to your address',
+            orderId: order.id,
+          ));
+        }
+      }
       if (order.status == 'delivered' && prev?.status != 'delivered') {
         _snack('Delivered — thanks for using BytzGO!', success: true);
       } else if (order.status == 'arrived' && prev?.status != 'arrived') {
         _snack('Driver arrived — complete payment for your PIN', success: true);
-      } else       if (order.riderId != null && prev?.riderId == null) {
+      } else if (order.riderId != null && prev?.riderId == null) {
         _snack('Biker found — they\'re on the way', success: true);
       }
       _syncNearbyPoll();
+      _syncEtaPoll(order);
+      if (_activeCourier?.id == order.id) {
+        unawaited(_resolveTrackingLabels(order));
+      }
     };
     socket.onWalletUpdated = (balance) {
       if (!mounted) return;
@@ -232,12 +286,158 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
       if (!mounted) return;
       setState(() {
         _riderPosition = LocationPoint(
-          address: 'Rider',
+          address: 'Your biker',
           lat: lat,
           lng: lng,
         );
       });
+      if (active != null) unawaited(_refreshEta(active));
     };
+  }
+
+  void _onTripChatMessage(String orderId, TripMessage message) {
+    final userId = _session.user?.id;
+    if (userId == null || message.senderId == userId) return;
+    final preview = message.body.length > 120
+        ? '${message.body.substring(0, 117)}…'
+        : message.body;
+    unawaited(PushNotificationService.instance.showTripAlert(
+      title: 'New message',
+      body: preview,
+      type: 'trip-message',
+      orderId: orderId,
+      highPriority: true,
+    ));
+  }
+
+  Future<void> _resolveTrackingLabels(Order order) async {
+    var pickupLabel = order.pickupAddress ?? order.pickup ?? '';
+    if (order.pickupLat != null &&
+        order.pickupLng != null &&
+        hasValidCoords(order.pickupLat!, order.pickupLng!)) {
+      pickupLabel = await _places.resolveAddressLabel(
+        order.pickupLat!,
+        order.pickupLng!,
+        existing: pickupLabel,
+      );
+    } else {
+      pickupLabel = displayLocationLabel(
+        pickupLabel,
+        order.pickupLat ?? 0,
+        order.pickupLng ?? 0,
+      );
+    }
+
+    var dropLabel = order.address;
+    if (order.lat != null &&
+        order.lng != null &&
+        hasValidCoords(order.lat!, order.lng!)) {
+      dropLabel = await _places.resolveAddressLabel(
+        order.lat!,
+        order.lng!,
+        existing: dropLabel,
+      );
+    } else {
+      dropLabel = displayLocationLabel(dropLabel, order.lat ?? 0, order.lng ?? 0);
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _trackingPickupLabel = pickupLabel;
+      _trackingDropoffLabel = dropLabel;
+    });
+  }
+
+  void _syncEtaPoll(Order order) {
+    final hasRider = order.riderId != null &&
+        !['delivered', 'cancelled'].contains(order.status);
+    if (hasRider) {
+      if (_etaPoll == null) {
+        unawaited(_refreshEta(order));
+        _etaPoll = Timer.periodic(
+          const Duration(seconds: 25),
+          (_) {
+            final active = _activeCourier;
+            if (active != null) unawaited(_refreshEta(active));
+          },
+        );
+      }
+    } else {
+      _etaPoll?.cancel();
+      _etaPoll = null;
+      if (_etaPhrase != null || _routePoints.isNotEmpty) {
+        setState(() {
+          _etaPhrase = null;
+          _routePoints = [];
+        });
+      }
+    }
+  }
+
+  Future<void> _refreshEta(Order order) async {
+    if (_riderPosition == null || !(_riderPosition!.hasCoords)) return;
+    final target = customerRiderNavTarget(order);
+    if (target == null || !target.hasCoords) return;
+
+    final origin = _riderPosition!;
+    final now = DateTime.now();
+    if (_lastEtaFetch != null &&
+        _lastEtaOrigin != null &&
+        now.difference(_lastEtaFetch!) < const Duration(seconds: 12)) {
+      final moved = haversineDistanceKm(
+        _lastEtaOrigin!.lat,
+        _lastEtaOrigin!.lng,
+        origin.lat,
+        origin.lng,
+      );
+      if (moved < 0.03) return;
+    }
+
+    final summary = await _directions.fetchRoute(
+      origin: origin,
+      destination: target,
+    );
+    if (!mounted || summary == null) return;
+    _lastEtaFetch = now;
+    _lastEtaOrigin = origin;
+    setState(() {
+      _etaPhrase = summary.arrivalPhrase;
+      _routePoints = summary.points;
+    });
+  }
+
+  LocationPoint? _mapPickupForTracking(Order? active) {
+    if (active == null) return _pickup;
+    if (active.pickupLat != null &&
+        active.pickupLng != null &&
+        hasValidCoords(active.pickupLat!, active.pickupLng!)) {
+      return LocationPoint(
+        address: _trackingPickupLabel ??
+            displayLocationLabel(
+              active.pickupAddress ?? active.pickup ?? '',
+              active.pickupLat!,
+              active.pickupLng!,
+            ),
+        lat: active.pickupLat!,
+        lng: active.pickupLng!,
+      );
+    }
+    return _pickup;
+  }
+
+  LocationPoint? _mapDestinationForTracking(Order? active) {
+    if (active == null) return _destination;
+    if (active.lat != null &&
+        active.lng != null &&
+        hasValidCoords(active.lat!, active.lng!)) {
+      return LocationPoint(
+        address: _trackingDropoffLabel ??
+            displayLocationLabel(active.address, active.lat!, active.lng!),
+        lat: active.lat!,
+        lng: active.lng!,
+      );
+    }
+    return _destination;
   }
 
   void _replaceOrder(Order order) {
@@ -254,7 +454,10 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
       }
     });
     _syncNearbyPoll();
+    _syncEtaPoll(order);
     if (order.status == 'cancelled') {
+      _etaPoll?.cancel();
+      _etaPoll = null;
       _snack('Delivery request cancelled', success: true);
     }
   }
@@ -347,6 +550,11 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
         _loading = false;
       });
       _syncNearbyPoll();
+      final active = _activeCourier;
+      if (active != null) {
+        unawaited(_resolveTrackingLabels(active));
+        _syncEtaPoll(active);
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -457,16 +665,33 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
     final tracking = active != null;
     final fee = _deliveryFee;
     final searching = tracking && customerIsSearchingBiker(active);
-    final mapPickup = tracking ? (_pickupForOrder(active) ?? _pickup) : _pickup;
+    final hasRider = tracking && active.riderId != null;
+    final mapPickup = tracking ? _mapPickupForTracking(active) : _pickup;
+    final mapDest = tracking ? _mapDestinationForTracking(active) : _destination;
+    final navTarget = tracking ? customerRiderNavTarget(active) : null;
+    final showRiderOnMap = hasRider && !searching;
 
     return RideShell(
       mapChild: RideGoogleMap(
         pickup: mapPickup,
-        destination: _destination,
-        riderPosition: _riderPosition,
+        destination: mapDest,
+        riderPosition: showRiderOnMap ? _riderPosition : null,
         nearbyRiders: searching ? _nearbyRiders : const [],
         showSearchRadar: searching,
-        showRoute: mapPickup != null && _destination != null,
+        showRoute: !searching &&
+            ((mapPickup != null &&
+                    mapDest != null &&
+                    mapPickup.hasCoords &&
+                    mapDest.hasCoords) ||
+                _routePoints.length >= 2),
+        showLiveRiderRoute: false,
+        routePoints: _routePoints.length >= 2
+            ? _routePoints
+            : (showRiderOnMap &&
+                    _riderPosition != null &&
+                    navTarget != null
+                ? [_riderPosition!, navTarget]
+                : const []),
         mapPickMode: _pickMode,
         onMapTap: tracking ? null : _onMapTap,
       ),
@@ -480,6 +705,8 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
                     label: customerTripHeadline(active),
                     searching: searching,
                     nearbyCount: searching ? _nearbyRiders.length : null,
+                    etaPhrase: _etaPhrase,
+                    showRiderApproaching: showRiderOnMap,
                   ),
                 ),
               ),
@@ -519,6 +746,9 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
               CustomerDeliveryTracker(
                 order: active,
                 onOrderUpdated: _replaceOrder,
+                etaPhrase: _etaPhrase,
+                pickupLabel: _trackingPickupLabel,
+                dropoffLabel: _trackingDropoffLabel,
               ),
             ],
             if (!tracking) ...[

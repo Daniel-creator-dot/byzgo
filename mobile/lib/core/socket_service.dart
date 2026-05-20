@@ -11,6 +11,11 @@ typedef OrderIdHandler = void Function(String orderId);
 typedef WalletHandler = void Function(double balance);
 typedef LocationHandler = void Function(String riderId, double lat, double lng);
 typedef OrderMessageHandler = void Function(String orderId, TripMessage message);
+typedef StatusUpdatedHandler = void Function({
+  required String status,
+  bool? isOnline,
+  String? reason,
+});
 
 /// Real-time layer — mirrors `src/lib/socket.ts` and `App.tsx` listeners.
 class SocketService {
@@ -24,6 +29,8 @@ class SocketService {
   WalletHandler? onWalletUpdated;
   LocationHandler? onLocationUpdated;
   OrderMessageHandler? onOrderMessage;
+  final List<OrderMessageHandler> _orderMessageListeners = [];
+  StatusUpdatedHandler? onStatusUpdated;
 
   bool get isConnected => _socket?.connected ?? false;
 
@@ -55,7 +62,18 @@ class SocketService {
       ..on('order:updated', _onOrderUpdated)
       ..on('wallet:updated', _onWalletUpdated)
       ..on('location:updated', _onLocationUpdated)
-      ..on('order:message', _onOrderMessage);
+      ..on('order:message', _onOrderMessage)
+      ..on('status:updated', _onStatusUpdated);
+  }
+
+  void _onStatusUpdated(dynamic data) {
+    final map = _asMap(data);
+    if (map == null) return;
+    onStatusUpdated?.call(
+      status: map['status']?.toString() ?? '',
+      isOnline: map['is_online'] as bool?,
+      reason: map['reason']?.toString(),
+    );
   }
 
   void _onRideIncoming(dynamic data) {
@@ -95,6 +113,16 @@ class SocketService {
     onWalletUpdated?.call(balance);
   }
 
+  void addOrderMessageListener(OrderMessageHandler listener) {
+    if (!_orderMessageListeners.contains(listener)) {
+      _orderMessageListeners.add(listener);
+    }
+  }
+
+  void removeOrderMessageListener(OrderMessageHandler listener) {
+    _orderMessageListeners.remove(listener);
+  }
+
   void _onOrderMessage(dynamic data) {
     final map = _asMap(data);
     if (map == null || map['orderId'] == null || map['message'] == null) return;
@@ -102,7 +130,11 @@ class SocketService {
       final message = TripMessage.fromJson(
         Map<String, dynamic>.from(map['message'] as Map),
       );
-      onOrderMessage?.call(map['orderId'].toString(), message);
+      final orderId = map['orderId'].toString();
+      onOrderMessage?.call(orderId, message);
+      for (final listener in List<OrderMessageHandler>.from(_orderMessageListeners)) {
+        listener(orderId, message);
+      }
     } catch (e) {
       debugPrint('[socket] bad order:message: $e');
     }
@@ -151,6 +183,7 @@ class SocketService {
     onWalletUpdated = null;
     onLocationUpdated = null;
     onOrderMessage = null;
+    onStatusUpdated = null;
   }
 
   void emitLocationUpdate({

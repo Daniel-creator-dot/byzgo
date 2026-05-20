@@ -100,6 +100,7 @@ interface AuthUser {
   role: Role;
   balance: number;
   status?: string;
+  is_online?: boolean;
   region?: string;
   lat?: number;
   lng?: number;
@@ -260,6 +261,7 @@ function MainApp() {
   const [refreshing, setRefreshing] = useState(false);
   const [showDeviceSetup, setShowDeviceSetup] = useState(false);
   const [adminPendingCount, setAdminPendingCount] = useState(0);
+  const [adminPendingRiderCount, setAdminPendingRiderCount] = useState(0);
   const userRef = useRef(user);
   const ordersRef = useRef(orders);
   const riderTrackingNotifiedRef = useRef(new Set<string>());
@@ -388,6 +390,7 @@ function MainApp() {
   useEffect(() => {
     if (user?.role !== 'admin' || !token) return;
     axios.get('/api/admin/pending-products').then((res) => setAdminPendingCount(res.data?.length || 0)).catch(() => {});
+    axios.get('/api/admin/pending-riders').then((res) => setAdminPendingRiderCount(res.data?.length || 0)).catch(() => {});
   }, [user?.role, token, orders.length]);
 
   const handleIncomingRideFromExternal = useCallback(
@@ -423,28 +426,28 @@ function MainApp() {
   );
 
   useEffect(() => {
-    if (showDeviceSetup || user?.role !== 'rider' || user.status !== 'active' || !token) return;
+    if (showDeviceSetup || user?.role !== 'rider' || user.status !== 'active' || !user.is_online || !token) return;
     unlockIncomingRideAudio();
     if (Notification.permission === 'granted') {
       subscribeRiderPush().catch(err => console.warn('Push subscribe failed', err));
     }
-  }, [user?.id, user?.role, user?.status, token, showDeviceSetup]);
+  }, [user?.id, user?.role, user?.status, user?.is_online, token, showDeviceSetup]);
 
   // Show incoming-call UI for active dispatch offers (socket backup + refresh)
   useEffect(() => {
-    if (user?.role !== 'rider' || user.status !== 'active') return;
+    if (user?.role !== 'rider' || user.status !== 'active' || !user.is_online) return;
     const best = pickBestRideOffer(orders);
     if (best) triggerIncomingRideCall(best);
-  }, [orders, user?.role, user?.status, pickBestRideOffer, triggerIncomingRideCall]);
+  }, [orders, user?.role, user?.status, user?.is_online, pickBestRideOffer, triggerIncomingRideCall]);
 
   // Poll offers while online so missed socket events still ring
   useEffect(() => {
-    if (showDeviceSetup || user?.role !== 'rider' || user.status !== 'active' || !token) return;
+    if (showDeviceSetup || user?.role !== 'rider' || user.status !== 'active' || !user.is_online || !token) return;
     const poll = setInterval(() => {
       axios.get<Order[]>('/api/orders').then((res) => setOrders(res.data)).catch(() => {});
     }, 6000);
     return () => clearInterval(poll);
-  }, [user?.role, user?.status, token, showDeviceSetup]);
+  }, [user?.role, user?.status, user?.is_online, token, showDeviceSetup]);
 
   useEffect(() => {
     return onServiceWorkerRideMessage(msg => {
@@ -674,10 +677,10 @@ function MainApp() {
       setUser(prev => prev ? { ...prev, balance: data.balance } : null);
     });
 
-    socket.on('status:updated', ({ status }: { status: string }) => {
-      setUser(prev => (prev ? { ...prev, status } : null));
+    socket.on('status:updated', (payload: { status: string; is_online?: boolean }) => {
+      setUser(prev => (prev ? { ...prev, status: payload.status, is_online: payload.is_online ?? prev.is_online } : null));
       const stored = JSON.parse(localStorage.getItem('user') || '{}');
-      localStorage.setItem('user', JSON.stringify({ ...stored, status }));
+      localStorage.setItem('user', JSON.stringify({ ...stored, status: payload.status, is_online: payload.is_online ?? stored.is_online }));
     });
 
     return () => {
@@ -838,7 +841,7 @@ function MainApp() {
             vendors={vendors}
             onUpdateStatus={updateOrderStatus}
             onLogout={() => setIsLogoutModalOpen(true)}
-            pendingApproval={user.status === 'pending'}
+            pendingApproval={user.status === 'pending' || user.status === 'rejected'}
             addNotification={addNotification}
             refreshData={refreshData}
           />
@@ -981,6 +984,7 @@ function MainApp() {
             : ([
                 { id: 'orders', label: 'Orders', icon: ShoppingBag },
                 { id: 'users', label: 'Users', icon: Users },
+                { id: 'drivers', label: 'Drivers', icon: Bike, badge: adminPendingRiderCount },
                 { id: 'products', label: 'Approve', icon: Package, badge: adminPendingCount },
                 { id: 'revenue', label: 'Revenue', icon: BarChart3 },
                 { id: 'zones', label: 'Zones', icon: MapPin },
@@ -1001,7 +1005,7 @@ function MainApp() {
                 <VendorView user={user} orders={orders} products={products} riderLocations={riderLocations} onUpdateStatus={updateOrderStatus} addNotification={addNotification} onBalanceUpdate={(bal) => setUser((prev) => (prev ? { ...prev, balance: bal } : prev))} onAddProduct={(p) => setProducts((prev) => { const exists = prev.find((item) => item.id === p.id); if (exists) return prev.map((item) => (item.id === p.id ? p : item)); return [...prev, p]; })} onDeleteProduct={async (id) => { await axios.delete(`/api/products/${id}`); setProducts((prev) => prev.filter((p) => p.id !== id)); }} activeTab={activeTab} setActiveTab={setActiveTab} refreshData={refreshData} />
               )}
               {user.role === 'admin' && (
-                <AdminView user={user} orders={orders} addNotification={addNotification} activeTab={activeTab} setActiveTab={setActiveTab} onPendingCountChange={setAdminPendingCount} />
+                <AdminView user={user} orders={orders} addNotification={addNotification} activeTab={activeTab} setActiveTab={setActiveTab} onPendingCountChange={setAdminPendingCount} onPendingRiderCountChange={setAdminPendingRiderCount} />
               )}
             </AnimatePresence>
           </div>
@@ -1046,6 +1050,7 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
   }, [forcedRole]);
 
   // Auth fields
+  const [loginId, setLoginId] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
@@ -1063,9 +1068,8 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
   const [otpLoading, setOtpLoading] = useState(false);
   const [resendLoading, setResendLoading] = useState(false);
 
-  // Forgot Password state
+  // Forgot Password state (phone + email, no SMS)
   const [isForgotPassword, setIsForgotPassword] = useState(false);
-  const [forgotStep, setForgotStep] = useState(1); // 1 = enter phone, 2 = enter otp + new password
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showNewPassword, setShowNewPassword] = useState(false);
@@ -1074,29 +1078,15 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
     e.preventDefault();
     setError('');
 
-    // If joining/signing up as customer, send SMS OTP first
     if (!isLogin && role === 'customer') {
       if (!phone) {
-        setError('Phone number is required for verification.');
+        setError('Phone number is required.');
         return;
       }
       if (!isValidGhanaPhoneClient(phone)) {
         setError('Enter a valid Ghana phone number (e.g. 0247904675).');
         return;
       }
-      setLoading(true);
-      try {
-        await axios.post('/api/auth/send-signup-otp', { phone, email });
-        setOtpPurpose('signup_verify');
-        setOtpError('');
-        setOtp('');
-        setIsOtpModalOpen(true);
-      } catch (err: any) {
-        setError(err.response?.data?.message || 'Failed to send verification code. Please check your details.');
-      } finally {
-        setLoading(false);
-      }
-      return;
     }
 
     if (!isLogin && role === 'admin' && !adminInviteSecret.trim()) {
@@ -1109,7 +1099,7 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
     try {
       const endpoint = isLogin ? '/api/auth/login' : '/api/auth/register';
       const payload = isLogin
-        ? { email, password }
+        ? { login: loginId.trim(), password }
         : {
             name,
             email,
@@ -1125,7 +1115,7 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
         setError(loginRejectedMessage(res.data.user.role as Role, forcedRole || role));
       }
     } catch (err: unknown) {
-      setError(mapAuthError(err, 'Invalid email or password. Please try again.'));
+      setError(mapAuthError(err, 'Invalid phone/email or password. Please try again.'));
     } finally {
       setLoading(false);
     }
@@ -1158,34 +1148,6 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
     }
   };
 
-  const handleSendForgotOtp = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-    if (!phone) {
-      setError('Registered phone number is required.');
-      return;
-    }
-    if (!isValidGhanaPhoneClient(phone)) {
-      setError('Enter a valid Ghana phone number (e.g. 0247904675).');
-      return;
-    }
-    setLoading(true);
-    setOtpError('');
-    try {
-      await axios.post('/api/auth/send-forgot-otp', { phone });
-      setOtpPurpose('forgot_password');
-      setForgotStep(2);
-      setOtp('');
-      setNewPassword('');
-      setConfirmPassword('');
-      setError('');
-    } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to send recovery code. Phone number might not be registered.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const handleResendOtp = async () => {
     setOtpError('');
     setError('');
@@ -1214,9 +1176,16 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
   const handleResetPassword = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    setOtpError('');
-    if (!otp) {
-      setError('Verification code is required.');
+    if (!phone) {
+      setError('Registered phone number is required.');
+      return;
+    }
+    if (!isValidGhanaPhoneClient(phone)) {
+      setError('Enter a valid Ghana phone number (e.g. 0247904675).');
+      return;
+    }
+    if (!email.trim()) {
+      setError('Registered email address is required.');
       return;
     }
     if (newPassword.length < 6) {
@@ -1230,14 +1199,13 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
 
     setLoading(true);
     try {
-      await axios.post('/api/auth/reset-password-otp', { phone, otp, newPassword });
+      await axios.post('/api/auth/reset-password', { phone, email: email.trim(), newPassword });
       setIsForgotPassword(false);
       setIsLogin(true);
-      setForgotStep(1);
       setError('');
-      alert('Password updated successfully! Please log in with your new password.');
+      alert('Password updated! Sign in with your phone number or email and new password.');
     } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to update password. Code may be invalid or expired.');
+      setError(err.response?.data?.message || 'Could not reset password. Check phone and email match your account.');
     } finally {
       setLoading(false);
     }
@@ -1341,129 +1309,104 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
             <div className="space-y-6">
               <div className="text-center mb-4">
                 <h3 className="text-xl font-black italic tracking-tighter text-slate-800 uppercase">Recover Password</h3>
-                <p className="text-xs font-medium text-slate-400 mt-1 uppercase tracking-widest">Via INTEK SMS OTP Verification</p>
+                <p className="text-xs font-medium text-slate-400 mt-1 uppercase tracking-widest">
+                  Use your registered phone and email
+                </p>
               </div>
 
-              {(error || otpError) && (
+              {error && (
                 <p className="text-[10px] font-black text-red-500 uppercase tracking-widest text-center px-2">
-                  {error || otpError}
+                  {error}
                 </p>
               )}
 
-              {forgotStep === 1 ? (
-                <form onSubmit={handleSendForgotOtp} className="space-y-6">
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-4">Registered Phone Number</label>
-                    <div className="relative">
-                      <Phone className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" size={18} />
-                      <input 
-                        type="tel" 
-                        required
-                        value={phone}
-                        onChange={(e) => setPhone(e.target.value)}
-                        placeholder="e.g. 024XXXXXXX"
-                        className="w-full bg-slate-50 border border-slate-100 p-4 pl-12 rounded-2xl focus:outline-none focus:border-brand-blue font-bold text-sm"
-                      />
-                    </div>
-                  </div>
-
-                  <button 
-                    type="submit"
-                    disabled={loading}
-                    className="w-full py-4 bg-brand-blue text-white rounded-2xl font-black uppercase tracking-widest text-xs hover:scale-[1.02] active:scale-[0.98] transition-all shadow-xl shadow-brand-blue/20 flex items-center justify-center gap-2"
-                  >
-                    {loading ? <LoadingIndicator size="sm" variant="white" /> : 'Send Verification Code'}
-                  </button>
-                </form>
-              ) : (
-                <form onSubmit={handleResetPassword} className="space-y-6">
-                  <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100 flex items-center justify-between">
-                    <div>
-                      <p className="text-[8px] font-black uppercase tracking-widest text-slate-400">Sending Code To</p>
-                      <p className="font-bold text-sm text-slate-700">{phone}</p>
-                    </div>
-                    <button type="button" onClick={() => setForgotStep(1)} className="text-[8px] font-black uppercase tracking-widest text-brand-blue hover:underline">Change</button>
-                  </div>
-
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-4">6-Digit Code (SMS OTP)</label>
-                    <input 
-                      type="text" 
+              <form onSubmit={handleResetPassword} className="space-y-6">
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-4">Registered Phone</label>
+                  <div className="relative">
+                    <Phone className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" size={18} />
+                    <input
+                      type="tel"
                       required
-                      maxLength={6}
-                      value={otp}
-                      onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))}
-                      placeholder="Enter 6-digit OTP"
-                      className="w-full bg-slate-50 border border-slate-100 p-4 text-center rounded-2xl focus:outline-none focus:border-brand-blue font-mono font-black text-xl tracking-[0.5em]"
+                      value={phone}
+                      onChange={(e) => setPhone(e.target.value)}
+                      placeholder="e.g. 024XXXXXXX"
+                      className="w-full bg-slate-50 border border-slate-100 p-4 pl-12 rounded-2xl focus:outline-none focus:border-brand-blue font-bold text-sm"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-4">Registered Email</label>
+                  <div className="relative">
+                    <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" size={18} />
+                    <input
+                      type="email"
+                      required
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      placeholder="name@example.com"
+                      className="w-full bg-slate-50 border border-slate-100 p-4 pl-12 rounded-2xl focus:outline-none focus:border-brand-blue font-bold text-sm"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-4">New Password</label>
+                  <div className="relative">
+                    <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" size={18} />
+                    <input
+                      type={showNewPassword ? 'text' : 'password'}
+                      required
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      placeholder="New password (min 6 chars)"
+                      className="w-full bg-slate-50 border border-slate-100 p-4 pl-12 pr-12 rounded-2xl focus:outline-none focus:border-brand-blue font-bold text-sm"
                     />
                     <button
                       type="button"
-                      disabled={resendLoading}
-                      onClick={handleResendOtp}
-                      className="w-full text-[10px] font-black uppercase tracking-widest text-brand-blue hover:underline disabled:opacity-50"
+                      onClick={() => setShowNewPassword(!showNewPassword)}
+                      className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-500 transition-colors"
                     >
-                      {resendLoading ? 'Sending…' : 'Resend code'}
+                      {showNewPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                     </button>
                   </div>
+                </div>
 
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-4">New Password</label>
-                    <div className="relative">
-                      <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" size={18} />
-                      <input 
-                        type={showNewPassword ? "text" : "password"} 
-                        required
-                        value={newPassword}
-                        onChange={(e) => setNewPassword(e.target.value)}
-                        placeholder="New password (min 6 chars)"
-                        className="w-full bg-slate-50 border border-slate-100 p-4 pl-12 pr-12 rounded-2xl focus:outline-none focus:border-brand-blue font-bold text-sm"
-                      />
-                      <button 
-                        type="button"
-                        onClick={() => setShowNewPassword(!showNewPassword)}
-                        className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-500 transition-colors"
-                      >
-                        {showNewPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                      </button>
-                    </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-4">Confirm Password</label>
+                  <div className="relative">
+                    <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" size={18} />
+                    <input
+                      type={showNewPassword ? 'text' : 'password'}
+                      required
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      placeholder="Re-enter new password"
+                      className="w-full bg-slate-50 border border-slate-100 p-4 pl-12 rounded-2xl focus:outline-none focus:border-brand-blue font-bold text-sm"
+                    />
                   </div>
+                </div>
 
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-4">Confirm Password</label>
-                    <div className="relative">
-                      <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" size={18} />
-                      <input 
-                        type={showNewPassword ? "text" : "password"} 
-                        required
-                        value={confirmPassword}
-                        onChange={(e) => setConfirmPassword(e.target.value)}
-                        placeholder="Re-enter new password"
-                        className="w-full bg-slate-50 border border-slate-100 p-4 pl-12 rounded-2xl focus:outline-none focus:border-brand-blue font-bold text-sm"
-                      />
-                    </div>
-                  </div>
-
-                  <button 
-                    type="submit"
-                    disabled={loading}
-                    className="w-full py-4 bg-brand-green text-white rounded-2xl font-black uppercase tracking-widest text-xs hover:scale-[1.02] active:scale-[0.98] transition-all shadow-xl shadow-brand-green/20 flex items-center justify-center gap-2"
-                  >
-                    {loading ? <LoadingIndicator size="sm" variant="white" /> : 'Reset Password'}
-                  </button>
-                </form>
-              )}
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="w-full py-4 bg-brand-green text-white rounded-2xl font-black uppercase tracking-widest text-xs hover:scale-[1.02] active:scale-[0.98] transition-all shadow-xl shadow-brand-green/20 flex items-center justify-center gap-2"
+                >
+                  {loading ? <LoadingIndicator size="sm" variant="white" /> : 'Reset Password'}
+                </button>
+              </form>
 
               <div className="text-center mt-6">
-                <button 
-                  type="button" 
+                <button
+                  type="button"
                   onClick={() => {
                     setIsForgotPassword(false);
-                    setForgotStep(1);
                     setError('');
-                  }} 
+                  }}
                   className="text-[10px] font-black uppercase tracking-widest text-slate-400 hover:text-slate-600 hover:underline"
                 >
-                  ? Back to Login
+                  ← Back to Login
                 </button>
               </div>
             </div>
@@ -1509,20 +1452,38 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
                   </div>
                 )}
 
-                <div className="space-y-2">
-                  <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-4">Email Address</label>
-                  <div className="relative">
-                    <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" size={18} />
-                    <input 
-                      type="email" 
-                      required
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      placeholder="name@example.com"
-                      className="w-full bg-slate-50 border border-slate-100 p-4 pl-12 rounded-2xl focus:outline-none focus:border-brand-blue font-bold text-sm"
-                    />
+                {isLogin ? (
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-4">Phone or Email</label>
+                    <div className="relative">
+                      <Phone className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" size={18} />
+                      <input
+                        type="text"
+                        required
+                        autoComplete="username"
+                        value={loginId}
+                        onChange={(e) => setLoginId(e.target.value)}
+                        placeholder="0247904675 or name@example.com"
+                        className="w-full bg-slate-50 border border-slate-100 p-4 pl-12 rounded-2xl focus:outline-none focus:border-brand-blue font-bold text-sm"
+                      />
+                    </div>
                   </div>
-                </div>
+                ) : (
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-4">Email Address</label>
+                    <div className="relative">
+                      <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" size={18} />
+                      <input
+                        type="email"
+                        required
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        placeholder="name@example.com"
+                        className="w-full bg-slate-50 border border-slate-100 p-4 pl-12 rounded-2xl focus:outline-none focus:border-brand-blue font-bold text-sm"
+                      />
+                    </div>
+                  </div>
+                )}
 
                 {!isLogin && role === 'customer' && (
                   <div className="space-y-2">
@@ -1566,7 +1527,6 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
                         type="button" 
                         onClick={() => {
                           setIsForgotPassword(true);
-                          setForgotStep(1);
                           setError('');
                         }} 
                         className="text-[9px] font-black uppercase tracking-widest text-brand-blue hover:underline"
@@ -3323,6 +3283,7 @@ function AdminView({
   activeTab,
   setActiveTab,
   onPendingCountChange,
+  onPendingRiderCountChange,
 }: {
   user: AuthUser;
   orders: Order[];
@@ -3330,8 +3291,13 @@ function AdminView({
   activeTab: any;
   setActiveTab: (v: any) => void;
   onPendingCountChange?: (count: number) => void;
+  onPendingRiderCountChange?: (count: number) => void;
 }) {
   const [allUsers, setAllUsers] = useState<any[]>([]);
+  const [pendingRiders, setPendingRiders] = useState<any[]>([]);
+  const [ridersLoading, setRidersLoading] = useState(false);
+  const [rejectRiderId, setRejectRiderId] = useState<string | null>(null);
+  const [rejectReason, setRejectReason] = useState('');
   const [zones, setZones] = useState<any[]>([]);
   const [pendingProducts, setPendingProducts] = useState<any[]>([]);
   const [revenueData, setRevenueData] = useState<any>(null);
@@ -3342,8 +3308,14 @@ function AdminView({
     paystack_secret_key: '',
     platform_fee_percent: '10',
     delivery_price_per_km: '4',
+    sms_base_url: 'https://www.inteksms.top/api/v1',
+    sms_api_key: '',
+    sms_sender_id: 'bytzee',
+    sms_config_source: '',
   });
   const [settingsSaving, setSettingsSaving] = useState(false);
+  const [smsTestPhone, setSmsTestPhone] = useState('');
+  const [smsTestLoading, setSmsTestLoading] = useState(false);
   const [editingZone, setEditingZone] = useState<any | null>(null);
   const [zoneForm, setZoneForm] = useState({ name: '', region: '', base_price: '10', price_per_km: '2', min_price: '5', max_price: '' });
   const [showZoneForm, setShowZoneForm] = useState(false);
@@ -3354,6 +3326,10 @@ function AdminView({
     axios.get('/api/admin/pending-products').then((res) => {
       setPendingProducts(res.data);
       onPendingCountChange?.(res.data?.length || 0);
+    }).catch(() => {});
+    axios.get('/api/admin/pending-riders').then((res) => {
+      setPendingRiders(res.data);
+      onPendingRiderCountChange?.(res.data?.length || 0);
     }).catch(() => {});
     axios.get('/api/delivery-zones').then((res) => setZones(res.data)).catch(() => {});
   }, []);
@@ -3379,9 +3355,29 @@ function AdminView({
         paystack_secret_key: '',
         platform_fee_percent: res.data.platform_fee_percent || '10',
         delivery_price_per_km: res.data.delivery_price_per_km || '4',
+        sms_base_url: res.data.sms_base_url || 'https://www.inteksms.top/api/v1',
+        sms_api_key: '',
+        sms_sender_id: res.data.sms_sender_id || 'bytzee',
+        sms_config_source: res.data.sms_config_source || '',
       })).catch(() => addNotification('Failed to load settings', 'warning'));
     }
+    if (activeTab === 'drivers') {
+      setRidersLoading(true);
+      axios.get('/api/admin/pending-riders')
+        .then((res) => {
+          setPendingRiders(res.data);
+          onPendingRiderCountChange?.(res.data?.length || 0);
+        })
+        .catch(() => addNotification('Failed to load driver applications', 'warning'))
+        .finally(() => setRidersLoading(false));
+    }
   }, [activeTab]);
+
+  const refreshPendingRiders = async () => {
+    const res = await axios.get('/api/admin/pending-riders');
+    setPendingRiders(res.data);
+    onPendingRiderCountChange?.(res.data?.length || 0);
+  };
 
   useEffect(() => {
     onPendingCountChange?.(pendingProducts.length);
@@ -3442,6 +3438,7 @@ function AdminView({
           <div className="flex flex-wrap gap-2">
              <button onClick={() => setActiveTab('orders')} className={cn("px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all", activeTab === 'orders' ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500")}>Orders</button>
              <button onClick={() => setActiveTab('users')} className={cn("px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all", activeTab === 'users' ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500")}>Users</button>
+             <button onClick={() => setActiveTab('drivers')} className={cn("px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all", activeTab === 'drivers' ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500")}>Drivers {pendingRiders.length > 0 && <span className="ml-1 bg-red-500 text-white px-1.5 py-0.5 rounded-full text-[8px]">{pendingRiders.length}</span>}</button>
              <button onClick={() => setActiveTab('products')} className={cn("px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all", activeTab === 'products' ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500")}>Approval {pendingProducts.length > 0 && <span className="ml-1 bg-red-500 text-white px-1.5 py-0.5 rounded-full text-[8px]">{pendingProducts.length}</span>}</button>
              <button onClick={() => setActiveTab('revenue')} className={cn("px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all", activeTab === 'revenue' ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500")}>Revenue</button>
              <button onClick={() => setActiveTab('zones')} className={cn("px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all", activeTab === 'zones' ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500")}>Zones</button>
@@ -3604,6 +3601,116 @@ function AdminView({
                  </div>
                ))}
             </div>
+         </div>
+       ) : activeTab === 'drivers' ? (
+         <div className="space-y-6">
+            <h3 className="text-xl font-black italic tracking-tighter text-slate-800 uppercase">Driver verification</h3>
+            {ridersLoading && <p className="text-slate-400 text-sm">Loading applications…</p>}
+            {!ridersLoading && pendingRiders.length === 0 ? (
+              <div className="bg-white rounded-[3rem] p-20 text-center border border-slate-100">
+                <p className="text-slate-400 font-bold italic">No driver applications waiting for review.</p>
+              </div>
+            ) : (
+              <div className="space-y-8">
+                {pendingRiders.map((r: any) => {
+                  const docs = Array.isArray(r.documents) ? r.documents : [];
+                  const docLabel: Record<string, string> = { license: 'Driver licence', ghana_card: 'Ghana card', photo: 'Profile photo' };
+                  return (
+                    <div key={r.id} className="bg-white rounded-[2rem] border border-slate-100 p-6 sm:p-8 shadow-sm">
+                      <div className="flex flex-wrap justify-between items-start gap-4 mb-6">
+                        <div>
+                          <h4 className="font-black text-lg text-slate-800">{r.name}</h4>
+                          <p className="text-slate-400 text-xs font-bold uppercase tracking-widest">{r.email}</p>
+                          {r.phone && <p className="text-slate-500 text-xs mt-1">{r.phone}</p>}
+                          {r.region && <p className="text-slate-500 text-xs">{r.region}</p>}
+                        </div>
+                        <span className={cn(
+                          'px-3 py-1 rounded-lg text-[10px] font-black uppercase',
+                          r.status === 'rejected' ? 'bg-red-50 text-red-500' : 'bg-amber-100 text-amber-600'
+                        )}>
+                          {r.status}
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+                        {(['license', 'ghana_card', 'photo'] as const).map((type) => {
+                          const doc = docs.find((d: any) => d.doc_type === type);
+                          return (
+                            <div key={type} className="rounded-2xl border border-slate-100 overflow-hidden bg-slate-50">
+                              <p className="px-3 py-2 text-[9px] font-black uppercase tracking-widest text-slate-500">{docLabel[type]}</p>
+                              {doc?.image_url ? (
+                                <a href={doc.image_url} target="_blank" rel="noreferrer" className="block aspect-[4/3] bg-slate-200">
+                                  <img src={doc.image_url} alt={docLabel[type]} className="w-full h-full object-cover" />
+                                </a>
+                              ) : (
+                                <div className="aspect-[4/3] flex items-center justify-center text-slate-300 text-xs font-bold">Not uploaded</div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            try {
+                              await axios.patch(`/api/admin/riders/${r.id}/approve`);
+                              await refreshPendingRiders();
+                              setAllUsers((prev) => prev.map((u) => (u.id === r.id ? { ...u, status: 'active', is_online: false } : u)));
+                              addNotification(`${r.name} approved as driver`, 'success');
+                            } catch (err) {
+                              addNotification(getApiError(err, 'Approve failed'), 'warning');
+                            }
+                          }}
+                          className="px-5 py-3 bg-brand-green text-white rounded-xl font-black uppercase text-[10px] tracking-widest"
+                        >
+                          Approve driver
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => { setRejectRiderId(r.id); setRejectReason(''); }}
+                          className="px-5 py-3 bg-red-500 text-white rounded-xl font-black uppercase text-[10px] tracking-widest"
+                        >
+                          Reject
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {rejectRiderId && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+                <div className="bg-white rounded-[2rem] p-8 max-w-md w-full shadow-xl">
+                  <h4 className="font-black text-lg mb-4">Reject application</h4>
+                  <textarea
+                    value={rejectReason}
+                    onChange={(e) => setRejectReason(e.target.value)}
+                    placeholder="Reason (optional)"
+                    className="w-full border border-slate-200 rounded-xl p-4 text-sm font-bold min-h-[100px] mb-4"
+                  />
+                  <div className="flex gap-2">
+                    <button type="button" onClick={() => setRejectRiderId(null)} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold text-[10px] uppercase">Cancel</button>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          await axios.patch(`/api/admin/riders/${rejectRiderId}/reject`, { reason: rejectReason });
+                          await refreshPendingRiders();
+                          setAllUsers((prev) => prev.map((u) => (u.id === rejectRiderId ? { ...u, status: 'rejected' } : u)));
+                          addNotification('Driver application rejected', 'success');
+                          setRejectRiderId(null);
+                        } catch (err) {
+                          addNotification(getApiError(err, 'Reject failed'), 'warning');
+                        }
+                      }}
+                      className="flex-1 py-3 bg-red-500 text-white rounded-xl font-bold text-[10px] uppercase"
+                    >
+                      Confirm reject
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
          </div>
        ) : activeTab === 'products' ? (
          <div className="space-y-6">
@@ -3768,6 +3875,45 @@ function AdminView({
              <p className="text-[10px] text-slate-500 font-bold">
                Courier and food delivery fees = distance (km) × this rate. Zone min/max caps still apply when set.
              </p>
+
+             <div className="pt-4 border-t border-slate-700">
+               <h4 className="text-sm font-bold text-white mb-1">SMS / OTP (INTEK)</h4>
+               <p className="text-[10px] text-slate-500 font-bold mb-3">
+                 Customer signup and password reset codes. Config source: {settings.sms_config_source || 'unknown'}.
+                 Use your own API key from inteksms.top and an approved Sender ID.
+               </p>
+               <DarkInput label="SMS API base URL" value={settings.sms_base_url} onChange={(e) => setSettings({ ...settings, sms_base_url: e.target.value })} />
+               <DarkInput label="SMS API key" type="password" value={settings.sms_api_key} onChange={(e) => setSettings({ ...settings, sms_api_key: e.target.value })} placeholder="INTEK_… (leave blank to keep)" />
+               <DarkInput label="Sender ID (brand name)" value={settings.sms_sender_id} onChange={(e) => setSettings({ ...settings, sms_sender_id: e.target.value })} placeholder="bytzee" />
+               <div className="flex gap-2 mt-2">
+                 <input
+                   type="tel"
+                   value={smsTestPhone}
+                   onChange={(e) => setSmsTestPhone(e.target.value)}
+                   placeholder="024XXXXXXX test phone"
+                   className="flex-1 bg-slate-900 border border-slate-700 rounded-xl py-3 px-4 text-sm font-bold text-white"
+                 />
+                 <button
+                   type="button"
+                   disabled={smsTestLoading || !smsTestPhone}
+                   onClick={async () => {
+                     setSmsTestLoading(true);
+                     try {
+                       const res = await axios.post('/api/admin/sms-test', { phone: smsTestPhone });
+                       addNotification(res.data?.message || 'Test SMS sent', 'success');
+                     } catch (err) {
+                       addNotification(getApiError(err, 'SMS test failed'), 'warning');
+                     } finally {
+                       setSmsTestLoading(false);
+                     }
+                   }}
+                   className="px-4 py-3 bg-brand-green text-slate-950 rounded-xl text-[10px] font-black uppercase disabled:opacity-50"
+                 >
+                   {smsTestLoading ? '…' : 'Test SMS'}
+                 </button>
+               </div>
+             </div>
+
              <DarkButton type="submit" disabled={settingsSaving} className="w-full">{settingsSaving ? 'Saving…' : 'Save settings'}</DarkButton>
            </form>
          </DarkCard>

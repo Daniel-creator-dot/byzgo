@@ -10,6 +10,7 @@ class AuthUser {
     required this.role,
     required this.balance,
     this.status,
+    this.isOnline,
     this.region,
     this.lat,
     this.lng,
@@ -24,6 +25,7 @@ class AuthUser {
   final AppRole role;
   final double balance;
   final String? status;
+  final bool? isOnline;
   final String? region;
   final double? lat;
   final double? lng;
@@ -39,6 +41,7 @@ class AuthUser {
       role: AppRole.fromString(json['role']?.toString()),
       balance: parseJsonDoubleOrZero(json['balance']),
       status: json['status']?.toString(),
+      isOnline: json['is_online'] == true,
       region: json['region']?.toString(),
       lat: parseJsonDouble(json['lat']),
       lng: parseJsonDouble(json['lng']),
@@ -55,6 +58,7 @@ class AuthUser {
         'role': role.name,
         'balance': balance,
         if (status != null) 'status': status,
+        if (isOnline != null) 'is_online': isOnline,
         if (region != null) 'region': region,
         if (lat != null) 'lat': lat,
         if (lng != null) 'lng': lng,
@@ -67,6 +71,7 @@ class AuthUser {
     String? name,
     double? balance,
     String? status,
+    bool? isOnline,
     double? lat,
     double? lng,
     String? phone,
@@ -79,6 +84,7 @@ class AuthUser {
       role: role,
       balance: balance ?? this.balance,
       status: status ?? this.status,
+      isOnline: isOnline ?? this.isOnline,
       region: region,
       lat: lat ?? this.lat,
       lng: lng ?? this.lng,

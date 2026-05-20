@@ -13,10 +13,14 @@ Cross-platform iOS and Android client for **BytzGo** — **Bolt / Uber–style**
 | Role routing (customer / rider / vendor / admin) | Done |
 | Google Maps (or painted fallback) | Done |
 | Customer book courier → `POST /api/orders` | Done |
-| Rider go online → `PATCH /api/auth/status` | Done |
+| Rider go online → `PATCH /api/auth/status` (`is_online`) | Done |
+| Rider KYC upload (licence, Ghana card, photo JPEG) | Done |
 | Rider accept / decline → `PATCH` / `POST decline` | Done |
 | Live location while online → Socket `location:update` | Done |
-| Vendor / admin | Map shell stubs |
+| Admin control tower (live map, fleet, orders, insights) | Done |
+| Admin driver verification (approve / reject) | Done |
+| Live online drivers on map + socket GPS updates | Done |
+| Vendor | Map shell stub |
 
 ## Prerequisites
 

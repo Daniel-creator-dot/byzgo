@@ -104,10 +104,46 @@ const upload = multer({
   limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
 });
 
+const riderDocUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 3 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const ok = /^image\/(jpeg|jpg|pjpeg)$/i.test(file.mimetype);
+    cb(null, ok);
+  },
+});
+
+const RIDER_DOC_TYPES = ['license', 'ghana_card', 'photo'] as const;
+type RiderDocType = (typeof RIDER_DOC_TYPES)[number];
+
+function isRiderDocType(value: string): value is RiderDocType {
+  return (RIDER_DOC_TYPES as readonly string[]).includes(value);
+}
+
+const USER_PUBLIC_FIELDS =
+  'id, name, email, role, balance, phone, cover_image, address, lat, lng, region, status, is_online';
+
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.DATABASE_URL?.includes('supabase.com') ? { rejectUnauthorized: false } : false
 });
+
+async function fetchRiderDocuments(userId: string) {
+  const result = await pool.query(
+    `SELECT doc_type, image_url, mime_type, review_status, rejection_reason, uploaded_at, reviewed_at
+     FROM rider_documents WHERE user_id = $1 ORDER BY doc_type`,
+    [userId]
+  );
+  return result.rows;
+}
+
+async function riderHasAllDocuments(userId: string): Promise<boolean> {
+  const result = await pool.query(
+    `SELECT COUNT(DISTINCT doc_type)::int AS n FROM rider_documents WHERE user_id = $1`,
+    [userId]
+  );
+  return (result.rows[0]?.n ?? 0) >= RIDER_DOC_TYPES.length;
+}
 
 // Helper to get system settings from DB
 async function getSetting(key: string) {
@@ -338,9 +374,23 @@ const initDb = async () => {
         ALTER TABLE users ADD COLUMN IF NOT EXISTS lng DOUBLE PRECISION;
         ALTER TABLE users ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active';
         ALTER TABLE users ADD COLUMN IF NOT EXISTS region TEXT;
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS is_online BOOLEAN DEFAULT false;
         ALTER TABLE users ALTER COLUMN password DROP NOT NULL;
       EXCEPTION WHEN others THEN NULL;
       END $$;
+
+      CREATE TABLE IF NOT EXISTS rider_documents (
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        doc_type TEXT NOT NULL CHECK (doc_type IN ('license', 'ghana_card', 'photo')),
+        image_url TEXT NOT NULL,
+        mime_type TEXT,
+        review_status TEXT NOT NULL DEFAULT 'pending' CHECK (review_status IN ('pending', 'approved', 'rejected')),
+        rejection_reason TEXT,
+        reviewed_by UUID REFERENCES users(id),
+        reviewed_at TIMESTAMP WITH TIME ZONE,
+        uploaded_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (user_id, doc_type)
+      );
 
       CREATE TABLE IF NOT EXISTS products (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -497,12 +547,21 @@ const initDb = async () => {
 
     // Seed SMS gateway configurations
     await pool.query(`
+      UPDATE users SET status = 'active', is_online = false
+      WHERE role = 'rider' AND status = 'offline';
+      UPDATE users SET is_online = true
+      WHERE role = 'rider' AND status = 'active';
+      UPDATE users SET is_online = false
+      WHERE role = 'rider' AND status IN ('pending', 'disabled', 'rejected');
+    `);
+
+    await pool.query(`
       INSERT INTO system_settings (key, value)
       VALUES 
         ('sms_base_url', 'https://www.inteksms.top/api/v1'),
         ('sms_api_key', 'INTEK_0E3012.cb48045dfaa3384211cdcbf82516d36fff101a23da78f1dd'),
         ('sms_sender_id', 'bytzee')
-      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
+      ON CONFLICT (key) DO NOTHING;
     `);
 
     if (process.env.PAYSTACK_PUBLIC_KEY?.trim()) {
@@ -707,6 +766,7 @@ async function broadcastOrderUpdated(order: any) {
       sanitizeOrderForRole(full, 'rider', full.rider_id)
     );
   }
+  void notifyCustomerTripPush(full);
 }
 
 async function settleOrderPayment(order: any) {
@@ -805,7 +865,7 @@ async function getActiveRiderIds(region?: string | null): Promise<string[]> {
   if (norm) {
     const regional = await pool.query(
       `SELECT id FROM users
-       WHERE role = 'rider' AND status = 'active'
+       WHERE role = 'rider' AND status = 'active' AND is_online = true
        AND (
          region IS NULL OR TRIM(region) = ''
          OR LOWER(TRIM(region)) = $1
@@ -817,7 +877,7 @@ async function getActiveRiderIds(region?: string | null): Promise<string[]> {
     }
   }
   const all = await pool.query(
-    `SELECT id FROM users WHERE role = 'rider' AND status = 'active'`
+    `SELECT id FROM users WHERE role = 'rider' AND status = 'active' AND is_online = true`
   );
   return all.rows.map((r: { id: string }) => r.id);
 }
@@ -888,7 +948,7 @@ async function queryNearestActiveRiders(
       )) AS distance_km
      FROM users u
      INNER JOIN rider_locations rl ON rl.rider_id = u.id
-     WHERE u.role = 'rider' AND u.status = 'active'
+     WHERE u.role = 'rider' AND u.status = 'active' AND u.is_online = true
      AND rl.updated_at > NOW() - INTERVAL '1 minute' * $5
      AND (COALESCE(array_length($3::uuid[], 1), 0) = 0 OR NOT (u.id = ANY($3::uuid[])))
      ${regionClause}
@@ -1063,23 +1123,33 @@ async function notifyRideTaken(orderId: string, winnerRiderId: string) {
   }
 }
 
-async function sendPushToRiders(order: any, riderIds: string[]) {
-  if (!riderIds.length) return;
+type PushAlert = {
+  title: string;
+  body: string;
+  type: string;
+  orderId?: string;
+  channelId?: 'incoming_rides' | 'trip_updates';
+  highPriority?: boolean;
+};
+
+async function sendPushToUserIds(userIds: string[], alert: PushAlert) {
+  const ids = [...new Set(userIds.filter(Boolean))];
+  if (!ids.length) return;
 
   const payload = JSON.stringify({
-    type: 'incoming-ride',
-    orderId: order.id,
-    total: order.total,
-    delivery_fee: order.delivery_fee,
-    address: order.address,
-    pickup_address: order.pickup_address,
-    order_type: order.order_type,
+    type: alert.type,
+    orderId: alert.orderId ?? '',
+    title: alert.title,
+    body: alert.body,
   });
+
+  const channelId = alert.channelId ?? 'trip_updates';
+  const high = alert.highPriority === true;
 
   if (vapidPublicKey) {
     const subs = await pool.query(
       `SELECT endpoint, keys_p256dh, keys_auth FROM push_subscriptions WHERE user_id = ANY($1::uuid[])`,
-      [riderIds]
+      [ids]
     );
 
     for (const sub of subs.rows) {
@@ -1090,7 +1160,7 @@ async function sendPushToRiders(order: any, riderIds: string[]) {
             keys: { p256dh: sub.keys_p256dh, auth: sub.keys_auth },
           },
           payload,
-          { urgency: 'high', TTL: 30 }
+          { urgency: high ? 'high' : 'normal', TTL: high ? 30 : 3600 }
         );
       } catch (err: any) {
         if (err.statusCode === 404 || err.statusCode === 410) {
@@ -1107,40 +1177,81 @@ async function sendPushToRiders(order: any, riderIds: string[]) {
   try {
     const fcmRes = await pool.query(
       `SELECT token FROM fcm_tokens WHERE user_id = ANY($1::uuid[])`,
-      [riderIds]
+      [ids]
     );
     const tokens = fcmRes.rows.map((r: { token: string }) => r.token).filter(Boolean);
     if (!tokens.length) return;
 
-    const pickup = order.pickup_address || 'Shop / pickup';
-    const dropoff = order.address || 'Drop-off';
     await admin.messaging().sendEachForMulticast({
       tokens,
       notification: {
-        title: 'New delivery job',
-        body: `${pickup} → ${dropoff}`,
+        title: alert.title,
+        body: alert.body,
       },
       data: {
-        type: 'incoming-ride',
-        orderId: String(order.id),
-        order_type: String(order.order_type || 'courier'),
+        type: alert.type,
+        orderId: String(alert.orderId ?? ''),
       },
       android: {
-        priority: 'high',
+        priority: high ? 'high' : 'normal',
         notification: {
-          channelId: 'incoming_rides',
+          channelId,
           sound: 'default',
-          priority: 'high' as const,
+          priority: high ? ('high' as const) : ('default' as const),
         },
       },
       apns: {
-        headers: { 'apns-priority': '10' },
+        headers: { 'apns-priority': high ? '10' : '5' },
         payload: { aps: { sound: 'default', contentAvailable: true } },
       },
     });
   } catch (err) {
     console.warn('[push] FCM send failed:', err);
   }
+}
+
+async function sendPushToRiders(order: any, riderIds: string[]) {
+  if (!riderIds.length) return;
+  const pickup = order.pickup_address || order.pickup || 'Pickup';
+  const dropoff = order.address || 'Drop-off';
+  await sendPushToUserIds(riderIds, {
+    title: 'New delivery job',
+    body: `${pickup} → ${dropoff}`,
+    type: 'incoming-ride',
+    orderId: order.id,
+    channelId: 'incoming_rides',
+    highPriority: true,
+  });
+}
+
+async function notifyCustomerTripPush(order: any) {
+  if (!order?.customer_id) return;
+  const status = String(order.status || '');
+  let title = 'BytzGO';
+  let body = '';
+  if (order.rider_id && ['pending', 'ready', 'preparing'].includes(status)) {
+    title = 'Biker on the way';
+    body = 'Your biker is heading to the pickup point';
+  } else if (status === 'picked_up') {
+    title = 'On the way';
+    body = 'Your biker is heading to your delivery address';
+  } else if (status === 'arrived') {
+    title = 'Biker arrived';
+    body = 'Complete payment to get your delivery PIN';
+  } else if (status === 'delivered') {
+    title = 'Delivered';
+    body = 'Your delivery is complete';
+  } else {
+    return;
+  }
+  await sendPushToUserIds([order.customer_id], {
+    title,
+    body,
+    type: 'trip-update',
+    orderId: order.id,
+    channelId: 'trip_updates',
+    highPriority: status === 'arrived',
+  });
 }
 
 async function broadcastRideOfferToRiders(order: any) {
@@ -1220,24 +1331,60 @@ function isValidGhanaPhone(phone: string): boolean {
   return v.some((p) => /^233\d{9}$/.test(p) || /^0\d{9}$/.test(p));
 }
 
+async function getSmsConfig() {
+  const envKey = process.env.SMS_API_KEY?.trim();
+  const envBase = process.env.SMS_BASE_URL?.trim();
+  const envSender = process.env.SMS_SENDER_ID?.trim();
+  const dbKey = await getSetting('sms_api_key');
+  const dbBase = await getSetting('sms_base_url');
+  const dbSender = await getSetting('sms_sender_id');
+  return {
+    apiKey: envKey || dbKey || DEFAULT_SMS_API_KEY,
+    baseUrl: envBase || dbBase || 'https://www.inteksms.top/api/v1',
+    senderId: envSender || dbSender || 'bytzee',
+    source: envKey ? 'env' : dbKey ? 'database' : 'default',
+  };
+}
+
+function extractIntekError(data: any): string | null {
+  if (!data || typeof data !== 'object') return null;
+  if (data.ok === false) {
+    const hint = data.hint ? ` ${data.hint}` : '';
+    return (data.error || 'SMS gateway rejected the message') + hint;
+  }
+  const nested = data.data;
+  if (nested && typeof nested === 'object') {
+    if (nested.ok === false || nested.status === 'failed' || nested.status === 'rejected') {
+      return nested.error || nested.message || 'SMS gateway reported delivery failure';
+    }
+  }
+  if (data.success === false) {
+    return data.message || data.error || 'SMS gateway rejected the message';
+  }
+  return null;
+}
+
+function isIntekSmsSuccess(data: any): boolean {
+  if (!data || typeof data !== 'object') return false;
+  if (data.ok === true) return true;
+  if (data.success === true) return true;
+  const status = data.data?.status || data.status;
+  if (typeof status === 'string' && ['sent', 'queued', 'delivered', 'success'].includes(status.toLowerCase())) {
+    return true;
+  }
+  return false;
+}
+
 // SMS via INTEK — POST /api/v1/messages/send
 async function sendSMS(phone: string, message: string) {
-  const apiKey =
-    (await getSetting('sms_api_key')) ||
-    process.env.SMS_API_KEY ||
-    DEFAULT_SMS_API_KEY;
-  const baseUrl =
-    (await getSetting('sms_base_url')) ||
-    process.env.SMS_BASE_URL ||
-    'https://www.inteksms.top/api/v1';
-  const senderId =
-    (await getSetting('sms_sender_id')) ||
-    process.env.SMS_SENDER_ID ||
-    'bytzee';
+  const { apiKey, baseUrl, senderId, source } = await getSmsConfig();
 
   const formattedPhone = formatGhanaPhone(phone);
   if (!/^233\d{9}$/.test(formattedPhone)) {
     throw new Error('Invalid Ghana phone number. Use format 024XXXXXXX.');
+  }
+  if (!apiKey || apiKey.length < 8) {
+    throw new Error('SMS API key is not configured. Set SMS_API_KEY on the server or in Admin → Settings.');
   }
 
   const headers = {
@@ -1252,25 +1399,37 @@ async function sendSMS(phone: string, message: string) {
     sender: senderId,
   };
 
-  console.log(`Sending SMS to ${formattedPhone} via INTEK...`);
+  const url = `${baseUrl.replace(/\/$/, '')}/messages/send`;
+  console.log(`[SMS] Sending to ${formattedPhone} via INTEK (${source}, sender=${senderId})...`);
   try {
-    const response = await axios.post(`${baseUrl.replace(/\/$/, '')}/messages/send`, payload, {
+    const response = await axios.post(url, payload, {
       headers,
-      timeout: 15000,
+      timeout: 20000,
     });
-    console.log('INTEK SMS response:', response.data);
-    if (response.data?.ok === false) {
-      const hint = response.data?.hint ? ` ${response.data.hint}` : '';
-      throw new Error((response.data?.error || 'SMS gateway rejected the message') + hint);
+    console.log('[SMS] INTEK response:', JSON.stringify(response.data));
+    const gatewayError = extractIntekError(response.data);
+    if (gatewayError) {
+      throw new Error(gatewayError);
+    }
+    if (!isIntekSmsSuccess(response.data)) {
+      throw new Error(
+        'SMS gateway returned an unexpected response. Check INTEK credits and your approved Sender ID.'
+      );
     }
     return response.data;
   } catch (err: any) {
+    const data = err.response?.data;
     const detail =
-      err.response?.data?.error ||
-      err.response?.data?.message ||
+      extractIntekError(data) ||
+      data?.error ||
+      data?.message ||
+      (typeof data === 'string' ? data : null) ||
       err.message ||
       'SMS delivery failed';
-    console.error('Failed to send SMS:', err.response?.data || err.message);
+    console.error('[SMS] Failed:', data || err.message);
+    if (err.response?.status === 401 || String(detail).toLowerCase().includes('unauthorized')) {
+      throw new Error('Invalid SMS API key. Update SMS_API_KEY in Render/host env or Admin → Settings.');
+    }
     throw new Error(detail);
   }
 }
@@ -1299,14 +1458,18 @@ async function createAndSendOtp(
   );
   const otpId = insert.rows[0]?.id;
 
+  const message = buildMessage(otp);
+  if (process.env.SMS_LOG_OTP === 'true') {
+    console.log(`[SMS_LOG_OTP] ${purpose} → ${storePhone}: ${otp}`);
+  }
+
   try {
-    await sendSMS(phone, buildMessage(otp));
+    await sendSMS(phone, message);
   } catch (smsErr: any) {
     if (otpId) {
       await pool.query('DELETE FROM otps WHERE id = $1', [otpId]);
     }
-    const detail = smsErr.response?.data?.error || smsErr.message || 'SMS delivery failed';
-    throw new Error(detail);
+    throw new Error(smsErr.message || 'SMS delivery failed');
   }
 
   return { otpSent: true, phone: storePhone };
@@ -1340,6 +1503,29 @@ async function findUserIdByPhone(phone: string): Promise<string | undefined> {
     [variants]
   );
   return result.rows[0]?.id as string | undefined;
+}
+
+function isEmailLoginIdentifier(value: string): boolean {
+  return value.includes('@');
+}
+
+async function findUserByLoginIdentifier(identifier: string) {
+  const trimmed = identifier.trim();
+  if (!trimmed) return undefined;
+  if (isEmailLoginIdentifier(trimmed)) {
+    const result = await pool.query(
+      'SELECT * FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1',
+      [trimmed]
+    );
+    return result.rows[0];
+  }
+  if (!isValidGhanaPhone(trimmed)) return undefined;
+  const variants = phoneLookupVariants(trimmed);
+  const result = await pool.query(
+    `SELECT * FROM users WHERE ${phoneMatchSql('phone', 1)} LIMIT 1`,
+    [variants]
+  );
+  return result.rows[0];
 }
 
 // Auth Routes
@@ -1527,17 +1713,19 @@ app.post('/api/auth/register', async (req, res) => {
     if (!phone) {
       return res.status(400).json({ message: 'Phone number is required' });
     }
-    if (!otp) {
-      return res.status(400).json({ message: 'SMS verification code is required' });
+    if (!isValidGhanaPhone(phone)) {
+      return res.status(400).json({ message: 'Enter a valid Ghana phone number (e.g. 0247904675).' });
     }
-    const otpId = await findValidOtp(phone, String(otp).trim(), 'signup_verify');
-    if (!otpId) {
-      return res.status(400).json({ message: 'Invalid or expired verification code' });
+    if (otp) {
+      const otpId = await findValidOtp(phone, String(otp).trim(), 'signup_verify');
+      if (!otpId) {
+        return res.status(400).json({ message: 'Invalid or expired verification code' });
+      }
     }
   }
   try {
     const hashedPassword = await bcrypt.hash(password, 10);
-    const userStatus = role === 'vendor' ? 'pending' : 'active';
+    const userStatus = role === 'vendor' || role === 'rider' ? 'pending' : 'active';
     const storePhone = phone ? formatGhanaPhone(phone) : phone;
     const result = await pool.query(
       'INSERT INTO users (name, email, password, role, status, phone) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, name, email, role, balance, phone, status',
@@ -1559,19 +1747,63 @@ app.post('/api/auth/register', async (req, res) => {
 });
 
 app.post('/api/auth/login', async (req, res) => {
-  const { email, password } = req.body;
+  const { email, phone, login, password } = req.body;
+  const identifier = String(login ?? phone ?? email ?? '').trim();
+  if (!identifier || !password) {
+    return res.status(400).json({ message: 'Phone or email and password are required' });
+  }
+  if (!isEmailLoginIdentifier(identifier) && !isValidGhanaPhone(identifier)) {
+    return res.status(400).json({
+      message: 'Enter a valid email or Ghana phone number (e.g. 0247904675).',
+    });
+  }
   try {
-    const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
-    const user = result.rows[0];
-    if (user && user.password && await bcrypt.compare(password, user.password)) {
-      const { password, ...userWithoutPassword } = user;
+    const user = await findUserByLoginIdentifier(identifier);
+    if (!user?.password) {
+      return res.status(401).json({ message: 'Invalid phone/email or password' });
+    }
+    if (await bcrypt.compare(password, user.password)) {
+      const { password: _pw, ...userWithoutPassword } = user;
       const token = jwt.sign(userWithoutPassword, process.env.JWT_SECRET as string);
       res.json({ user: userWithoutPassword, token });
     } else {
-      res.status(401).json({ message: 'Invalid credentials' });
+      res.status(401).json({ message: 'Invalid phone/email or password' });
     }
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Reset password with registered phone + email (no SMS)
+app.post('/api/auth/reset-password', async (req, res) => {
+  const { phone, email, newPassword } = req.body;
+  if (!phone || !email || !newPassword) {
+    return res.status(400).json({ message: 'Phone, email, and new password are required' });
+  }
+  if (String(newPassword).length < 6) {
+    return res.status(400).json({ message: 'Password must be at least 6 characters' });
+  }
+  if (!isValidGhanaPhone(phone)) {
+    return res.status(400).json({ message: 'Enter a valid Ghana phone number (e.g. 0247904675).' });
+  }
+
+  try {
+    const userId = await findUserIdByPhone(phone);
+    if (!userId) {
+      return res.status(400).json({ message: 'Phone and email do not match our records' });
+    }
+    const userResult = await pool.query('SELECT id, email FROM users WHERE id = $1', [userId]);
+    const user = userResult.rows[0];
+    if (!user || String(user.email).toLowerCase() !== String(email).trim().toLowerCase()) {
+      return res.status(400).json({ message: 'Phone and email do not match our records' });
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    await pool.query('UPDATE users SET password = $1 WHERE id = $2', [hashedPassword, userId]);
+    res.json({ success: true, message: 'Password reset successful' });
+  } catch (err: any) {
+    console.error('Error resetting password:', err);
+    res.status(500).json({ message: 'Failed to reset password' });
   }
 });
 
@@ -1648,7 +1880,7 @@ app.post('/api/auth/supabase', async (req, res) => {
     let result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
     let user = result.rows[0];
     if (!user) {
-      const userStatus = (role === 'vendor') ? 'pending' : 'active';
+      const userStatus = role === 'vendor' || role === 'rider' ? 'pending' : 'active';
       result = await pool.query(
         'INSERT INTO users (name, email, google_id, role, status) VALUES ($1, $2, $3, $4, $5) RETURNING id, name, email, role, balance, phone, status',
         [name, email, googleId, role || 'customer', userStatus]
@@ -1685,11 +1917,11 @@ app.patch('/api/auth/profile', authenticateToken, async (req: any, res) => {
         lng = COALESCE($6, lng),
         region = COALESCE($7, region)
        WHERE id = $8 
-       RETURNING id, name, email, role, balance, phone, cover_image, address, lat, lng, region, status`,
+       RETURNING ${USER_PUBLIC_FIELDS}`,
       [email, phone, cover_image, address, lat, lng, region, req.user.id]
     );
     const user = result.rows[0];
-    const token = jwt.sign({ id: user.id, name: user.name, email: user.email, role: user.role, balance: user.balance, status: user.status, region: user.region }, process.env.JWT_SECRET as string);
+    const token = jwt.sign({ id: user.id, name: user.name, email: user.email, role: user.role, balance: user.balance, status: user.status, is_online: user.is_online, region: user.region }, process.env.JWT_SECRET as string);
     res.json({ user, token });
   } catch (err: any) {
     console.error('Profile update error:', err);
@@ -1697,19 +1929,59 @@ app.patch('/api/auth/profile', authenticateToken, async (req: any, res) => {
   }
 });
 
-// Status Update
+// Status Update (vendors: account status; riders: online toggle via active/offline)
 app.patch('/api/auth/status', authenticateToken, async (req: any, res) => {
   const { status } = req.body;
   try {
+    const current = await pool.query(
+      `SELECT ${USER_PUBLIC_FIELDS} FROM users WHERE id = $1`,
+      [req.user.id]
+    );
+    const row = current.rows[0];
+    if (!row) return res.status(404).json({ message: 'User not found' });
+
+    if (row.role === 'rider') {
+      if (row.status === 'pending') {
+        return res.status(403).json({ message: 'Your account is pending admin approval. Upload your documents first.' });
+      }
+      if (row.status === 'rejected') {
+        return res.status(403).json({ message: 'Your application was rejected. Update your documents and contact support.' });
+      }
+      if (row.status !== 'active') {
+        return res.status(403).json({ message: 'Your account is not active.' });
+      }
+      if (status !== 'active' && status !== 'offline') {
+        return res.status(400).json({ message: 'Riders can only go online or offline.' });
+      }
+      const isOnline = status === 'active';
+      const hasDocs = await riderHasAllDocuments(req.user.id);
+      if (isOnline && !hasDocs) {
+        return res.status(403).json({ message: 'Upload your licence, Ghana card, and photo before going online.' });
+      }
+      const result = await pool.query(
+        `UPDATE users SET is_online = $1 WHERE id = $2 RETURNING ${USER_PUBLIC_FIELDS}`,
+        [isOnline, req.user.id]
+      );
+      const user = result.rows[0];
+      if (isOnline) await seedRiderLocationFromProfile(user.id);
+      const token = jwt.sign(
+        { id: user.id, name: user.name, email: user.email, role: user.role, balance: user.balance, status: user.status, is_online: user.is_online, region: user.region },
+        process.env.JWT_SECRET as string
+      );
+      res.json({ user, token });
+      io.to(String(user.id)).emit('status:updated', { status: user.status, is_online: user.is_online });
+      return;
+    }
+
     const result = await pool.query(
-      'UPDATE users SET status = $1 WHERE id = $2 RETURNING id, name, email, role, balance, phone, cover_image, address, lat, lng, status, region',
+      `UPDATE users SET status = $1 WHERE id = $2 RETURNING ${USER_PUBLIC_FIELDS}`,
       [status, req.user.id]
     );
     const user = result.rows[0];
-    if (user.role === 'rider' && status === 'active') {
-      await seedRiderLocationFromProfile(user.id);
-    }
-    const token = jwt.sign({ id: user.id, name: user.name, email: user.email, role: user.role, balance: user.balance, status: user.status, region: user.region }, process.env.JWT_SECRET as string);
+    const token = jwt.sign(
+      { id: user.id, name: user.name, email: user.email, role: user.role, balance: user.balance, status: user.status, is_online: user.is_online, region: user.region },
+      process.env.JWT_SECRET as string
+    );
     res.json({ user, token });
     io.to(String(user.id)).emit('status:updated', { status });
   } catch (err: any) {
@@ -1734,6 +2006,105 @@ app.post('/api/upload', authenticateToken, upload.single('image'), (req: any, re
   if (!req.file) return res.status(400).json({ message: 'No file uploaded' });
   const base64 = `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`;
   res.json({ url: base64 });
+});
+
+// Rider KYC documents (JPEG only)
+app.get('/api/rider/documents', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'rider') return res.sendStatus(403);
+  try {
+    const documents = await fetchRiderDocuments(req.user.id);
+    const userRes = await pool.query(`SELECT status FROM users WHERE id = $1`, [req.user.id]);
+    res.json({
+      documents,
+      status: userRes.rows[0]?.status,
+      complete: documents.length >= RIDER_DOC_TYPES.length,
+      ready_for_review: await riderHasAllDocuments(req.user.id),
+    });
+  } catch (err) {
+    console.error('Fetch rider documents error:', err);
+    res.status(500).json({ message: 'Failed to load documents' });
+  }
+});
+
+app.post(
+  '/api/rider/documents/:docType/upload',
+  authenticateToken,
+  riderDocUpload.single('image'),
+  async (req: any, res) => {
+    if (req.user.role !== 'rider') return res.sendStatus(403);
+    const docType = req.params.docType;
+    if (!isRiderDocType(docType)) {
+      return res.status(400).json({ message: 'Invalid document type. Use license, ghana_card, or photo.' });
+    }
+    if (!req.file) {
+      return res.status(400).json({ message: 'No JPEG image uploaded' });
+    }
+    try {
+      const base64 = `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`;
+      await pool.query(
+        `INSERT INTO rider_documents (user_id, doc_type, image_url, mime_type, review_status, rejection_reason, reviewed_by, reviewed_at)
+         VALUES ($1, $2, $3, $4, 'pending', NULL, NULL, NULL)
+         ON CONFLICT (user_id, doc_type) DO UPDATE SET
+           image_url = EXCLUDED.image_url,
+           mime_type = EXCLUDED.mime_type,
+           review_status = 'pending',
+           rejection_reason = NULL,
+           reviewed_by = NULL,
+           reviewed_at = NULL,
+           uploaded_at = CURRENT_TIMESTAMP`,
+        [req.user.id, docType, base64, req.file.mimetype]
+      );
+
+      if (await riderHasAllDocuments(req.user.id)) {
+        await pool.query(
+          `UPDATE users SET status = 'pending', is_online = false
+           WHERE id = $1 AND role = 'rider' AND status NOT IN ('disabled')`,
+          [req.user.id]
+        );
+      }
+
+      const documents = await fetchRiderDocuments(req.user.id);
+      const userRes = await pool.query(`SELECT ${USER_PUBLIC_FIELDS} FROM users WHERE id = $1`, [req.user.id]);
+      const user = userRes.rows[0];
+      const token = jwt.sign(
+        { id: user.id, name: user.name, email: user.email, role: user.role, balance: user.balance, status: user.status, is_online: user.is_online, region: user.region },
+        process.env.JWT_SECRET as string
+      );
+      res.json({ url: base64, documents, user, token });
+    } catch (err) {
+      console.error('Rider document upload error:', err);
+      res.status(500).json({ message: 'Document upload failed' });
+    }
+  }
+);
+
+app.post('/api/rider/documents/submit', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'rider') return res.sendStatus(403);
+  try {
+    if (!(await riderHasAllDocuments(req.user.id))) {
+      return res.status(400).json({ message: 'Upload licence, Ghana card, and profile photo first.' });
+    }
+    await pool.query(
+      `UPDATE users SET status = 'pending', is_online = false WHERE id = $1 AND role = 'rider'`,
+      [req.user.id]
+    );
+    await pool.query(
+      `UPDATE rider_documents SET review_status = 'pending', rejection_reason = NULL, reviewed_by = NULL, reviewed_at = NULL
+       WHERE user_id = $1`,
+      [req.user.id]
+    );
+    const userRes = await pool.query(`SELECT ${USER_PUBLIC_FIELDS} FROM users WHERE id = $1`, [req.user.id]);
+    const user = userRes.rows[0];
+    const token = jwt.sign(
+      { id: user.id, name: user.name, email: user.email, role: user.role, balance: user.balance, status: user.status, is_online: user.is_online, region: user.region },
+      process.env.JWT_SECRET as string
+    );
+    res.json({ message: 'Submitted for admin review', user, token, documents: await fetchRiderDocuments(req.user.id) });
+    io.to(String(req.user.id)).emit('status:updated', { status: 'pending', is_online: false });
+  } catch (err) {
+    console.error('Rider document submit error:', err);
+    res.status(500).json({ message: 'Submit failed' });
+  }
 });
 
 app.post('/api/wallet/topup/initialize', authenticateToken, async (req: any, res) => {
@@ -1971,6 +2342,78 @@ app.get('/api/maps/place-details', authenticateToken, async (req: any, res) => {
   }
 });
 
+function decodeGooglePolyline(encoded: string): { lat: number; lng: number }[] {
+  const points: { lat: number; lng: number }[] = [];
+  let index = 0;
+  let lat = 0;
+  let lng = 0;
+  while (index < encoded.length) {
+    let b: number;
+    let shift = 0;
+    let result = 0;
+    do {
+      b = encoded.charCodeAt(index++) - 63;
+      result |= (b & 0x1f) << shift;
+      shift += 5;
+    } while (b >= 0x20);
+    const dlat = (result & 1) !== 0 ? ~(result >> 1) : result >> 1;
+    lat += dlat;
+    shift = 0;
+    result = 0;
+    do {
+      b = encoded.charCodeAt(index++) - 63;
+      result |= (b & 0x1f) << shift;
+      shift += 5;
+    } while (b >= 0x20);
+    const dlng = (result & 1) !== 0 ? ~(result >> 1) : result >> 1;
+    lng += dlng;
+    points.push({ lat: lat / 1e5, lng: lng / 1e5 });
+  }
+  return points;
+}
+
+app.get('/api/maps/directions', authenticateToken, async (req: any, res) => {
+  try {
+    const oLat = parseFloat(String(req.query.origin_lat ?? ''));
+    const oLng = parseFloat(String(req.query.origin_lng ?? ''));
+    const dLat = parseFloat(String(req.query.dest_lat ?? ''));
+    const dLng = parseFloat(String(req.query.dest_lng ?? ''));
+    if (![oLat, oLng, dLat, dLng].every(Number.isFinite)) {
+      return res.status(400).json({ message: 'origin_lat, origin_lng, dest_lat, dest_lng required' });
+    }
+    const key = mapsApiKey();
+    if (!key) return res.status(503).json({ message: 'Maps not configured' });
+    const url = new URL('https://maps.googleapis.com/maps/api/directions/json');
+    url.searchParams.set('origin', `${oLat},${oLng}`);
+    url.searchParams.set('destination', `${dLat},${dLng}`);
+    url.searchParams.set('mode', 'driving');
+    url.searchParams.set('region', 'gh');
+    url.searchParams.set('language', 'en');
+    url.searchParams.set('key', key);
+    const { data } = await axios.get(url.toString());
+    if (data.status !== 'OK' || !data.routes?.length) {
+      return res.status(404).json({ message: data.error_message || 'No route found' });
+    }
+    const leg = data.routes[0].legs?.[0];
+    const durationSec = leg?.duration?.value ?? 0;
+    const durationText = leg?.duration?.text ?? '';
+    const distanceText = leg?.distance?.text ?? '';
+    const encoded = data.routes[0].overview_polyline?.points ?? '';
+    const points = encoded ? decodeGooglePolyline(encoded) : [];
+    const etaMinutes = Math.max(1, Math.round(durationSec / 60));
+    res.json({
+      duration_seconds: durationSec,
+      duration_text: durationText,
+      distance_text: distanceText,
+      eta_minutes: etaMinutes,
+      points,
+    });
+  } catch (err) {
+    console.error('Maps directions error:', err);
+    res.status(500).json({ message: 'Directions failed' });
+  }
+});
+
 app.get('/api/maps/reverse-geocode', authenticateToken, async (req: any, res) => {
   try {
     const lat = parseFloat(String(req.query.lat ?? ''));
@@ -2176,10 +2619,194 @@ app.delete('/api/products/:id', authenticateToken, async (req: any, res) => {
 app.get('/api/admin/users', authenticateToken, async (req: any, res) => {
   if (req.user.role !== 'admin') return res.sendStatus(403);
   try {
-    const result = await pool.query('SELECT id, name, email, role, balance, created_at, status FROM users ORDER BY created_at DESC');
+    const result = await pool.query(
+      `SELECT id, name, email, role, balance, created_at, status, is_online, phone, region
+       FROM users ORDER BY created_at DESC`
+    );
     res.json(result.rows);
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.get('/api/admin/pending-riders', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'admin') return res.sendStatus(403);
+  try {
+    const result = await pool.query(
+      `SELECT u.id, u.name, u.email, u.phone, u.region, u.status, u.is_online, u.created_at,
+        COALESCE(
+          json_agg(
+            json_build_object(
+              'doc_type', d.doc_type,
+              'image_url', d.image_url,
+              'review_status', d.review_status,
+              'rejection_reason', d.rejection_reason,
+              'uploaded_at', d.uploaded_at
+            ) ORDER BY d.doc_type
+          ) FILTER (WHERE d.doc_type IS NOT NULL),
+          '[]'::json
+        ) AS documents
+       FROM users u
+       LEFT JOIN rider_documents d ON d.user_id = u.id
+       WHERE u.role = 'rider'
+         AND (
+           u.status IN ('pending', 'rejected')
+           OR EXISTS (
+             SELECT 1 FROM rider_documents rd
+             WHERE rd.user_id = u.id AND rd.review_status = 'pending'
+           )
+         )
+       GROUP BY u.id
+       ORDER BY u.created_at DESC`
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Pending riders error:', err);
+    res.status(500).json({ message: 'Failed to fetch pending riders' });
+  }
+});
+
+app.patch('/api/admin/riders/:id/approve', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'admin') return res.sendStatus(403);
+  const { id } = req.params;
+  try {
+    const check = await pool.query('SELECT id, role FROM users WHERE id = $1', [id]);
+    if (!check.rows[0] || check.rows[0].role !== 'rider') {
+      return res.status(404).json({ message: 'Rider not found' });
+    }
+    const result = await pool.query(
+      `UPDATE users SET status = 'active', is_online = false WHERE id = $1
+       RETURNING id, name, email, role, status, is_online, phone, region`,
+      [id]
+    );
+    await pool.query(
+      `UPDATE rider_documents SET review_status = 'approved', rejection_reason = NULL,
+        reviewed_by = $2, reviewed_at = CURRENT_TIMESTAMP
+       WHERE user_id = $1`,
+      [id, req.user.id]
+    );
+    res.json(result.rows[0]);
+    io.to(id).emit('status:updated', { status: 'active', is_online: false });
+  } catch (err) {
+    console.error('Approve rider error:', err);
+    res.status(500).json({ message: 'Failed to approve rider' });
+  }
+});
+
+app.patch('/api/admin/riders/:id/reject', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'admin') return res.sendStatus(403);
+  const { id } = req.params;
+  const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+  try {
+    const check = await pool.query('SELECT id, role FROM users WHERE id = $1', [id]);
+    if (!check.rows[0] || check.rows[0].role !== 'rider') {
+      return res.status(404).json({ message: 'Rider not found' });
+    }
+    const result = await pool.query(
+      `UPDATE users SET status = 'rejected', is_online = false WHERE id = $1
+       RETURNING id, name, email, role, status, is_online, phone, region`,
+      [id]
+    );
+    await pool.query(
+      `UPDATE rider_documents SET review_status = 'rejected', rejection_reason = $2,
+        reviewed_by = $3, reviewed_at = CURRENT_TIMESTAMP
+       WHERE user_id = $1`,
+      [id, reason || 'Application rejected', req.user.id]
+    );
+    res.json(result.rows[0]);
+    io.to(id).emit('status:updated', { status: 'rejected', is_online: false, reason: reason || 'Application rejected' });
+  } catch (err) {
+    console.error('Reject rider error:', err);
+    res.status(500).json({ message: 'Failed to reject rider' });
+  }
+});
+
+/** Send a test SMS (admin diagnostics). */
+app.post('/api/admin/sms-test', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'admin') return res.sendStatus(403);
+  const phone = typeof req.body?.phone === 'string' ? req.body.phone.trim() : '';
+  if (!phone || !isValidGhanaPhone(phone)) {
+    return res.status(400).json({ message: 'Enter a valid Ghana phone (e.g. 0247904675).' });
+  }
+  try {
+    const cfg = await getSmsConfig();
+    const data = await sendSMS(phone, 'BytzGo SMS test — your OTP gateway is working.');
+    res.json({
+      success: true,
+      message: 'Test SMS accepted by gateway. Check the phone within 1–2 minutes.',
+      phone: formatGhanaPhone(phone),
+      sender: cfg.senderId,
+      config_source: cfg.source,
+      gateway: data,
+    });
+  } catch (err: any) {
+    console.error('[admin/sms-test]', err.message);
+    res.status(502).json({ message: err.message || 'SMS test failed' });
+  }
+});
+
+/** Live fleet + ops counters for admin control tower. */
+app.get('/api/admin/overview', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'admin') return res.sendStatus(403);
+  try {
+    const statsRes = await pool.query(`
+      SELECT
+        (SELECT COUNT(*)::int FROM users WHERE role = 'rider' AND is_online = true AND status = 'active') AS drivers_online,
+        (SELECT COUNT(*)::int FROM users WHERE role = 'rider' AND status = 'active') AS drivers_approved,
+        (SELECT COUNT(*)::int FROM users WHERE role = 'rider') AS drivers_total,
+        (SELECT COUNT(*)::int FROM users WHERE role = 'rider' AND status IN ('pending', 'rejected')) AS drivers_pending,
+        (SELECT COUNT(*)::int FROM orders WHERE status NOT IN ('delivered', 'cancelled')) AS active_orders,
+        (SELECT COUNT(*)::int FROM orders WHERE created_at >= CURRENT_DATE) AS orders_today,
+        (SELECT COUNT(*)::int FROM users WHERE role = 'vendor' AND status = 'active') AS vendors_active,
+        (SELECT COUNT(*)::int FROM users WHERE role = 'customer') AS customers_total,
+        (SELECT COALESCE(SUM(total), 0)::float FROM orders WHERE status = 'delivered') AS gross_revenue
+    `);
+    const ridersRes = await pool.query(`
+      SELECT
+        u.id,
+        u.name,
+        u.email,
+        u.phone,
+        u.region,
+        u.status,
+        u.is_online,
+        rl.lat,
+        rl.lng,
+        rl.updated_at AS location_updated_at,
+        (
+          SELECT COUNT(*)::int FROM orders o
+          WHERE o.rider_id = u.id AND o.status NOT IN ('delivered', 'cancelled')
+        ) AS active_trips
+      FROM users u
+      LEFT JOIN rider_locations rl ON rl.rider_id = u.id
+      WHERE u.role = 'rider'
+      ORDER BY u.is_online DESC, rl.updated_at DESC NULLS LAST, u.name ASC
+    `);
+    const liveRiders = ridersRes.rows.map((row: any) => ({
+      id: row.id,
+      name: row.name,
+      email: row.email,
+      phone: row.phone,
+      region: row.region,
+      status: row.status,
+      is_online: row.is_online === true,
+      lat: row.lat != null ? parseFloat(row.lat) : null,
+      lng: row.lng != null ? parseFloat(row.lng) : null,
+      location_updated_at: row.location_updated_at,
+      active_trips: row.active_trips ?? 0,
+      has_location:
+        row.lat != null &&
+        row.lng != null &&
+        Math.abs(parseFloat(row.lat)) > 0.001 &&
+        Math.abs(parseFloat(row.lng)) > 0.001,
+    }));
+    res.json({
+      stats: statsRes.rows[0],
+      live_riders: liveRiders,
+    });
+  } catch (err) {
+    console.error('[admin/overview]', err);
+    res.status(500).json({ message: 'Failed to load admin overview' });
   }
 });
 
@@ -2188,14 +2815,24 @@ app.patch('/api/admin/users/:id/status', authenticateToken, async (req: any, res
   const { status } = req.body;
   const { id } = req.params;
   try {
+    const isRiderActivate = status === 'active';
     const result = await pool.query(
-      'UPDATE users SET status = $1 WHERE id = $2 RETURNING id, name, email, role, status',
-      [status, id]
+      `UPDATE users SET status = $1,
+        is_online = CASE WHEN role = 'rider' AND $3 THEN false ELSE is_online END
+       WHERE id = $2 RETURNING id, name, email, role, status, is_online`,
+      [status, id, isRiderActivate]
     );
     if (result.rows[0]) {
-      res.json(result.rows[0]);
-      // Emit socket event to notify the user if they are connected
-      io.to(id).emit('status:updated', { status });
+      const row = result.rows[0];
+      if (row.role === 'rider' && status === 'active') {
+        await pool.query(
+          `UPDATE rider_documents SET review_status = 'approved', rejection_reason = NULL,
+            reviewed_by = $2, reviewed_at = CURRENT_TIMESTAMP WHERE user_id = $1`,
+          [id, req.user.id]
+        );
+      }
+      res.json(row);
+      io.to(id).emit('status:updated', { status, is_online: row.is_online });
     } else {
       res.status(404).json({ message: 'User not found' });
     }
@@ -2217,8 +2854,9 @@ app.get('/api/orders', authenticateToken, async (req: any, res) => {
       query += ' WHERE o.vendor_id = $1';
       params.push(req.user.id);
     } else if (req.user.role === 'rider') {
-      const userRes = await pool.query('SELECT status FROM users WHERE id = $1', [req.user.id]);
-      if (userRes.rows[0]?.status !== 'active') {
+      const userRes = await pool.query('SELECT status, is_online FROM users WHERE id = $1', [req.user.id]);
+      const rider = userRes.rows[0];
+      if (rider?.status !== 'active') {
         return res.json([]);
       }
 
@@ -2237,9 +2875,10 @@ app.get('/api/orders', authenticateToken, async (req: any, res) => {
           o.status = 'ready'
           AND o.rider_id IS NULL
           AND odo.order_id IS NOT NULL
+          AND $2 = true
         )
         ORDER BY o.created_at DESC`;
-      params.push(req.user.id);
+      params.push(req.user.id, rider?.is_online === true);
     }
 
     if (req.user.role !== 'rider') {
@@ -2425,14 +3064,22 @@ app.patch('/api/orders/:id', authenticateToken, async (req: any, res) => {
   try {
     // Check if vendor/rider is active before allowing updates
     if (req.user.role === 'vendor' || req.user.role === 'rider') {
-      const userRes = await pool.query('SELECT status FROM users WHERE id = $1', [req.user.id]);
-      const accountStatus = userRes.rows[0]?.status;
-      if (accountStatus !== 'active') {
+      const userRes = await pool.query('SELECT status, is_online FROM users WHERE id = $1', [req.user.id]);
+      const account = userRes.rows[0];
+      if (account?.status !== 'active') {
         const message =
-          accountStatus === 'pending'
+          account?.status === 'pending'
             ? 'Your account is pending approval.'
-            : 'Go online to accept and update rides.';
+            : account?.status === 'rejected'
+              ? 'Your driver application was rejected.'
+              : 'Your account is not active.';
         return res.status(403).json({ message });
+      }
+      if (req.user.role === 'rider') {
+        const accepting = Boolean(riderId) || status === 'picked_up' || status === 'ready';
+        if (accepting && !account?.is_online) {
+          return res.status(403).json({ message: 'Go online to accept and update rides.' });
+        }
       }
     }
 
@@ -2837,6 +3484,21 @@ app.post('/api/orders/:id/messages', authenticateToken, async (req: any, res) =>
         message: formatOrderMessage(row, order.rider_id),
       });
     }
+
+    const recipientId =
+      req.user.id === order.customer_id ? order.rider_id : order.customer_id;
+    if (recipientId) {
+      const senderName = nameRes.rows[0]?.name || 'Someone';
+      void sendPushToUserIds([recipientId], {
+        title: `Message from $senderName`,
+        body: body.length > 140 ? `${body.slice(0, 137)}…` : body,
+        type: 'trip-message',
+        orderId,
+        channelId: 'trip_updates',
+        highPriority: true,
+      });
+    }
+
     res.status(201).json(payload);
   } catch (err: any) {
     const status = err.status || 500;
@@ -2885,12 +3547,21 @@ app.get('/api/admin/settings', authenticateToken, async (req: any, res) => {
       if (k.length <= 8) return '••••••••';
       return k.slice(0, 7) + '…' + k.slice(-4);
     };
+    const smsKey = await getSetting('sms_api_key');
+    const smsBase = await getSetting('sms_base_url');
+    const smsSender = await getSetting('sms_sender_id');
+    const effectiveSmsKey = process.env.SMS_API_KEY?.trim() || smsKey || '';
     res.json({
       paystack_public_key: pub || process.env.PAYSTACK_PUBLIC_KEY || '',
       paystack_secret_key: maskSecret(sec || process.env.PAYSTACK_SECRET_KEY || ''),
       paystack_secret_configured: !!(sec || process.env.PAYSTACK_SECRET_KEY),
       platform_fee_percent: fee || '10',
       delivery_price_per_km: pricePerKm || '4',
+      sms_base_url: smsBase || process.env.SMS_BASE_URL || 'https://www.inteksms.top/api/v1',
+      sms_api_key: maskSecret(effectiveSmsKey),
+      sms_api_key_configured: effectiveSmsKey.length > 8,
+      sms_sender_id: smsSender || process.env.SMS_SENDER_ID || 'bytzee',
+      sms_config_source: process.env.SMS_API_KEY?.trim() ? 'env' : smsKey ? 'database' : 'default',
     });
   } catch (err) {
     res.status(500).json({ message: 'Failed to load settings' });
@@ -2899,7 +3570,15 @@ app.get('/api/admin/settings', authenticateToken, async (req: any, res) => {
 
 app.patch('/api/admin/settings', authenticateToken, async (req: any, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ message: 'Unauthorized' });
-  const { paystack_public_key, paystack_secret_key, platform_fee_percent, delivery_price_per_km } = req.body;
+  const {
+    paystack_public_key,
+    paystack_secret_key,
+    platform_fee_percent,
+    delivery_price_per_km,
+    sms_base_url,
+    sms_api_key,
+    sms_sender_id,
+  } = req.body;
   try {
     if (paystack_public_key != null) {
       await pool.query(
@@ -2928,6 +3607,27 @@ app.patch('/api/admin/settings', authenticateToken, async (req: any, res) => {
         `INSERT INTO system_settings (key, value) VALUES ('delivery_price_per_km', $1)
          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
         [String(rate)]
+      );
+    }
+    if (sms_base_url != null && String(sms_base_url).trim()) {
+      await pool.query(
+        `INSERT INTO system_settings (key, value) VALUES ('sms_base_url', $1)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+        [String(sms_base_url).trim()]
+      );
+    }
+    if (sms_api_key && !String(sms_api_key).includes('…')) {
+      await pool.query(
+        `INSERT INTO system_settings (key, value) VALUES ('sms_api_key', $1)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+        [String(sms_api_key).trim()]
+      );
+    }
+    if (sms_sender_id != null && String(sms_sender_id).trim()) {
+      await pool.query(
+        `INSERT INTO system_settings (key, value) VALUES ('sms_sender_id', $1)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+        [String(sms_sender_id).trim()]
       );
     }
     res.json({ success: true, message: 'Settings updated' });

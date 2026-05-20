@@ -1,4 +1,6 @@
+import '../models/location_point.dart';
 import '../models/order.dart';
+import 'rider_trip.dart';
 
 /// Customer-facing trip copy and progress — mirrors web `tripUi.tsx`.
 class CustomerTripStep {
@@ -64,7 +66,39 @@ String customerTripHeadline(Order order) {
   }
 }
 
-String customerTripSubline(Order order) {
+/// Where the assigned biker is driving toward (for ETA).
+LocationPoint? customerRiderNavTarget(Order order) {
+  if (order.riderId == null) return null;
+  if (['picked_up', 'arrived'].contains(order.status)) {
+    if (order.lat != null &&
+        order.lng != null &&
+        hasValidCoords(order.lat!, order.lng!)) {
+      return LocationPoint(
+        address: order.address,
+        lat: order.lat!,
+        lng: order.lng!,
+      );
+    }
+    return null;
+  }
+  if (order.pickupLat != null &&
+      order.pickupLng != null &&
+      hasValidCoords(order.pickupLat!, order.pickupLng!)) {
+    return LocationPoint(
+      address: order.pickupAddress ?? order.pickup ?? '',
+      lat: order.pickupLat!,
+      lng: order.pickupLng!,
+    );
+  }
+  return null;
+}
+
+String customerTripSubline(Order order, {String? etaPhrase}) {
+  if (etaPhrase != null && etaPhrase.isNotEmpty && order.riderId != null) {
+    if (['picked_up', 'arrived', 'ready', 'preparing', 'pending'].contains(order.status)) {
+      return etaPhrase;
+    }
+  }
   switch (order.status) {
     case 'delivered':
       return 'Thanks for riding with BytzGO';

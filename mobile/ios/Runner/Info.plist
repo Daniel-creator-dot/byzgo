@@ -38,6 +38,8 @@
 	<string>BytzGo needs your location for pickup and delivery tracking.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 	<string>BytzGo uses location while delivering orders.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>BytzGo needs access to your photos to upload driver verification documents.</string>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>

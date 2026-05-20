@@ -4,18 +4,21 @@ import 'package:provider/provider.dart';
 
 import 'core/api_client.dart';
 import 'core/config_repository.dart';
+import 'core/directions_service.dart';
 import 'core/location_service.dart';
 import 'core/places_service.dart';
 import 'core/push_notification_service.dart';
 import 'core/session.dart';
 import 'core/socket_service.dart';
+import 'features/admin/admin_repository.dart';
 import 'features/auth/auth_repository.dart';
 import 'features/orders/orders_repository.dart';
+import 'features/rider/rider_documents_repository.dart';
 import 'features/riders/riders_repository.dart';
 import 'features/wallet/wallet_repository.dart';
 import 'routing/app_router.dart';
 import 'shared/theme.dart';
-import 'shared/widgets/bytz_preloader.dart';
+import 'shared/widgets/app_launch_carousel.dart';
 
 class BytzGoApp extends StatefulWidget {
   const BytzGoApp({super.key});
@@ -51,7 +54,7 @@ class _BytzGoAppState extends State<BytzGoApp> {
         session: _session,
       );
     }
-    const minSplash = Duration(milliseconds: 1800);
+    const minSplash = Duration(milliseconds: 4200);
     final elapsed = DateTime.now().difference(started);
     if (elapsed < minSplash) {
       await Future.delayed(minSplash - elapsed);
@@ -74,12 +77,15 @@ class _BytzGoAppState extends State<BytzGoApp> {
         Provider<SocketService>.value(value: _socket),
         ChangeNotifierProvider<Session>.value(value: _session),
         Provider(create: (ctx) => AuthRepository(ctx.read<ApiClient>())),
+        Provider(create: (ctx) => RiderDocumentsRepository(ctx.read<ApiClient>())),
+        Provider(create: (ctx) => AdminRepository(ctx.read<ApiClient>())),
         Provider(create: (ctx) => OrdersRepository(ctx.read<ApiClient>())),
         Provider(create: (ctx) => RidersRepository(ctx.read<ApiClient>())),
         Provider(create: (ctx) => WalletRepository(ctx.read<ApiClient>())),
         Provider(create: (ctx) => ConfigRepository(ctx.read<ApiClient>())),
         Provider(create: (_) => LocationService()),
         Provider(create: (ctx) => PlacesService(ctx.read<ApiClient>())),
+        Provider(create: (ctx) => DirectionsService(ctx.read<ApiClient>())),
       ],
       child: MaterialApp.router(
         title: 'BytzGo',
@@ -91,7 +97,7 @@ class _BytzGoAppState extends State<BytzGoApp> {
             builder: (context, session, _) {
               if (!_splashDone || session.isRestoring) {
                 return const Material(
-                  child: BytzPreloader(message: 'Loading…'),
+                  child: AppLaunchCarousel(message: 'Loading your city…'),
                 );
               }
               return child ?? const SizedBox.shrink();

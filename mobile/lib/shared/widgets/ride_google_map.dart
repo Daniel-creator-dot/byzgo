@@ -21,6 +21,8 @@ class RideGoogleMap extends StatefulWidget {
     this.onMapTap,
     this.mapPickMode,
     this.showRoute = false,
+    this.routePoints = const [],
+    this.showLiveRiderRoute = false,
   });
 
   final LocationPoint? pickup;
@@ -32,6 +34,10 @@ class RideGoogleMap extends StatefulWidget {
   final void Function(double lat, double lng)? onMapTap;
   final MapPickMode? mapPickMode;
   final bool showRoute;
+  /// Turn-by-turn polyline (e.g. from Directions API).
+  final List<LocationPoint> routePoints;
+  /// Rider → pickup or rider → drop-off while tracking.
+  final bool showLiveRiderRoute;
 
   @override
   State<RideGoogleMap> createState() => _RideGoogleMapState();
@@ -175,7 +181,13 @@ class _RideGoogleMapState extends State<RideGoogleMap>
           markerId: const MarkerId('rider'),
           position: LatLng(widget.riderPosition!.lat, widget.riderPosition!.lng),
           icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueOrange),
-          infoWindow: const InfoWindow(title: 'Rider'),
+          infoWindow: InfoWindow(
+            title: 'Your biker',
+            snippet: widget.riderPosition!.address.isNotEmpty
+                ? widget.riderPosition!.address
+                : null,
+          ),
+          zIndexInt: 3,
         ),
       );
     }
@@ -213,20 +225,38 @@ class _RideGoogleMapState extends State<RideGoogleMap>
       }
     }
 
-    if (widget.showRoute &&
+    final routeLine = <LatLng>[];
+    if (widget.routePoints.length >= 2) {
+      for (final p in widget.routePoints) {
+        if (p.hasCoords) routeLine.add(LatLng(p.lat, p.lng));
+      }
+    } else if (widget.showRoute &&
         widget.pickup != null &&
         widget.destination != null &&
         widget.pickup!.hasCoords &&
         widget.destination!.hasCoords) {
+      routeLine.add(LatLng(widget.pickup!.lat, widget.pickup!.lng));
+      routeLine.add(LatLng(widget.destination!.lat, widget.destination!.lng));
+    } else if (widget.showLiveRiderRoute &&
+        widget.riderPosition != null &&
+        widget.riderPosition!.hasCoords) {
+      final target = widget.destination ?? widget.pickup;
+      if (target != null && target.hasCoords) {
+        routeLine.add(
+          LatLng(widget.riderPosition!.lat, widget.riderPosition!.lng),
+        );
+        routeLine.add(LatLng(target.lat, target.lng));
+      }
+    }
+    if (routeLine.length >= 2) {
       polylines.add(
         Polyline(
           polylineId: const PolylineId('route'),
-          color: BytzGoTheme.accent,
-          width: 5,
-          points: [
-            LatLng(widget.pickup!.lat, widget.pickup!.lng),
-            LatLng(widget.destination!.lat, widget.destination!.lng),
-          ],
+          color: widget.showLiveRiderRoute
+              ? BytzGoTheme.brandBlue
+              : BytzGoTheme.accent,
+          width: widget.showLiveRiderRoute ? 6 : 5,
+          points: routeLine,
         ),
       );
     }
@@ -260,7 +290,16 @@ class _RideGoogleMapState extends State<RideGoogleMap>
     if (widget.destination?.hasCoords == true) {
       points.add(LatLng(widget.destination!.lat, widget.destination!.lng));
     }
-    if (points.length < 2) return;
+    if (widget.riderPosition?.hasCoords == true) {
+      points.add(LatLng(widget.riderPosition!.lat, widget.riderPosition!.lng));
+    }
+    if (points.length < 1) return;
+    if (points.length < 2) {
+      await c.animateCamera(
+        CameraUpdate.newLatLngZoom(points.first, 15),
+      );
+      return;
+    }
     var minLat = points.first.latitude;
     var maxLat = points.first.latitude;
     var minLng = points.first.longitude;
@@ -290,7 +329,9 @@ class _RideGoogleMapState extends State<RideGoogleMap>
       }
     }
     if (oldWidget.pickup != widget.pickup ||
-        oldWidget.destination != widget.destination) {
+        oldWidget.destination != widget.destination ||
+        oldWidget.riderPosition != widget.riderPosition ||
+        oldWidget.routePoints.length != widget.routePoints.length) {
       _fitBounds();
     }
   }

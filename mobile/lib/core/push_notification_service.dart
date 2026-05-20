@@ -22,6 +22,24 @@ class PushNotificationService {
   bool _initialized = false;
   String? _lastToken;
 
+  static const _tripChannel = AndroidNotificationChannel(
+    'trip_updates',
+    'Trip & chat alerts',
+    description: 'Biker ETA, trip status, and chat messages',
+    importance: Importance.max,
+    playSound: true,
+    enableVibration: true,
+  );
+
+  static const _rideChannel = AndroidNotificationChannel(
+    'incoming_rides',
+    'Incoming delivery jobs',
+    description: 'Alerts when a new ride is offered',
+    importance: Importance.max,
+    playSound: true,
+    enableVibration: true,
+  );
+
   Future<void> initialize() async {
     if (_initialized) return;
     _initialized = true;
@@ -32,21 +50,15 @@ class PushNotificationService {
       onDidReceiveNotificationResponse: _onNotificationTap,
     );
 
-    const channel = AndroidNotificationChannel(
-      'incoming_rides',
-      'Incoming delivery jobs',
-      description: 'Alerts when a new ride is offered',
-      importance: Importance.max,
-      playSound: true,
-      enableVibration: true,
-    );
-    await _local
-        .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>()
-        ?.createNotificationChannel(channel);
+    final android = _local.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
+    await android?.createNotificationChannel(_rideChannel);
+    await android?.createNotificationChannel(_tripChannel);
 
     if (!DefaultFirebaseOptions.isConfigured) {
-      debugPrint('BytzGo push: Firebase not configured — add google-services.json or dart-defines');
+      debugPrint(
+        'BytzGo push: Firebase not configured — add google-services.json or dart-defines',
+      );
       return;
     }
 
@@ -96,10 +108,54 @@ class PushNotificationService {
     }
   }
 
+  /// In-app alert (socket) — always show as notification banner.
+  Future<void> showTripAlert({
+    required String title,
+    required String body,
+    String type = 'trip-update',
+    String? orderId,
+    bool highPriority = true,
+  }) async {
+    await initialize();
+    if (!kIsWeb) {
+      try {
+        await FlutterRingtonePlayer().playNotification();
+      } catch (_) {}
+    }
+    final channelId =
+        type == 'incoming-ride' ? 'incoming_rides' : 'trip_updates';
+    await _local.show(
+      DateTime.now().millisecondsSinceEpoch.remainder(100000),
+      title,
+      body,
+      NotificationDetails(
+        android: AndroidNotificationDetails(
+          channelId,
+          channelId == 'incoming_rides'
+              ? _rideChannel.name
+              : _tripChannel.name,
+          channelDescription: channelId == 'incoming_rides'
+              ? _rideChannel.description
+              : _tripChannel.description,
+          importance: Importance.max,
+          priority: Priority.high,
+          visibility: NotificationVisibility.public,
+          category: highPriority
+              ? AndroidNotificationCategory.message
+              : AndroidNotificationCategory.status,
+        ),
+      ),
+      payload: jsonEncode({'type': type, 'orderId': orderId ?? ''}),
+    );
+  }
+
   void _onForegroundMessage(RemoteMessage message) {
     final data = message.data;
-    if (data['type'] == 'incoming-ride') {
-      FlutterRingtonePlayer().playNotification();
+    final type = data['type']?.toString() ?? '';
+    if (type == 'incoming-ride' || type == 'trip-message') {
+      try {
+        FlutterRingtonePlayer().playNotification();
+      } catch (_) {}
     }
     _showLocal(message);
   }
@@ -120,20 +176,27 @@ class PushNotificationService {
     final title = message.notification?.title ?? 'BytzGo';
     final body = message.notification?.body ?? 'New update';
     final data = message.data;
+    final type = data['type']?.toString() ?? '';
+    final channelId =
+        type == 'incoming-ride' ? 'incoming_rides' : 'trip_updates';
+    final high = type == 'incoming-ride' || type == 'trip-message';
 
     await _local.show(
       DateTime.now().millisecondsSinceEpoch.remainder(100000),
       title,
       body,
-      const NotificationDetails(
+      NotificationDetails(
         android: AndroidNotificationDetails(
-          'incoming_rides',
-          'Incoming delivery jobs',
-          channelDescription: 'Alerts when a new ride is offered',
+          channelId,
+          channelId == 'incoming_rides'
+              ? _rideChannel.name
+              : _tripChannel.name,
           importance: Importance.max,
           priority: Priority.high,
-          fullScreenIntent: true,
-          category: AndroidNotificationCategory.call,
+          fullScreenIntent: type == 'incoming-ride',
+          category: high
+              ? AndroidNotificationCategory.message
+              : AndroidNotificationCategory.status,
           visibility: NotificationVisibility.public,
         ),
       ),

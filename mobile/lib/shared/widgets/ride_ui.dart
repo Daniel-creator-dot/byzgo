@@ -468,12 +468,16 @@ class TripStatusChip extends StatelessWidget {
     this.icon = Icons.two_wheeler,
     this.searching = false,
     this.nearbyCount,
+    this.etaPhrase,
+    this.showRiderApproaching = false,
   });
 
   final String label;
   final IconData icon;
   final bool searching;
   final int? nearbyCount;
+  final String? etaPhrase;
+  final bool showRiderApproaching;
 
   @override
   Widget build(BuildContext context) {
@@ -498,6 +502,20 @@ class TripStatusChip extends StatelessWidget {
         children: [
           if (searching)
             const BikerSearchRadar(size: 28, color: BytzGoTheme.brandBlue)
+          else if (showRiderApproaching)
+            Container(
+              width: 32,
+              height: 32,
+              decoration: BoxDecoration(
+                color: BytzGoTheme.brandBlue.withValues(alpha: 0.15),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.near_me,
+                size: 18,
+                color: BytzGoTheme.brandBlue,
+              ),
+            )
           else
             Icon(icon, size: 18, color: BytzGoTheme.accent),
           const SizedBox(width: 8),
@@ -513,7 +531,16 @@ class TripStatusChip extends StatelessWidget {
                   color: BytzGoTheme.sheetText,
                 ),
               ),
-              if (searching && nearbyCount != null && nearbyCount! > 0)
+              if (etaPhrase != null && etaPhrase!.isNotEmpty)
+                Text(
+                  etaPhrase!,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 12,
+                    color: BytzGoTheme.brandBlue,
+                  ),
+                )
+              else if (searching && nearbyCount != null && nearbyCount! > 0)
                 Text(
                   '$nearbyCount biker${nearbyCount == 1 ? '' : 's'} nearby',
                   style: BytzGoTheme.sheetBody(11),

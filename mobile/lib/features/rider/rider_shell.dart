@@ -29,6 +29,7 @@ import 'delivery_pin_dialog.dart';
 import 'incoming_ride_overlay.dart';
 import 'incoming_ride_ring.dart';
 import 'rider_drive_map_layer.dart';
+import 'rider_verification_section.dart';
 
 enum _RiderTab { drive, trips, wallet, profile }
 
@@ -86,7 +87,8 @@ class _RiderShellState extends State<RiderShell> {
   LocationService get _location => context.read<LocationService>();
 
   AuthUser get _user => _session.user!;
-  bool get _pendingApproval => _user.status == 'pending';
+  bool get _pendingApproval =>
+      _user.status == 'pending' || _user.status == 'rejected';
 
   List<Order> get _availableOrders {
     _offerTick;
@@ -141,7 +143,7 @@ class _RiderShellState extends State<RiderShell> {
   @override
   void initState() {
     super.initState();
-    _isOnline = _user.status == 'active';
+    _isOnline = _user.isOnline == true;
     _profilePhone.text = _user.phone ?? '';
     _profileRegion = _user.region;
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -192,6 +194,26 @@ class _RiderShellState extends State<RiderShell> {
 
   void _wireSocket() {
     _socket.clearHandlers();
+    _socket.onStatusUpdated = ({required status, isOnline, reason}) {
+      if (!mounted) return;
+      final u = _session.user;
+      if (u == null) return;
+      _session.patchUser(u.copyWith(
+        status: status.isNotEmpty ? status : u.status,
+        isOnline: isOnline ?? u.isOnline,
+      ));
+      setState(() {
+        _isOnline = _session.user!.isOnline == true;
+        if (!_isOnline) {
+          _incoming = null;
+          _alertedOfferIds.clear();
+          _stopPolling();
+        }
+      });
+      if (reason != null && reason.isNotEmpty && status == 'rejected') {
+        _snack(reason);
+      }
+    };
     _socket.onRideIncoming = (order) {
       if (!mounted || !_isOnline || !isOfferableOrder(order)) return;
       _alertedOfferIds.add(order.id);
@@ -310,7 +332,9 @@ class _RiderShellState extends State<RiderShell> {
 
   Future<void> _setOnline(bool online) async {
     if (_pendingApproval && online) {
-      _snack('Account pending approval — you cannot go online yet.');
+      _snack(_user.status == 'rejected'
+          ? 'Application rejected — update documents in Account and resubmit.'
+          : 'Account pending approval — upload documents in Account first.');
       return;
     }
     setState(() => _statusLoading = true);
@@ -319,8 +343,8 @@ class _RiderShellState extends State<RiderShell> {
       await _session.applyAuthResult(token: result.token, user: result.user);
       if (!mounted) return;
       setState(() {
-        _isOnline = online;
-        if (!online) {
+        _isOnline = result.user.isOnline == true;
+        if (!_isOnline) {
           _incoming = null;
           _alertedOfferIds.clear();
         }
@@ -635,9 +659,15 @@ class _RiderShellState extends State<RiderShell> {
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(color: BytzGoTheme.warning.withValues(alpha: 0.35)),
               ),
-              child: const Text(
-                'Account pending approval — you cannot go online yet.',
-                style: TextStyle(color: BytzGoTheme.warning, fontSize: 12, fontWeight: FontWeight.w700),
+              child: Text(
+                _user.status == 'rejected'
+                    ? 'Application rejected — update documents in Account and resubmit.'
+                    : 'Pending admin approval — upload documents in Account, then wait for review.',
+                style: const TextStyle(
+                  color: BytzGoTheme.warning,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
             ),
           const SizedBox(height: 10),
@@ -1501,6 +1531,8 @@ class _RiderShellState extends State<RiderShell> {
             ),
           ],
         ),
+        const SizedBox(height: 20),
+        RiderVerificationSection(user: user),
         const SizedBox(height: 24),
         TextField(
           controller: _profilePhone,

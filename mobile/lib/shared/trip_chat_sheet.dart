@@ -53,15 +53,12 @@ class _TripChatSheetState extends State<TripChatSheet> {
     super.initState();
     _load();
     final socket = context.read<SocketService>();
-    socket.onOrderMessage = _onSocketMessage;
+    socket.addOrderMessageListener(_onSocketMessage);
   }
 
   @override
   void dispose() {
-    final socket = context.read<SocketService>();
-    if (socket.onOrderMessage == _onSocketMessage) {
-      socket.onOrderMessage = null;
-    }
+    context.read<SocketService>().removeOrderMessageListener(_onSocketMessage);
     _controller.dispose();
     _scroll.dispose();
     super.dispose();

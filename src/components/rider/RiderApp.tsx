@@ -15,6 +15,9 @@ import {
   Wallet,
   X,
   Zap,
+  Upload,
+  IdCard,
+  Camera,
 } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -51,6 +54,7 @@ interface AuthUser {
   role: string;
   balance: number;
   status?: string;
+  is_online?: boolean;
   region?: string;
   lat?: number;
   lng?: number;
@@ -99,7 +103,7 @@ export function RiderApp({
   const mapsAvailable = useMapsAvailable();
   const [tab, setTab] = useState<RiderTab>('drive');
   const [sheetTab, setSheetTab] = useState<'requests' | 'active'>('requests');
-  const [isOnline, setIsOnline] = useState(user.status === 'active' || user.status === undefined);
+  const [isOnline, setIsOnline] = useState(user.is_online === true);
   const [riderPos, setRiderPos] = useState({ lat: user.lat || 5.6037, lng: user.lng || -0.1870 });
   const [riderHeading, setRiderHeading] = useState<number | null>(null);
   const [navigatingTo, setNavigatingTo] = useState<{ lat: number; lng: number } | null>(null);
@@ -200,19 +204,24 @@ export function RiderApp({
   }, [primaryActiveOrder?.id, navigatingTo]);
 
   useEffect(() => {
-    if (user.status === 'active' || user.status === undefined) {
+    setIsOnline(user.is_online === true);
+  }, [user.is_online]);
+
+  useEffect(() => {
+    if (user.status === 'active' && user.is_online) {
       unlockIncomingRideAudio();
     }
-  }, [user.status]);
+  }, [user.status, user.is_online]);
 
   const toggleOnline = async () => {
     const next = isOnline ? 'offline' : 'active';
     try {
       const res = await axios.patch('/api/auth/status', { status: next });
       const updated = res.data?.user;
-      user.status = next;
-      setIsOnline(!isOnline);
-      setUser((u) => (u ? { ...updated, ...u, status: next } : u));
+      setIsOnline(updated?.is_online === true);
+      setUser((u) => (u && updated ? { ...u, ...updated } : u));
+      if (res.data?.token) localStorage.setItem('token', res.data.token);
+      if (updated) localStorage.setItem('user', JSON.stringify(updated));
       if (next === 'active') {
         unlockIncomingRideAudio();
         socket.emit('join', user.id);
@@ -223,7 +232,8 @@ export function RiderApp({
         await unsubscribeRiderPush();
       }
     } catch (e) {
-      console.error(e);
+      const msg = (e as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      addNotification?.(msg || 'Could not update online status', 'warning');
     }
   };
 
@@ -271,6 +281,76 @@ export function RiderApp({
   });
   const [profileSaving, setProfileSaving] = useState(false);
   const [profileMsg, setProfileMsg] = useState('');
+  const [riderDocs, setRiderDocs] = useState<
+    Array<{ doc_type: string; image_url: string; review_status?: string; rejection_reason?: string }>
+  >([]);
+  const [docsLoading, setDocsLoading] = useState(false);
+  const [docUploading, setDocUploading] = useState<string | null>(null);
+  const [submittingDocs, setSubmittingDocs] = useState(false);
+
+  const docSlots: { type: 'license' | 'ghana_card' | 'photo'; label: string; icon: typeof IdCard }[] = [
+    { type: 'license', label: 'Driver licence (JPEG)', icon: IdCard },
+    { type: 'ghana_card', label: 'Ghana card (JPEG)', icon: IdCard },
+    { type: 'photo', label: 'Profile photo (JPEG)', icon: Camera },
+  ];
+
+  useEffect(() => {
+    if (tab !== 'profile') return;
+    setDocsLoading(true);
+    axios
+      .get('/api/rider/documents')
+      .then((res) => setRiderDocs(res.data?.documents || []))
+      .catch(() => addNotification?.('Could not load documents', 'warning'))
+      .finally(() => setDocsLoading(false));
+  }, [tab, user.status]);
+
+  const uploadRiderDoc = async (docType: 'license' | 'ghana_card' | 'photo', file: File) => {
+    if (!/^image\/(jpeg|jpg|pjpeg)$/i.test(file.type)) {
+      addNotification?.('Use a JPEG image (.jpg)', 'warning');
+      return;
+    }
+    setDocUploading(docType);
+    try {
+      const formData = new FormData();
+      formData.append('image', file);
+      const res = await axios.post(`/api/rider/documents/${docType}/upload`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      setRiderDocs(res.data?.documents || []);
+      if (res.data?.user) {
+        setUser((u) => (u ? { ...u, ...res.data.user } : u));
+        localStorage.setItem('user', JSON.stringify(res.data.user));
+      }
+      if (res.data?.token) localStorage.setItem('token', res.data.token);
+      addNotification?.('Document uploaded', 'success');
+    } catch (err) {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      addNotification?.(msg || 'Upload failed', 'warning');
+    } finally {
+      setDocUploading(null);
+    }
+  };
+
+  const submitDocsForReview = async () => {
+    setSubmittingDocs(true);
+    try {
+      const res = await axios.post('/api/rider/documents/submit');
+      setRiderDocs(res.data?.documents || []);
+      if (res.data?.user) {
+        setUser((u) => (u ? { ...u, ...res.data.user } : u));
+        localStorage.setItem('user', JSON.stringify(res.data.user));
+      }
+      if (res.data?.token) localStorage.setItem('token', res.data.token);
+      addNotification?.('Submitted for admin review', 'success');
+    } catch (err) {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      addNotification?.(msg || 'Submit failed', 'warning');
+    } finally {
+      setSubmittingDocs(false);
+    }
+  };
+
+  const docsComplete = docSlots.every((s) => riderDocs.some((d) => d.doc_type === s.type));
 
   const navItems: { id: RiderTab; label: string; icon: typeof Bike }[] = [
     { id: 'drive', label: 'Drive', icon: Navigation },
@@ -325,9 +405,11 @@ export function RiderApp({
           </motion.button>
         </motion.div>
 
-        {pendingApproval && (
+        {(pendingApproval || user.status === 'rejected') && (
           <motion.div className="mt-3 p-3 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-200 text-xs font-bold">
-            Account pending approval — you cannot go online yet.
+            {user.status === 'rejected'
+              ? 'Application rejected — update your documents in Account and resubmit.'
+              : 'Account pending approval — upload documents in Account, then wait for admin.'}
           </motion.div>
         )}
 
@@ -823,6 +905,66 @@ export function RiderApp({
                   <p className="text-sm text-slate-500">{user.email}</p>
                 </div>
               </div>
+
+              <div className="mb-8 p-4 rounded-2xl border border-slate-800 bg-slate-900/60">
+                <h3 className="text-sm font-black uppercase tracking-widest text-slate-300 mb-1">Verification documents</h3>
+                <p className="text-[10px] text-slate-500 font-bold mb-4">Upload JPEG photos of your licence, Ghana card, and a clear profile picture. Admin will review before you can go online.</p>
+                {docsLoading ? (
+                  <p className="text-xs text-slate-500">Loading…</p>
+                ) : (
+                  <div className="space-y-4">
+                    {docSlots.map(({ type, label, icon: Icon }) => {
+                      const doc = riderDocs.find((d) => d.doc_type === type);
+                      return (
+                        <div key={type} className="flex gap-3 items-start p-3 rounded-xl bg-slate-950 border border-slate-800">
+                          {doc?.image_url ? (
+                            <img src={doc.image_url} alt="" className="w-16 h-16 rounded-lg object-cover shrink-0" />
+                          ) : (
+                            <div className="w-16 h-16 rounded-lg bg-slate-800 flex items-center justify-center shrink-0">
+                              <Icon size={20} className="text-slate-600" />
+                            </div>
+                          )}
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs font-black text-slate-300">{label}</p>
+                            {doc?.review_status === 'rejected' && doc.rejection_reason && (
+                              <p className="text-[10px] text-red-400 mt-1">{doc.rejection_reason}</p>
+                            )}
+                            <label className="mt-2 inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-800 text-[10px] font-black uppercase tracking-widest cursor-pointer hover:bg-slate-700">
+                              <Upload size={12} />
+                              {docUploading === type ? 'Uploading…' : doc ? 'Replace' : 'Upload'}
+                              <input
+                                type="file"
+                                accept="image/jpeg,.jpg"
+                                className="hidden"
+                                disabled={docUploading !== null}
+                                onChange={(e) => {
+                                  const file = e.target.files?.[0];
+                                  if (file) uploadRiderDoc(type, file);
+                                  e.target.value = '';
+                                }}
+                              />
+                            </label>
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {docsComplete && (user.status === 'pending' || user.status === 'rejected') && (
+                      <button
+                        type="button"
+                        disabled={submittingDocs}
+                        onClick={submitDocsForReview}
+                        className="w-full py-3 bg-brand-blue text-white rounded-xl font-black uppercase text-[10px] tracking-widest disabled:opacity-50"
+                      >
+                        {submittingDocs ? 'Submitting…' : 'Submit for admin review'}
+                      </button>
+                    )}
+                    {user.status === 'active' && docsComplete && (
+                      <p className="text-[10px] text-brand-green font-bold text-center">Verified — you can go online.</p>
+                    )}
+                  </div>
+                )}
+              </div>
+
               <form
                 onSubmit={async (e) => {
                   e.preventDefault();
