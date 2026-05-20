@@ -3,6 +3,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../models/order.dart';
 import 'theme.dart';
+import 'trip_call_sheet.dart';
 import 'trip_chat_sheet.dart';
 
 const _contactStatuses = {'pending', 'preparing', 'ready', 'picked_up', 'arrived'};
@@ -78,8 +79,13 @@ class TripContactActions extends StatelessWidget {
         children: [
           if (hasPhone) ...[
             IconButton.filled(
-              tooltip: 'Call',
-              onPressed: () => launchPhoneCall(normalized),
+              tooltip: 'In-app call',
+              onPressed: () => showTripCallSheet(
+                context,
+                order: order,
+                phone: normalized,
+                contactLabel: label,
+              ),
               icon: const Icon(Icons.phone, size: 18),
               style: IconButton.styleFrom(
                 backgroundColor: BytzGoTheme.brandBlue,
@@ -130,9 +136,18 @@ class TripContactActions extends StatelessWidget {
             if (hasPhone) ...[
               Expanded(
                 child: OutlinedButton.icon(
-                  onPressed: () => launchPhoneCall(normalized),
+                  onPressed: () => showTripCallSheet(
+                    context,
+                    order: order,
+                    phone: normalized,
+                    contactLabel: label,
+                  ),
                   icon: const Icon(Icons.phone, size: 18),
                   label: const Text('Call'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: BytzGoTheme.sheetText,
+                    side: const BorderSide(color: BytzGoTheme.sheetDivider),
+                  ),
                 ),
               ),
               const SizedBox(width: 8),
@@ -141,6 +156,10 @@ class TripContactActions extends StatelessWidget {
                   onPressed: () => launchSms(normalized),
                   icon: const Icon(Icons.sms_outlined, size: 18),
                   label: const Text('Text'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: BytzGoTheme.sheetText,
+                    side: const BorderSide(color: BytzGoTheme.sheetDivider),
+                  ),
                 ),
               ),
               const SizedBox(width: 8),

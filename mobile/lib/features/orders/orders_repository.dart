@@ -4,6 +4,7 @@ import 'package:dio/dio.dart';
 
 import '../../core/api_client.dart';
 
+import '../../models/delivery_quote.dart';
 import '../../models/location_point.dart';
 
 import '../../models/order.dart';
@@ -149,7 +150,74 @@ class OrdersRepository {
 
   }
 
+  Future<DeliveryQuote> calculateRouteDelivery({
+    required double pickupLat,
+    required double pickupLng,
+    required double destLat,
+    required double destLng,
+    String? pickupRegion,
+    String? destinationRegion,
+  }) async {
+    final res = await _api.dio.post<Map<String, dynamic>>(
+      '/api/delivery/calculate',
+      data: {
+        'pickup_lat': pickupLat,
+        'pickup_lng': pickupLng,
+        'dest_lat': destLat,
+        'dest_lng': destLng,
+        if (pickupRegion != null) 'pickup_region': pickupRegion,
+        if (destinationRegion != null) 'destination_region': destinationRegion,
+      },
+    );
+    final data = res.data;
+    if (data == null) throw Exception('Empty delivery quote');
+    return DeliveryQuote.fromJson(Map<String, dynamic>.from(data));
+  }
 
+  Future<Order> createShopCourierOrder({
+    required String vendorId,
+    required LocationPoint pickup,
+    required LocationPoint destination,
+    required List<ShopCartLine> lines,
+    required double deliveryFee,
+    String itemDescription = 'Shop order',
+    String paymentMethod = 'pay_on_delivery',
+  }) async {
+    final itemsSubtotal =
+        lines.fold<double>(0, (s, l) => s + l.lineTotal);
+    final total = ((itemsSubtotal + deliveryFee) * 100).round() / 100;
+
+    final res = await _api.dio.post<Map<String, dynamic>>(
+      '/api/orders',
+      data: {
+        'vendorId': vendorId,
+        'items': [
+          ...lines.map(
+            (l) => {
+              'id': l.productId,
+              'name': l.name,
+              'quantity': l.quantity,
+              'price': l.price,
+            },
+          ),
+        ],
+        'total': total,
+        'order_type': 'courier',
+        'address': destination.address,
+        'pickup': pickup.address,
+        'lat': destination.lat,
+        'lng': destination.lng,
+        'pickup_lat': pickup.lat,
+        'pickup_lng': pickup.lng,
+        'delivery_fee': deliveryFee,
+        'payment_method': paymentMethod,
+        'itemDescription': itemDescription,
+      },
+    );
+    final data = res.data;
+    if (data == null) throw Exception('Empty order response');
+    return Order.fromJson(Map<String, dynamic>.from(data));
+  }
 
   Future<Order> acceptOrder({
 

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import 'app.dart';
 import 'core/env.dart';
+import 'core/push_notification_service.dart';
 import 'firebase_bootstrap.dart';
 
 /// Entry point for BytzGo mobile.
@@ -15,5 +16,6 @@ Future<void> main() async {
     debugPrint('BytzGo API: ${Env.apiBaseUrl}');
   }
   await bootstrapFirebase();
+  await PushNotificationService.instance.initialize();
   runApp(const BytzGoApp());
 }

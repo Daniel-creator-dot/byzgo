@@ -6,6 +6,7 @@ import '../../core/session.dart';
 import '../../shared/format.dart';
 import '../../shared/theme.dart';
 import '../../shared/widgets/ride_ui.dart';
+import '../../shared/widgets/sheet_theme_scope.dart';
 import '../wallet/paystack_checkout_screen.dart';
 import '../wallet/wallet_repository.dart';
 
@@ -17,7 +18,7 @@ Future<void> showCustomerWalletSheet(BuildContext context) {
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
     ),
-    builder: (ctx) => const _CustomerWalletSheet(),
+    builder: (ctx) => const SheetThemeScope(child: _CustomerWalletSheet()),
   );
 }
 

@@ -6,6 +6,7 @@ import '../features/orders/orders_repository.dart';
 import '../models/order.dart';
 import '../models/trip_message.dart';
 import 'theme.dart';
+import 'widgets/sheet_theme_scope.dart';
 
 Future<void> showTripChatSheet(
   BuildContext context, {
@@ -19,7 +20,9 @@ Future<void> showTripChatSheet(
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
     ),
-    builder: (ctx) => TripChatSheet(order: order, title: title),
+    builder: (ctx) => SheetThemeScope(
+          child: TripChatSheet(order: order, title: title),
+        ),
   );
 }
 
@@ -169,7 +172,7 @@ class _TripChatSheetState extends State<TripChatSheet> {
                     ),
                     IconButton(
                       onPressed: () => Navigator.pop(context),
-                      icon: const Icon(Icons.close),
+                      icon: const Icon(Icons.close, color: BytzGoTheme.sheetText),
                     ),
                   ],
                 ),
@@ -212,6 +215,7 @@ class _TripChatSheetState extends State<TripChatSheet> {
                         controller: _controller,
                         minLines: 1,
                         maxLines: 4,
+                        style: const TextStyle(color: BytzGoTheme.sheetText),
                         textInputAction: TextInputAction.send,
                         onSubmitted: (_) => _send(),
                         decoration: InputDecoration(
@@ -234,6 +238,7 @@ class _TripChatSheetState extends State<TripChatSheet> {
                       onPressed: _sending ? null : _send,
                       style: FilledButton.styleFrom(
                         backgroundColor: BytzGoTheme.brandBlue,
+                        foregroundColor: Colors.white,
                         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                       ),
                       child: _sending
@@ -245,7 +250,7 @@ class _TripChatSheetState extends State<TripChatSheet> {
                                 color: Colors.white,
                               ),
                             )
-                          : const Icon(Icons.send, size: 20),
+                          : const Icon(Icons.send, size: 20, color: Colors.white),
                     ),
                   ],
                 ),

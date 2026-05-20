@@ -105,4 +105,65 @@ class BytzGoTheme {
         color: sheetMuted,
         height: 1.35,
       );
+
+  /// Light theme for white bottom sheets / customer tabs (avoids white-on-white from [dark]).
+  static ThemeData sheetTheme() {
+    final base = ThemeData(
+      useMaterial3: true,
+      brightness: Brightness.light,
+      scaffoldBackgroundColor: sheetBg,
+      fontFamily: 'Roboto',
+    );
+    return base.copyWith(
+      colorScheme: const ColorScheme.light(
+        primary: brandBlue,
+        onPrimary: Colors.white,
+        secondary: accentDark,
+        onSecondary: accentOn,
+        surface: sheetBg,
+        onSurface: sheetText,
+        error: danger,
+        onError: Colors.white,
+      ),
+      appBarTheme: const AppBarTheme(
+        backgroundColor: sheetBg,
+        foregroundColor: sheetText,
+        elevation: 0,
+        iconTheme: IconThemeData(color: sheetText),
+      ),
+      textTheme: base.textTheme.apply(
+        bodyColor: sheetText,
+        displayColor: sheetText,
+      ),
+      iconTheme: const IconThemeData(color: sheetText),
+      dividerTheme: const DividerThemeData(color: sheetDivider),
+      textButtonTheme: TextButtonThemeData(
+        style: TextButton.styleFrom(foregroundColor: brandBlue),
+      ),
+      outlinedButtonTheme: OutlinedButtonThemeData(
+        style: OutlinedButton.styleFrom(
+          foregroundColor: sheetText,
+          side: const BorderSide(color: sheetDivider),
+        ),
+      ),
+      filledButtonTheme: FilledButtonThemeData(
+        style: FilledButton.styleFrom(
+          backgroundColor: brandBlue,
+          foregroundColor: Colors.white,
+        ),
+      ),
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: sheetDivider.withValues(alpha: 0.35),
+        hintStyle: TextStyle(color: sheetMuted.withValues(alpha: 0.95)),
+        labelStyle: const TextStyle(color: sheetMuted),
+        floatingLabelStyle: const TextStyle(color: brandBlue),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide.none,
+        ),
+      ),
+      progressIndicatorTheme: const ProgressIndicatorThemeData(color: brandBlue),
+    );
+  }
 }

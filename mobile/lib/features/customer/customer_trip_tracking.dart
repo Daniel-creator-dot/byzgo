@@ -538,6 +538,7 @@ class _CustomerTripPaymentCardState extends State<CustomerTripPaymentCard> {
                 icon: const Icon(Icons.payments_outlined),
                 label: const Text('I\'ll pay cash to driver'),
                 style: OutlinedButton.styleFrom(
+                  foregroundColor: BytzGoTheme.sheetText,
                   minimumSize: const Size.fromHeight(50),
                   side: BorderSide(color: BytzGoTheme.warning.withValues(alpha: 0.6)),
                   shape: RoundedRectangleBorder(
@@ -551,6 +552,7 @@ class _CustomerTripPaymentCardState extends State<CustomerTripPaymentCard> {
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: TextField(
                 controller: _referenceCtrl,
+                style: const TextStyle(color: BytzGoTheme.sheetText),
                 decoration: InputDecoration(
                   labelText: 'MoMo / card payment reference',
                   hintText: 'After paying online',
@@ -585,7 +587,9 @@ class _CustomerTripPaymentCardState extends State<CustomerTripPaymentCard> {
                 icon: const Icon(Icons.credit_card),
                 label: const Text('Confirm card / MoMo payment'),
                 style: OutlinedButton.styleFrom(
+                  foregroundColor: BytzGoTheme.sheetText,
                   minimumSize: const Size.fromHeight(50),
+                  side: const BorderSide(color: BytzGoTheme.sheetDivider),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(14),
                   ),
@@ -698,7 +702,9 @@ class _CustomerCancelRequestButtonState extends State<CustomerCancelRequestButto
 
     final ok = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => Theme(
+        data: BytzGoTheme.sheetTheme(),
+        child: AlertDialog(
         title: const Text('Cancel request?'),
         content: Text(
           order.riderId != null
@@ -716,6 +722,7 @@ class _CustomerCancelRequestButtonState extends State<CustomerCancelRequestButto
             child: const Text('Cancel request'),
           ),
         ],
+      ),
       ),
     );
 

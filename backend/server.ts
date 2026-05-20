@@ -120,6 +120,70 @@ async function getSetting(key: string) {
   }
 }
 
+function haversineDistanceKm(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number
+): number {
+  if (!lat1 || !lon1 || !lat2 || !lon2) return 0;
+  const r = 6371;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return Math.round(r * c * 1000) / 1000;
+}
+
+async function calculateDeliveryFeeFromCoords(
+  pickupLat: number,
+  pickupLng: number,
+  destLat: number,
+  destLng: number,
+  pickupRegion?: string | null,
+  destinationRegion?: string | null
+): Promise<{ distance_km: number; delivery_fee: number; price_per_km: number; zone: string | null }> {
+  const distance_km = haversineDistanceKm(pickupLat, pickupLng, destLat, destLng);
+  const globalRate = Math.max(0.01, parseFloat((await getSetting('delivery_price_per_km')) || '4') || 4);
+
+  let zone: any = null;
+  if (destinationRegion) {
+    const result = await pool.query(
+      'SELECT * FROM delivery_zones WHERE region = $1 AND is_active = true LIMIT 1',
+      [destinationRegion]
+    );
+    zone = result.rows[0];
+  }
+  if (!zone && pickupRegion) {
+    const result = await pool.query(
+      'SELECT * FROM delivery_zones WHERE region = $1 AND is_active = true LIMIT 1',
+      [pickupRegion]
+    );
+    zone = result.rows[0];
+  }
+
+  if (!zone) {
+    const price = Math.round(distance_km * globalRate * 100) / 100;
+    return { distance_km, delivery_fee: price, price_per_km: globalRate, zone: null };
+  }
+
+  const rate = Number(zone.price_per_km) > 0 ? Number(zone.price_per_km) : globalRate;
+  let price = distance_km * rate;
+  price = Math.max(price, Number(zone.min_price));
+  if (zone.max_price) price = Math.min(price, Number(zone.max_price));
+  return {
+    distance_km,
+    delivery_fee: Math.round(price * 100) / 100,
+    price_per_km: rate,
+    zone: zone.name,
+  };
+}
+
 async function getPaystackPublicKey(): Promise<string> {
   const fromDb = await getSetting('paystack_public_key');
   if (fromDb?.trim()) return fromDb.trim();
@@ -392,6 +456,16 @@ const initDb = async () => {
         keys_auth TEXT NOT NULL,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
+
+      CREATE TABLE IF NOT EXISTS fcm_tokens (
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        token TEXT NOT NULL,
+        platform TEXT NOT NULL DEFAULT 'android',
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (user_id, token)
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_fcm_tokens_token ON fcm_tokens(token);
 
       CREATE TABLE IF NOT EXISTS order_messages (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -990,12 +1064,7 @@ async function notifyRideTaken(orderId: string, winnerRiderId: string) {
 }
 
 async function sendPushToRiders(order: any, riderIds: string[]) {
-  if (!riderIds.length || !vapidPublicKey) return;
-
-  const subs = await pool.query(
-    `SELECT endpoint, keys_p256dh, keys_auth FROM push_subscriptions WHERE user_id = ANY($1::uuid[])`,
-    [riderIds]
-  );
+  if (!riderIds.length) return;
 
   const payload = JSON.stringify({
     type: 'incoming-ride',
@@ -1007,23 +1076,70 @@ async function sendPushToRiders(order: any, riderIds: string[]) {
     order_type: order.order_type,
   });
 
-  for (const sub of subs.rows) {
-    try {
-      await webpush.sendNotification(
-        {
-          endpoint: sub.endpoint,
-          keys: { p256dh: sub.keys_p256dh, auth: sub.keys_auth },
-        },
-        payload,
-        { urgency: 'high', TTL: 30 }
-      );
-    } catch (err: any) {
-      if (err.statusCode === 404 || err.statusCode === 410) {
-        await pool.query('DELETE FROM push_subscriptions WHERE endpoint = $1', [sub.endpoint]);
-      } else {
-        console.warn('[push] send failed:', err.statusCode || err.message);
+  if (vapidPublicKey) {
+    const subs = await pool.query(
+      `SELECT endpoint, keys_p256dh, keys_auth FROM push_subscriptions WHERE user_id = ANY($1::uuid[])`,
+      [riderIds]
+    );
+
+    for (const sub of subs.rows) {
+      try {
+        await webpush.sendNotification(
+          {
+            endpoint: sub.endpoint,
+            keys: { p256dh: sub.keys_p256dh, auth: sub.keys_auth },
+          },
+          payload,
+          { urgency: 'high', TTL: 30 }
+        );
+      } catch (err: any) {
+        if (err.statusCode === 404 || err.statusCode === 410) {
+          await pool.query('DELETE FROM push_subscriptions WHERE endpoint = $1', [sub.endpoint]);
+        } else {
+          console.warn('[push] web send failed:', err.statusCode || err.message);
+        }
       }
     }
+  }
+
+  if (!firebaseAdminHasCredentials) return;
+
+  try {
+    const fcmRes = await pool.query(
+      `SELECT token FROM fcm_tokens WHERE user_id = ANY($1::uuid[])`,
+      [riderIds]
+    );
+    const tokens = fcmRes.rows.map((r: { token: string }) => r.token).filter(Boolean);
+    if (!tokens.length) return;
+
+    const pickup = order.pickup_address || 'Shop / pickup';
+    const dropoff = order.address || 'Drop-off';
+    await admin.messaging().sendEachForMulticast({
+      tokens,
+      notification: {
+        title: 'New delivery job',
+        body: `${pickup} → ${dropoff}`,
+      },
+      data: {
+        type: 'incoming-ride',
+        orderId: String(order.id),
+        order_type: String(order.order_type || 'courier'),
+      },
+      android: {
+        priority: 'high',
+        notification: {
+          channelId: 'incoming_rides',
+          sound: 'default',
+          priority: 'high' as const,
+        },
+      },
+      apns: {
+        headers: { 'apns-priority': '10' },
+        payload: { aps: { sound: 'default', contentAvailable: true } },
+      },
+    });
+  } catch (err) {
+    console.warn('[push] FCM send failed:', err);
   }
 }
 
@@ -2242,12 +2358,53 @@ app.post('/api/orders', authenticateToken, async (req: any, res) => {
       finalRegion = customerRes.rows[0]?.region;
     }
 
+    let finalDeliveryFee = Number(delivery_fee) || 0;
+    if (
+      pickupLat != null &&
+      pickupLng != null &&
+      lat != null &&
+      lng != null &&
+      Number(pickupLat) &&
+      Number(pickupLng) &&
+      Number(lat) &&
+      Number(lng)
+    ) {
+      const quote = await calculateDeliveryFeeFromCoords(
+        Number(pickupLat),
+        Number(pickupLng),
+        Number(lat),
+        Number(lng),
+        finalRegion,
+        finalRegion
+      );
+      finalDeliveryFee = quote.delivery_fee;
+      const itemsSubtotal = Array.isArray(items)
+        ? items.reduce(
+            (sum: number, it: any) =>
+              sum + Number(it.price || 0) * Number(it.quantity || 1),
+            0
+          )
+        : 0;
+      const expectedTotal =
+        finalOrderType === 'courier' && itemsSubtotal <= 0
+          ? finalDeliveryFee
+          : Math.round((itemsSubtotal + finalDeliveryFee) * 100) / 100;
+      if (Math.abs(Number(total) - expectedTotal) > 1) {
+        return res.status(400).json({
+          message: 'Order total does not match items + delivery for route distance',
+          distance_km: quote.distance_km,
+          delivery_fee: finalDeliveryFee,
+          expected_total: expectedTotal,
+        });
+      }
+    }
+
     const initialStatus = (finalOrderType === 'courier') ? 'ready' : 'pending';
     const scheduled = scheduledTime || scheduled_time || null;
 
     const result = await pool.query(
       'INSERT INTO orders (customer_id, vendor_id, items, total, status, address, pickup_address, order_type, scheduled_time, lat, lng, pickup_lat, pickup_lng, region, payment_status, payment_method, delivery_fee) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) RETURNING *',
-      [req.user.id, vendorId, JSON.stringify(items), total, initialStatus, address || 'Customer Address', finalPickup || 'Pickup', finalOrderType, scheduled, lat, lng, pickupLat, pickupLng, finalRegion, paymentStatus, finalPaymentMethod, delivery_fee || 0]
+      [req.user.id, vendorId, JSON.stringify(items), total, initialStatus, address || 'Customer Address', finalPickup || 'Pickup', finalOrderType, scheduled, lat, lng, pickupLat, pickupLng, finalRegion, paymentStatus, finalPaymentMethod, finalDeliveryFee]
     );
     const order = result.rows[0];
     res.json(order);
@@ -2907,6 +3064,87 @@ app.post('/api/delivery-zones/calculate', async (req, res) => {
   } catch (err) {
     console.error('Price calculation error:', err);
     res.status(500).json({ message: 'Failed to calculate price' });
+  }
+});
+
+// Delivery fee from coordinates (shop → customer route)
+app.post('/api/delivery/calculate', authenticateToken, async (req: any, res) => {
+  const {
+    pickup_lat,
+    pickup_lng,
+    dest_lat,
+    dest_lng,
+    destination_lat,
+    destination_lng,
+    pickup_region,
+    destination_region,
+  } = req.body;
+  const pLat = Number(pickup_lat);
+  const pLng = Number(pickup_lng);
+  const dLat = Number(dest_lat ?? destination_lat);
+  const dLng = Number(dest_lng ?? destination_lng);
+  if (!pLat || !pLng || !dLat || !dLng) {
+    return res.status(400).json({ message: 'pickup and destination coordinates required' });
+  }
+  try {
+    const quote = await calculateDeliveryFeeFromCoords(
+      pLat,
+      pLng,
+      dLat,
+      dLng,
+      pickup_region,
+      destination_region
+    );
+    res.json({
+      ...quote,
+      route: {
+        legs: [
+          {
+            from: 'shop',
+            to: 'customer',
+            label: 'Shop → You',
+            distance_km: quote.distance_km,
+          },
+        ],
+      },
+    });
+  } catch (err) {
+    console.error('Delivery calculate error:', err);
+    res.status(500).json({ message: 'Failed to calculate delivery' });
+  }
+});
+
+// FCM device tokens (mobile — alerts when app is closed)
+app.post('/api/push/fcm-token', authenticateToken, async (req: any, res) => {
+  const { token, platform } = req.body;
+  if (!token || typeof token !== 'string') {
+    return res.status(400).json({ message: 'token required' });
+  }
+  try {
+    await pool.query(
+      `INSERT INTO fcm_tokens (user_id, token, platform, updated_at)
+       VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+       ON CONFLICT (user_id, token) DO UPDATE SET platform = $3, updated_at = CURRENT_TIMESTAMP`,
+      [req.user.id, token.trim(), platform || 'android']
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('FCM token save error:', err);
+    res.status(500).json({ message: 'Failed to save FCM token' });
+  }
+});
+
+app.delete('/api/push/fcm-token', authenticateToken, async (req: any, res) => {
+  const { token } = req.body;
+  if (!token) return res.status(400).json({ message: 'token required' });
+  try {
+    await pool.query('DELETE FROM fcm_tokens WHERE user_id = $1 AND token = $2', [
+      req.user.id,
+      token,
+    ]);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to remove FCM token' });
   }
 });
 

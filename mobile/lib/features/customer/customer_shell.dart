@@ -9,6 +9,7 @@ import '../../shared/format.dart';
 import '../../shared/theme.dart';
 import '../../shared/user_display.dart';
 import '../../shared/widgets/bytz_brand.dart';
+import '../../shared/widgets/sheet_theme_scope.dart';
 import '../../shared/widgets/ride_ui.dart';
 import 'customer_activity_tab.dart';
 import 'customer_home_screen.dart';
@@ -56,7 +57,8 @@ class _CustomerShellState extends State<CustomerShell> {
     final firstName = userFirstName(user);
     final bottomPad = MediaQuery.paddingOf(context).bottom;
 
-    return Scaffold(
+    return SheetThemeScope(
+      child: Scaffold(
       backgroundColor: _tab == CustomerTab.courier
           ? BytzGoTheme.background
           : BytzGoTheme.sheetBg,
@@ -119,6 +121,7 @@ class _CustomerShellState extends State<CustomerShell> {
           }).toList(),
         ),
       ),
+    ),
     );
   }
 

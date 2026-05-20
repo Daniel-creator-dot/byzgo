@@ -6,6 +6,7 @@ import 'core/api_client.dart';
 import 'core/config_repository.dart';
 import 'core/location_service.dart';
 import 'core/places_service.dart';
+import 'core/push_notification_service.dart';
 import 'core/session.dart';
 import 'core/socket_service.dart';
 import 'features/auth/auth_repository.dart';
@@ -44,6 +45,12 @@ class _BytzGoAppState extends State<BytzGoApp> {
   Future<void> _boot() async {
     final started = DateTime.now();
     await _session.restore();
+    if (_session.isAuthenticated) {
+      await PushNotificationService.instance.ensureRegistered(
+        api: _api,
+        session: _session,
+      );
+    }
     const minSplash = Duration(milliseconds: 1800);
     final elapsed = DateTime.now().difference(started);
     if (elapsed < minSplash) {

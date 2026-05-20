@@ -5,7 +5,9 @@ import 'package:geolocator/geolocator.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/api_client.dart';
 import '../../core/location_service.dart';
+import '../../core/push_notification_service.dart';
 import '../../core/session.dart';
 import '../../core/socket_service.dart';
 import '../../features/auth/auth_repository.dart';
@@ -326,6 +328,10 @@ class _RiderShellState extends State<RiderShell> {
       if (online) {
         _alertedOfferIds.clear();
         await _socket.connect(userId: _user.id);
+        await PushNotificationService.instance.ensureRegistered(
+          api: context.read<ApiClient>(),
+          session: context.read<Session>(),
+        );
         _startPolling();
         await _refreshAll();
         _snack('You\'re online — waiting for jobs', success: true);
@@ -446,13 +452,16 @@ class _RiderShellState extends State<RiderShell> {
   Future<void> _confirmLogout() async {
     final ok = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
+        builder: (ctx) => Theme(
+        data: BytzGoTheme.sheetTheme(),
+        child: AlertDialog(
         title: const Text('Sign out?'),
         content: const Text('You will need to sign in again.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Sign out')),
         ],
+      ),
       ),
     );
     if (ok != true) return;
@@ -998,7 +1007,10 @@ class _RiderShellState extends State<RiderShell> {
           Row(
             children: [
               Text('#${order.id.length > 4 ? order.id.substring(order.id.length - 4) : order.id}',
-                  style: const TextStyle(fontWeight: FontWeight.w900)),
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w900,
+                    color: BytzGoTheme.sheetText,
+                  )),
               if (order.isCourier) ...[
                 const SizedBox(width: 8),
                 _chip('Courier', const Color(0xFF38BDF8)),
@@ -1013,7 +1025,11 @@ class _RiderShellState extends State<RiderShell> {
               const Spacer(),
               Text(
                 formatCedis(order.total),
-                style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18),
+                style: const TextStyle(
+                  fontWeight: FontWeight.w900,
+                  fontSize: 18,
+                  color: BytzGoTheme.sheetText,
+                ),
               ),
             ],
           ),
@@ -1077,7 +1093,11 @@ class _RiderShellState extends State<RiderShell> {
             children: [
               Text(
                 '#${order.id.length > 4 ? order.id.substring(order.id.length - 4) : order.id}',
-                style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 17),
+                style: const TextStyle(
+                  fontWeight: FontWeight.w900,
+                  fontSize: 17,
+                  color: BytzGoTheme.sheetText,
+                ),
               ),
               const Spacer(),
               Text(
@@ -1128,6 +1148,10 @@ class _RiderShellState extends State<RiderShell> {
                   onPressed: nav == null ? null : () => _openNavigation(order),
                   icon: const Icon(Icons.map, size: 16),
                   label: const Text('Maps'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: BytzGoTheme.sheetText,
+                    side: const BorderSide(color: BytzGoTheme.sheetDivider),
+                  ),
                 ),
               ),
               const SizedBox(width: 8),

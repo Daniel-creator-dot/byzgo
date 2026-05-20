@@ -5,6 +5,7 @@ import '../../models/location_point.dart';
 import '../../models/vendor.dart';
 import '../../shared/rider_trip.dart';
 import '../../shared/theme.dart';
+import '../../shared/widgets/sheet_theme_scope.dart';
 import '../orders/orders_repository.dart';
 
 /// Pick a shop/vendor as pickup location.
@@ -19,7 +20,9 @@ Future<LocationPoint?> showCustomerShopsSheet(
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
     ),
-    builder: (ctx) => _CustomerShopsSheet(region: region),
+    builder: (ctx) => SheetThemeScope(
+          child: _CustomerShopsSheet(region: region),
+        ),
   );
 }
 
