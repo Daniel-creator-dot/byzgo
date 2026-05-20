@@ -121,7 +121,9 @@ function isRiderDocType(value: string): value is RiderDocType {
 }
 
 const USER_PUBLIC_FIELDS =
-  'id, name, email, role, balance, phone, cover_image, address, lat, lng, region, status, is_online';
+  'id, name, email, role, balance, phone, cover_image, address, lat, lng, region, status, is_online, shop_category';
+
+const SHOP_CATEGORIES = ['pharmacy', 'food', 'fashion', 'groceries'] as const;
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -156,6 +158,68 @@ async function getSetting(key: string) {
   }
 }
 
+async function setSetting(key: string, value: string) {
+  await pool.query(
+    `INSERT INTO system_settings (key, value) VALUES ($1, $2)
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+    [key, String(value)]
+  );
+}
+
+/** Ghana (GMT) — no DST */
+function ghanaMinutesNow(): number {
+  const now = new Date();
+  return now.getUTCHours() * 60 + now.getUTCMinutes();
+}
+
+function parseTimeToMinutes(t: string): number | null {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(t).trim());
+  if (!m) return null;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  if (h < 0 || h > 23 || min < 0 || min > 59) return null;
+  return h * 60 + min;
+}
+
+function isMinutesInWindow(now: number, start: number, end: number): boolean {
+  if (start === end) return false;
+  if (start < end) return now >= start && now < end;
+  return now >= start || now < end;
+}
+
+async function getSurgePricingState() {
+  const enabled = (await getSetting('surge_enabled')) === 'true';
+  const multiplier = Math.max(
+    1,
+    parseFloat((await getSetting('surge_multiplier')) || '1.25') || 1.25
+  );
+  const startStr = (await getSetting('surge_start_time')) || '17:00';
+  const endStr = (await getSetting('surge_end_time')) || '21:00';
+  const start = parseTimeToMinutes(startStr) ?? 17 * 60;
+  const end = parseTimeToMinutes(endStr) ?? 21 * 60;
+  const now = ghanaMinutesNow();
+  const surge_active = enabled && isMinutesInWindow(now, start, end);
+  return {
+    enabled,
+    multiplier,
+    start_time: startStr,
+    end_time: endStr,
+    surge_active,
+    ghana_time: `${String(Math.floor(now / 60)).padStart(2, '0')}:${String(now % 60).padStart(2, '0')}`,
+  };
+}
+
+async function applySurgeToFee(baseFee: number) {
+  const surge = await getSurgePricingState();
+  if (!surge.surge_active) {
+    return { fee: Math.round(baseFee * 100) / 100, surge };
+  }
+  return {
+    fee: Math.round(baseFee * surge.multiplier * 100) / 100,
+    surge,
+  };
+}
+
 function haversineDistanceKm(
   lat1: number,
   lon1: number,
@@ -183,7 +247,15 @@ async function calculateDeliveryFeeFromCoords(
   destLng: number,
   pickupRegion?: string | null,
   destinationRegion?: string | null
-): Promise<{ distance_km: number; delivery_fee: number; price_per_km: number; zone: string | null }> {
+): Promise<{
+  distance_km: number;
+  delivery_fee: number;
+  price_per_km: number;
+  zone: string | null;
+  base_delivery_fee: number;
+  surge_active: boolean;
+  surge_multiplier: number;
+}> {
   const distance_km = haversineDistanceKm(pickupLat, pickupLng, destLat, destLng);
   const globalRate = Math.max(0.01, parseFloat((await getSetting('delivery_price_per_km')) || '4') || 4);
 
@@ -204,19 +276,39 @@ async function calculateDeliveryFeeFromCoords(
   }
 
   if (!zone) {
-    const price = Math.round(distance_km * globalRate * 100) / 100;
-    return { distance_km, delivery_fee: price, price_per_km: globalRate, zone: null };
+    const base = Math.round(distance_km * globalRate * 100) / 100;
+    const { fee, surge } = await applySurgeToFee(base);
+    const effectiveRate = surge.surge_active
+      ? Math.round(globalRate * surge.multiplier * 100) / 100
+      : globalRate;
+    return {
+      distance_km,
+      delivery_fee: fee,
+      price_per_km: effectiveRate,
+      zone: null,
+      base_delivery_fee: base,
+      surge_active: surge.surge_active,
+      surge_multiplier: surge.multiplier,
+    };
   }
 
   const rate = Number(zone.price_per_km) > 0 ? Number(zone.price_per_km) : globalRate;
-  let price = distance_km * rate;
-  price = Math.max(price, Number(zone.min_price));
-  if (zone.max_price) price = Math.min(price, Number(zone.max_price));
+  let base = distance_km * rate;
+  base = Math.max(base, Number(zone.min_price));
+  if (zone.max_price) base = Math.min(base, Number(zone.max_price));
+  base = Math.round(base * 100) / 100;
+  const { fee, surge } = await applySurgeToFee(base);
+  const effectiveRate = surge.surge_active
+    ? Math.round(rate * surge.multiplier * 100) / 100
+    : rate;
   return {
     distance_km,
-    delivery_fee: Math.round(price * 100) / 100,
-    price_per_km: rate,
+    delivery_fee: fee,
+    price_per_km: effectiveRate,
     zone: zone.name,
+    base_delivery_fee: base,
+    surge_active: surge.surge_active,
+    surge_multiplier: surge.multiplier,
   };
 }
 
@@ -375,6 +467,7 @@ const initDb = async () => {
         ALTER TABLE users ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active';
         ALTER TABLE users ADD COLUMN IF NOT EXISTS region TEXT;
         ALTER TABLE users ADD COLUMN IF NOT EXISTS is_online BOOLEAN DEFAULT false;
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS shop_category TEXT DEFAULT 'food';
         ALTER TABLE users ALTER COLUMN password DROP NOT NULL;
       EXCEPTION WHEN others THEN NULL;
       END $$;
@@ -581,6 +674,14 @@ const initDb = async () => {
 
     await pool.query(`
       INSERT INTO system_settings (key, value) VALUES ('delivery_price_per_km', '4')
+      ON CONFLICT (key) DO NOTHING;
+      INSERT INTO system_settings (key, value) VALUES ('surge_enabled', 'false')
+      ON CONFLICT (key) DO NOTHING;
+      INSERT INTO system_settings (key, value) VALUES ('surge_multiplier', '1.5')
+      ON CONFLICT (key) DO NOTHING;
+      INSERT INTO system_settings (key, value) VALUES ('surge_start_time', '17:00')
+      ON CONFLICT (key) DO NOTHING;
+      INSERT INTO system_settings (key, value) VALUES ('surge_end_time', '21:00')
       ON CONFLICT (key) DO NOTHING;
     `);
     // Fix existing courier orders that were mislabeled as food
@@ -1905,7 +2006,17 @@ app.post('/api/auth/supabase', async (req, res) => {
 
 // Profile Update
 app.patch('/api/auth/profile', authenticateToken, async (req: any, res) => {
-  const { email, phone, cover_image, address, lat, lng, region } = req.body;
+  const { email, phone, cover_image, address, lat, lng, region, shop_category } = req.body;
+  let normalizedCategory: string | null = null;
+  if (shop_category != null && String(shop_category).trim()) {
+    const c = String(shop_category).trim().toLowerCase();
+    if (!(SHOP_CATEGORIES as readonly string[]).includes(c)) {
+      return res.status(400).json({
+        message: `shop_category must be one of: ${SHOP_CATEGORIES.join(', ')}`,
+      });
+    }
+    normalizedCategory = c;
+  }
   try {
     const result = await pool.query(
       `UPDATE users SET 
@@ -1915,10 +2026,21 @@ app.patch('/api/auth/profile', authenticateToken, async (req: any, res) => {
         address = COALESCE($4, address),
         lat = COALESCE($5, lat),
         lng = COALESCE($6, lng),
-        region = COALESCE($7, region)
-       WHERE id = $8 
+        region = COALESCE($7, region),
+        shop_category = COALESCE($8, shop_category)
+       WHERE id = $9 
        RETURNING ${USER_PUBLIC_FIELDS}`,
-      [email, phone, cover_image, address, lat, lng, region, req.user.id]
+      [
+        email,
+        phone,
+        cover_image,
+        address,
+        lat,
+        lng,
+        region,
+        normalizedCategory,
+        req.user.id,
+      ]
     );
     const user = result.rows[0];
     const token = jwt.sign({ id: user.id, name: user.name, email: user.email, role: user.role, balance: user.balance, status: user.status, is_online: user.is_online, region: user.region }, process.env.JWT_SECRET as string);
@@ -2206,9 +2328,25 @@ app.get('/api/config/pricing', async (_req, res) => {
   try {
     const raw = await getSetting('delivery_price_per_km');
     const pricePerKm = Math.max(0.01, parseFloat(raw || '4') || 4);
-    res.json({ price_per_km: pricePerKm });
+    const surge = await getSurgePricingState();
+    res.json({
+      price_per_km: pricePerKm,
+      surge_enabled: surge.enabled,
+      surge_multiplier: surge.multiplier,
+      surge_start_time: surge.start_time,
+      surge_end_time: surge.end_time,
+      surge_active: surge.surge_active,
+      ghana_time: surge.ghana_time,
+    });
   } catch (err) {
-    res.json({ price_per_km: 4 });
+    res.json({
+      price_per_km: 4,
+      surge_enabled: false,
+      surge_multiplier: 1.5,
+      surge_start_time: '17:00',
+      surge_end_time: '21:00',
+      surge_active: false,
+    });
   }
 });
 
@@ -2506,12 +2644,18 @@ app.post('/api/wallet/withdraw', authenticateToken, async (req: any, res) => {
 app.get('/api/vendors', async (req, res) => {
   const { region } = req.query;
   try {
-    let query = 'SELECT id, name, email, phone, cover_image, address, lat, lng, region FROM users WHERE role = $1 AND status = \'active\'';
+    let query =
+      'SELECT id, name, email, phone, cover_image, address, lat, lng, region, shop_category FROM users WHERE role = $1 AND status = \'active\'';
     const params: any[] = ['vendor'];
+    const { category } = req.query;
     
     if (region) {
       query += ' AND (region = $2 OR region IS NULL)';
       params.push(region);
+    }
+    if (category && typeof category === 'string') {
+      query += ` AND LOWER(COALESCE(shop_category, 'food')) = LOWER($${params.length + 1})`;
+      params.push(category.trim());
     }
     
     const result = await pool.query(query, params);
@@ -2595,6 +2739,42 @@ app.patch('/api/products/:id', authenticateToken, async (req: any, res) => {
       res.status(404).json({ message: 'Product not found or unauthorized' });
     }
   } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.get('/api/vendor/dashboard', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'vendor') return res.status(403).json({ message: 'Vendors only' });
+  try {
+    const vendorId = req.user.id;
+    const [statsRes, productsRes, recentRes] = await Promise.all([
+      pool.query(
+        `SELECT
+          (SELECT COUNT(*)::int FROM orders WHERE vendor_id = $1 AND status NOT IN ('delivered', 'cancelled')) AS active_orders,
+          (SELECT COUNT(*)::int FROM products WHERE vendor_id = $1 AND is_available = true AND is_approved = true) AS in_stock,
+          (SELECT COUNT(*)::int FROM products WHERE vendor_id = $1 AND is_available = false) AS out_of_stock,
+          (SELECT COUNT(*)::int FROM products WHERE vendor_id = $1 AND is_approved = false) AS pending_approval,
+          (SELECT COALESCE(SUM(total), 0)::float FROM orders WHERE vendor_id = $1 AND status = 'delivered' AND created_at > NOW() - INTERVAL '7 days') AS revenue_7d`,
+        [vendorId]
+      ),
+      pool.query(
+        `SELECT id, name, price, category, is_available, is_approved, image_url
+         FROM products WHERE vendor_id = $1 ORDER BY is_available DESC, name ASC LIMIT 80`,
+        [vendorId]
+      ),
+      pool.query(
+        `SELECT id, status, total, items, created_at, customer_id
+         FROM orders WHERE vendor_id = $1 ORDER BY created_at DESC LIMIT 12`,
+        [vendorId]
+      ),
+    ]);
+    res.json({
+      stats: statsRes.rows[0],
+      products: productsRes.rows,
+      recentOrders: recentRes.rows,
+    });
+  } catch (err) {
+    console.error('Vendor dashboard error:', err);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -3382,49 +3562,119 @@ app.post('/api/orders/:id/rate', authenticateToken, async (req: any, res) => {
 
 const CUSTOMER_CANCELLABLE_STATUSES = ['pending', 'ready', 'preparing'];
 
+function orderRefundAmount(order: { total: unknown; payment_status?: string }): number {
+  return parseFloat(String(order.total ?? 0));
+}
+
+async function customerPrepaidForOrder(
+  client: { query: typeof pool.query },
+  customerId: string,
+  orderId: string
+): Promise<number> {
+  const tail = orderId.slice(-6);
+  const short = orderId.slice(0, 8);
+  const r = await client.query(
+    `SELECT COALESCE(SUM(amount), 0)::float AS paid
+     FROM wallet_transactions
+     WHERE user_id = $1 AND type = 'payment'
+       AND (reference ILIKE $2 OR reference ILIKE $3 OR reference ILIKE $4)`,
+    [customerId, `%${orderId}%`, `%${tail}%`, `%${short}%`]
+  );
+  return parseFloat(r.rows[0]?.paid ?? 0);
+}
+
 app.post('/api/orders/:id/cancel', authenticateToken, async (req: any, res) => {
   const orderId = req.params.id;
+  const client = await pool.connect();
   try {
-    const orderRes = await pool.query('SELECT * FROM orders WHERE id = $1', [orderId]);
-    if (orderRes.rowCount === 0) return res.status(404).json({ message: 'Order not found' });
+    const orderRes = await client.query('SELECT * FROM orders WHERE id = $1', [orderId]);
+    if (orderRes.rowCount === 0) {
+      client.release();
+      return res.status(404).json({ message: 'Order not found' });
+    }
 
     const order = orderRes.rows[0];
     if (order.customer_id !== req.user.id) {
+      client.release();
       return res.status(403).json({ message: 'Unauthorized' });
     }
     if (!CUSTOMER_CANCELLABLE_STATUSES.includes(order.status)) {
+      client.release();
       return res.status(400).json({
         message: 'This trip can no longer be cancelled (package already picked up or delivered).',
       });
     }
 
     const prevRiderId = order.rider_id;
-    const updated = await pool.query(
+    const refundAmount = orderRefundAmount(order);
+    let refundCredited = false;
+    let walletBalance: number | undefined;
+
+    await client.query('BEGIN');
+
+    const updated = await client.query(
       `UPDATE orders SET status = 'cancelled', rider_id = NULL, updated_at = CURRENT_TIMESTAMP
        WHERE id = $1 RETURNING *`,
       [orderId]
     );
     const cancelled = updated.rows[0];
 
-    if (cancelled.payment_status === 'paid') {
-      const bRes = await pool.query(
-        'UPDATE users SET balance = balance + $1 WHERE id = $2 RETURNING balance',
-        [cancelled.total, req.user.id]
+    const shouldRefund =
+      cancelled.payment_status === 'paid' ||
+      (await customerPrepaidForOrder(client, req.user.id, orderId)) > 0.01;
+
+    if (shouldRefund && refundAmount > 0) {
+      const existingRefund = await client.query(
+        `SELECT id FROM wallet_transactions
+         WHERE user_id = $1 AND type = 'topup' AND reference = $2 LIMIT 1`,
+        [req.user.id, `Refund for cancelled order #${orderId.slice(-6)}`]
       );
-      await pool.query(
-        'INSERT INTO wallet_transactions (user_id, amount, type, reference) VALUES ($1, $2, $3, $4)',
-        [req.user.id, cancelled.total, 'topup', `Refund for cancelled order #${orderId.slice(-6)}`]
-      );
-      io.to(req.user.id).emit('wallet:updated', { balance: parseFloat(bRes.rows[0].balance) });
+      if (existingRefund.rowCount === 0) {
+        const bRes = await client.query(
+          'UPDATE users SET balance = balance + $1 WHERE id = $2 RETURNING balance',
+          [refundAmount, req.user.id]
+        );
+        await client.query(
+          'INSERT INTO wallet_transactions (user_id, amount, type, reference) VALUES ($1, $2, $3, $4)',
+          [
+            req.user.id,
+            refundAmount,
+            'topup',
+            `Refund for cancelled order #${orderId.slice(-6)}`,
+          ]
+        );
+        walletBalance = parseFloat(bRes.rows[0].balance);
+        refundCredited = true;
+      }
+    }
+
+    await client.query('COMMIT');
+    client.release();
+
+    if (refundCredited && walletBalance != null) {
+      io.to(req.user.id).emit('wallet:updated', { balance: walletBalance });
     }
 
     if (prevRiderId) {
       await notifyRideTaken(orderId, prevRiderId);
     }
 
-    res.json(sanitizeOrderForRole(cancelled, req.user.role, req.user.id));
+    const payload = sanitizeOrderForRole(cancelled, req.user.role, req.user.id);
+    res.json({
+      ...payload,
+      refundCredited,
+      refundAmount: refundCredited ? refundAmount : 0,
+      walletBalance,
+      refundMessage: refundCredited
+        ? `${refundAmount.toFixed(2)} GHS added to your BytzGo wallet`
+        : cancelled.payment_status === 'cash_on_delivery'
+          ? 'No payment was taken — nothing to refund'
+          : 'Order cancelled (no prepaid amount to refund)',
+    });
     broadcastOrderUpdated(cancelled);
   } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    client.release();
     console.error('Cancel order error:', err);
     res.status(500).json({ message: 'Server error' });
   }
@@ -3551,12 +3801,19 @@ app.get('/api/admin/settings', authenticateToken, async (req: any, res) => {
     const smsBase = await getSetting('sms_base_url');
     const smsSender = await getSetting('sms_sender_id');
     const effectiveSmsKey = process.env.SMS_API_KEY?.trim() || smsKey || '';
+    const surge = await getSurgePricingState();
     res.json({
       paystack_public_key: pub || process.env.PAYSTACK_PUBLIC_KEY || '',
       paystack_secret_key: maskSecret(sec || process.env.PAYSTACK_SECRET_KEY || ''),
       paystack_secret_configured: !!(sec || process.env.PAYSTACK_SECRET_KEY),
       platform_fee_percent: fee || '10',
       delivery_price_per_km: pricePerKm || '4',
+      surge_enabled: surge.enabled ? 'true' : 'false',
+      surge_multiplier: String(surge.multiplier),
+      surge_start_time: surge.start_time,
+      surge_end_time: surge.end_time,
+      surge_active_now: surge.surge_active,
+      ghana_time: surge.ghana_time,
       sms_base_url: smsBase || process.env.SMS_BASE_URL || 'https://www.inteksms.top/api/v1',
       sms_api_key: maskSecret(effectiveSmsKey),
       sms_api_key_configured: effectiveSmsKey.length > 8,
@@ -3575,6 +3832,10 @@ app.patch('/api/admin/settings', authenticateToken, async (req: any, res) => {
     paystack_secret_key,
     platform_fee_percent,
     delivery_price_per_km,
+    surge_enabled,
+    surge_multiplier,
+    surge_start_time,
+    surge_end_time,
     sms_base_url,
     sms_api_key,
     sms_sender_id,
@@ -3603,11 +3864,33 @@ app.patch('/api/admin/settings', authenticateToken, async (req: any, res) => {
     }
     if (delivery_price_per_km != null) {
       const rate = Math.max(0.01, parseFloat(String(delivery_price_per_km)) || 4);
-      await pool.query(
-        `INSERT INTO system_settings (key, value) VALUES ('delivery_price_per_km', $1)
-         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
-        [String(rate)]
-      );
+      await setSetting('delivery_price_per_km', String(rate));
+    }
+    if (surge_enabled != null) {
+      const on =
+        surge_enabled === true ||
+        surge_enabled === 'true' ||
+        surge_enabled === 1 ||
+        surge_enabled === '1';
+      await setSetting('surge_enabled', on ? 'true' : 'false');
+    }
+    if (surge_multiplier != null) {
+      const mult = Math.max(1, parseFloat(String(surge_multiplier)) || 1.25);
+      await setSetting('surge_multiplier', String(mult));
+    }
+    if (surge_start_time != null && String(surge_start_time).trim()) {
+      const mins = parseTimeToMinutes(String(surge_start_time));
+      if (mins == null) {
+        return res.status(400).json({ message: 'surge_start_time must be HH:MM (e.g. 17:00)' });
+      }
+      await setSetting('surge_start_time', String(surge_start_time).trim());
+    }
+    if (surge_end_time != null && String(surge_end_time).trim()) {
+      const mins = parseTimeToMinutes(String(surge_end_time));
+      if (mins == null) {
+        return res.status(400).json({ message: 'surge_end_time must be HH:MM (e.g. 21:00)' });
+      }
+      await setSetting('surge_end_time', String(surge_end_time).trim());
     }
     if (sms_base_url != null && String(sms_base_url).trim()) {
       await pool.query(

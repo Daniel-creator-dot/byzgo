@@ -4,7 +4,7 @@
   "description": "Delivery and courier platform",
   "start_url": "/motor",
   "display": "standalone",
-  "background_color": "#0f172a",
+  "background_color": "#000000",
   "theme_color": "#22c55e",
   "orientation": "portrait",
   "icons": [

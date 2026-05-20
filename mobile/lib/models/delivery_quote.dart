@@ -4,12 +4,18 @@ class DeliveryQuote {
     required this.deliveryFee,
     required this.pricePerKm,
     this.zone,
+    this.baseDeliveryFee,
+    this.surgeActive = false,
+    this.surgeMultiplier,
   });
 
   final double distanceKm;
   final double deliveryFee;
   final double pricePerKm;
   final String? zone;
+  final double? baseDeliveryFee;
+  final bool surgeActive;
+  final double? surgeMultiplier;
 
   factory DeliveryQuote.fromJson(Map<String, dynamic> json) {
     return DeliveryQuote(
@@ -19,6 +25,9 @@ class DeliveryQuote {
           0,
       pricePerKm: (json['price_per_km'] as num?)?.toDouble() ?? 4,
       zone: json['zone']?.toString(),
+      baseDeliveryFee: (json['base_delivery_fee'] as num?)?.toDouble(),
+      surgeActive: json['surge_active'] == true,
+      surgeMultiplier: (json['surge_multiplier'] as num?)?.toDouble(),
     );
   }
 }

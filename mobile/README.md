@@ -112,7 +112,7 @@ flutter run ^
 
 ## App icon
 
-Branding lives in [`assets/branding/`](assets/branding/). Icons are generated with a **squircle** mask and Android **adaptive** foreground layers.
+Branding lives in [`assets/branding/`](assets/branding/). Replace `app_icon_source.png` with the official **BytzGO** wordmark (black background), then regenerate launcher icons and `app_logo.png` for in-app UI.
 
 Regenerate after replacing `app_icon_source.png`:
 
@@ -121,7 +121,7 @@ npm run icons
 # or: python mobile/scripts/generate_app_icon.py
 ```
 
-Updates Android mipmaps, Flutter web PWA icons, and `public/rider-icon.png` for the web app map marker.
+Updates Android mipmaps (black launcher background), Flutter web PWA icons, `app_logo.png`, and `public/icon-*.png` + `public/app-logo.png` for the web app.
 
 ## Analyze & test
 

@@ -64,6 +64,7 @@ class RideSheet extends StatelessWidget {
     this.footerPadding = const EdgeInsets.fromLTRB(20, 0, 20, 12),
     this.maxHeightFraction = 0.62,
     this.bottomInset = 0,
+    this.minSheetHeight = 220,
   });
 
   final Widget child;
@@ -75,6 +76,7 @@ class RideSheet extends StatelessWidget {
   final double maxHeightFraction;
   /// Subtract from max height (e.g. tab bar overlap).
   final double bottomInset;
+  final double minSheetHeight;
 
   @override
   Widget build(BuildContext context) {
@@ -89,7 +91,7 @@ class RideSheet extends StatelessWidget {
             ? parentH - bottomInset
             : capFromScreen;
         final maxH = (capFromParent < capFromScreen ? capFromParent : capFromScreen)
-            .clamp(220.0, screenH);
+            .clamp(minSheetHeight, screenH);
 
         return Container(
           width: double.infinity,
@@ -104,9 +106,14 @@ class RideSheet extends StatelessWidget {
             ),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withValues(alpha: 0.18),
-                blurRadius: 28,
-                offset: const Offset(0, -8),
+                color: Colors.black.withValues(alpha: 0.22),
+                blurRadius: 32,
+                offset: const Offset(0, -10),
+              ),
+              BoxShadow(
+                color: BytzGoTheme.brandBlue.withValues(alpha: 0.06),
+                blurRadius: 24,
+                offset: const Offset(0, -4),
               ),
             ],
           ),

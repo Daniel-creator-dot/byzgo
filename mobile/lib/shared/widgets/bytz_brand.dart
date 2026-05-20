@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../theme.dart';
 
-/// Wordmark: **Bytz** (blue) + **GO** (lime).
+/// Official BytzGO wordmark (`assets/branding/app_logo.png`).
 class BytzGoLogo extends StatelessWidget {
   const BytzGoLogo({
     super.key,
@@ -17,25 +17,11 @@ class BytzGoLogo extends StatelessWidget {
   Widget build(BuildContext context) {
     return Align(
       alignment: alignment,
-      child: RichText(
-        text: TextSpan(
-          style: TextStyle(
-            fontSize: fontSize,
-            fontWeight: FontWeight.w900,
-            letterSpacing: -1.2,
-            height: 1,
-          ),
-          children: const [
-            TextSpan(
-              text: 'Bytz',
-              style: TextStyle(color: BytzGoTheme.brandBlue),
-            ),
-            TextSpan(
-              text: 'GO',
-              style: TextStyle(color: BytzGoTheme.accent),
-            ),
-          ],
-        ),
+      child: Image.asset(
+        'assets/branding/app_logo.png',
+        height: fontSize * 1.35,
+        fit: BoxFit.contain,
+        filterQuality: FilterQuality.high,
       ),
     );
   }

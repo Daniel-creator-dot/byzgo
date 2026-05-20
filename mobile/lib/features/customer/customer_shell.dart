@@ -199,28 +199,55 @@ class _CustomerHeader extends StatelessWidget {
     final top = MediaQuery.paddingOf(context).top;
     final onMap = tab == CustomerTab.courier;
 
+    if (onMap) {
+      return Container(
+        padding: EdgeInsets.fromLTRB(12, top + 6, 12, 8),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              BytzGoTheme.sheetBg.withValues(alpha: 0.94),
+              BytzGoTheme.sheetBg.withValues(alpha: 0.72),
+              Colors.transparent,
+            ],
+          ),
+        ),
+        child: Row(
+          children: [
+            const BytzGoLogo(fontSize: 16),
+            const Spacer(),
+            _walletChip(),
+            const SizedBox(width: 6),
+            GestureDetector(
+              onTap: onProfile,
+              child: CircleAvatar(
+                radius: 18,
+                backgroundColor: BytzGoTheme.brandBlue.withValues(alpha: 0.15),
+                child: Text(
+                  userInitials(user),
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w900,
+                    color: BytzGoTheme.brandBlue,
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 4),
+            _HeaderIcon(icon: Icons.logout, onTap: onLogout, danger: true),
+          ],
+        ),
+      );
+    }
+
     return Container(
       padding: EdgeInsets.fromLTRB(16, top + 8, 16, 12),
       decoration: BoxDecoration(
-        color: onMap
-            ? BytzGoTheme.sheetBg.withValues(alpha: 0.95)
-            : BytzGoTheme.sheetBg,
+        color: BytzGoTheme.sheetBg,
         border: Border(
-          bottom: BorderSide(
-            color: onMap
-                ? BytzGoTheme.sheetDivider.withValues(alpha: 0.5)
-                : BytzGoTheme.sheetDivider,
-          ),
+          bottom: BorderSide(color: BytzGoTheme.sheetDivider),
         ),
-        boxShadow: onMap
-            ? [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.08),
-                  blurRadius: 8,
-                  offset: const Offset(0, 2),
-                ),
-              ]
-            : null,
       ),
       child: Row(
         children: [
@@ -265,39 +292,7 @@ class _CustomerHeader extends StatelessWidget {
             },
           ),
           const SizedBox(width: 6),
-          Material(
-            color: BytzGoTheme.sheetDivider.withValues(alpha: 0.5),
-            borderRadius: BorderRadius.circular(14),
-            child: InkWell(
-              onTap: onWallet,
-              borderRadius: BorderRadius.circular(14),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Text(
-                      'WALLET',
-                      style: TextStyle(
-                        fontSize: 8,
-                        fontWeight: FontWeight.w900,
-                        letterSpacing: 1,
-                        color: BytzGoTheme.sheetMuted.withValues(alpha: 0.9),
-                      ),
-                    ),
-                    Text(
-                      formatCedisCompact(user.balance),
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w900,
-                        fontSize: 14,
-                        color: BytzGoTheme.accentDark,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
+          _walletChip(),
           const SizedBox(width: 6),
           GestureDetector(
             onTap: onProfile,
@@ -317,6 +312,39 @@ class _CustomerHeader extends StatelessWidget {
           const SizedBox(width: 4),
           _HeaderIcon(icon: Icons.logout, onTap: onLogout, danger: true),
         ],
+      ),
+    );
+  }
+
+  Widget _walletChip() {
+    return Material(
+      color: BytzGoTheme.accent.withValues(alpha: 0.2),
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        onTap: onWallet,
+        borderRadius: BorderRadius.circular(14),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.account_balance_wallet_outlined,
+                size: 16,
+                color: BytzGoTheme.accentDark,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                formatCedisCompact(user.balance),
+                style: const TextStyle(
+                  fontWeight: FontWeight.w900,
+                  fontSize: 13,
+                  color: BytzGoTheme.accentDark,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -388,9 +416,12 @@ class _NavItem extends StatelessWidget {
         padding: const EdgeInsets.symmetric(vertical: 8),
         decoration: BoxDecoration(
           color: selected
-              ? BytzGoTheme.brandBlue.withValues(alpha: 0.1)
+              ? BytzGoTheme.accent.withValues(alpha: 0.22)
               : Colors.transparent,
           borderRadius: BorderRadius.circular(14),
+          border: selected
+              ? Border.all(color: BytzGoTheme.accent.withValues(alpha: 0.45))
+              : null,
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -402,7 +433,7 @@ class _NavItem extends StatelessWidget {
               child: Icon(
                 _icon,
                 size: 22,
-                color: selected ? BytzGoTheme.brandBlue : BytzGoTheme.sheetMuted,
+                color: selected ? BytzGoTheme.accentDark : BytzGoTheme.sheetMuted,
               ),
             ),
             const SizedBox(height: 4),
@@ -412,7 +443,7 @@ class _NavItem extends StatelessWidget {
                 fontSize: 10,
                 fontWeight: FontWeight.w800,
                 letterSpacing: 0.3,
-                color: selected ? BytzGoTheme.brandBlue : BytzGoTheme.sheetMuted,
+                color: selected ? BytzGoTheme.accentDark : BytzGoTheme.sheetMuted,
               ),
             ),
           ],

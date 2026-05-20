@@ -45,14 +45,14 @@ class OrdersRepository {
 
 
 
-  Future<List<Vendor>> fetchVendors({String? region}) async {
+  Future<List<Vendor>> fetchVendors({String? region, String? category}) async {
+    final query = <String, String>{};
+    if (region != null && region.isNotEmpty) query['region'] = region;
+    if (category != null && category.isNotEmpty) query['category'] = category;
 
     final res = await _api.dio.get<dynamic>(
-
       '/api/vendors',
-
-      queryParameters: region != null ? {'region': region} : null,
-
+      queryParameters: query.isEmpty ? null : query,
     );
 
     final data = res.data;
@@ -337,13 +337,13 @@ class OrdersRepository {
 
   }
 
-  Future<Order> cancelOrder(String orderId) async {
+  Future<CancelOrderResult> cancelOrder(String orderId) async {
     final res = await _api.dio.post<Map<String, dynamic>>(
       '/api/orders/$orderId/cancel',
     );
     final data = res.data;
     if (data == null) throw Exception('Empty cancel response');
-    return Order.fromJson(Map<String, dynamic>.from(data));
+    return CancelOrderResult.fromJson(Map<String, dynamic>.from(data));
   }
 
   Future<Order> payAtDeliveryWallet(String orderId) async {
@@ -418,6 +418,32 @@ class OrdersRepository {
 
   }
 
+}
+
+class CancelOrderResult {
+  const CancelOrderResult({
+    required this.order,
+    required this.refundCredited,
+    required this.refundAmount,
+    this.walletBalance,
+    this.refundMessage,
+  });
+
+  final Order order;
+  final bool refundCredited;
+  final double refundAmount;
+  final double? walletBalance;
+  final String? refundMessage;
+
+  factory CancelOrderResult.fromJson(Map<String, dynamic> json) {
+    return CancelOrderResult(
+      order: Order.fromJson(json),
+      refundCredited: json['refundCredited'] == true,
+      refundAmount: (json['refundAmount'] as num?)?.toDouble() ?? 0,
+      walletBalance: (json['walletBalance'] as num?)?.toDouble(),
+      refundMessage: json['refundMessage']?.toString(),
+    );
+  }
 }
 
 

@@ -16,16 +16,18 @@ import '../../models/location_point.dart';
 import '../../models/order.dart';
 import '../../shared/format.dart';
 import '../../shared/delivery_pricing.dart';
+import '../../shared/user_display.dart';
 import '../../shared/ghana_location.dart';
 import '../../shared/rider_trip.dart';
 import '../../shared/customer_trip.dart';
 import '../../shared/theme.dart';
-import '../../shared/widgets/bytz_brand.dart';
+import '../../shared/widgets/live_trip_map_overlay.dart';
 import '../../shared/widgets/ride_google_map.dart';
 import '../../shared/widgets/ride_ui.dart';
 import '../orders/orders_repository.dart';
 import '../riders/riders_repository.dart';
 import '../../shared/widgets/location_autocomplete_field.dart';
+import 'customer_delivery_ui.dart';
 import 'customer_trip_tracking.dart';
 
 /// Customer home — map + book bike delivery + track active trips.
@@ -68,6 +70,11 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
   bool _resolvingDropoff = false;
   String? _error;
   double _pricePerKm = defaultDeliveryPricePerKm;
+  double? _quotedFee;
+  double? _quoteDistanceKm;
+  bool _surgeActive = false;
+  bool _quoteLoading = false;
+  Timer? _quoteDebounce;
   LocationPoint? _riderPosition;
   List<LocationPoint> _nearbyRiders = [];
   List<LocationPoint> _routePoints = [];
@@ -80,6 +87,7 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
   LocationPoint? _lastEtaOrigin;
   SocketService? _socket;
   OrderMessageHandler? _chatNotifyHandler;
+  final _mapKey = GlobalKey<RideGoogleMapState>();
 
   OrdersRepository get _ordersRepo => context.read<OrdersRepository>();
   RidersRepository get _ridersRepo => context.read<RidersRepository>();
@@ -95,10 +103,25 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
   }
 
   double get _deliveryFee {
+    if (_quotedFee != null) return _quotedFee!;
     if (_pickup == null || _destination == null) return 0;
     if (!_pickup!.hasCoords || !_destination!.hasCoords) return 0;
     return courierFeeBetween(_pickup!, _destination!, _pricePerKm);
   }
+
+  double get _routeDistanceKm {
+    if (_quoteDistanceKm != null && _quoteDistanceKm! > 0) return _quoteDistanceKm!;
+    if (_pickup == null || _destination == null) return 0;
+    if (!_pickup!.hasCoords || !_destination!.hasCoords) return 0;
+    return haversineDistanceKm(
+      _pickup!.lat,
+      _pickup!.lng,
+      _destination!.lat,
+      _destination!.lng,
+    );
+  }
+
+  String get _packageType => _itemCtrl.text.trim().isEmpty ? 'Package' : _itemCtrl.text.trim();
 
   Order? get _activeCourier {
     final userId = _session.user?.id;
@@ -200,8 +223,49 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
     } catch (_) {}
   }
 
+  void _scheduleDeliveryQuote() {
+    _quoteDebounce?.cancel();
+    _quoteDebounce = Timer(const Duration(milliseconds: 450), _refreshDeliveryQuote);
+  }
+
+  Future<void> _refreshDeliveryQuote() async {
+    if (_pickup == null || _destination == null) return;
+    if (!_pickup!.hasCoords || !_destination!.hasCoords) {
+      if (!mounted) return;
+      setState(() {
+        _quotedFee = null;
+        _quoteDistanceKm = null;
+        _surgeActive = false;
+        _quoteLoading = false;
+      });
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _quoteLoading = true);
+    try {
+      final q = await _ordersRepo.calculateRouteDelivery(
+        pickupLat: _pickup!.lat,
+        pickupLng: _pickup!.lng,
+        destLat: _destination!.lat,
+        destLng: _destination!.lng,
+      );
+      if (!mounted) return;
+      setState(() {
+        _quotedFee = q.deliveryFee;
+        _quoteDistanceKm = q.distanceKm;
+        _pricePerKm = q.pricePerKm;
+        _surgeActive = q.surgeActive;
+        _quoteLoading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _quoteLoading = false);
+    }
+  }
+
   @override
   void dispose() {
+    _quoteDebounce?.cancel();
     _nearbyPoll?.cancel();
     _etaPoll?.cancel();
     if (_chatNotifyHandler != null) {
@@ -291,6 +355,7 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
           lng: lng,
         );
       });
+      _mapKey.currentState?.fitAllMarkers();
       if (active != null) unawaited(_refreshEta(active));
     };
   }
@@ -531,6 +596,7 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
         _resolvingDropoff = false;
       }
     });
+    _scheduleDeliveryQuote();
   }
 
   Future<void> _loadOrders() async {
@@ -576,6 +642,7 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
       _pickupCtrl.text = label;
       _pickMode = MapPickMode.pickup;
     });
+    _scheduleDeliveryQuote();
   }
 
   void _onDropoffLocation(LocationPoint point) {
@@ -585,6 +652,7 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
       _dropoffCtrl.text = label;
       _pickMode = MapPickMode.destination;
     });
+    _scheduleDeliveryQuote();
   }
 
   void _onAddressEdited({required bool isPickup, required String text}) {
@@ -673,18 +741,22 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
 
     return RideShell(
       mapChild: RideGoogleMap(
+        key: _mapKey,
         pickup: mapPickup,
         destination: mapDest,
         riderPosition: showRiderOnMap ? _riderPosition : null,
+        riderNavTarget: navTarget,
         nearbyRiders: searching ? _nearbyRiders : const [],
         showSearchRadar: searching,
+        showRiderApproachRadar: showRiderOnMap && _riderPosition != null,
         showRoute: !searching &&
             ((mapPickup != null &&
                     mapDest != null &&
                     mapPickup.hasCoords &&
                     mapDest.hasCoords) ||
-                _routePoints.length >= 2),
-        showLiveRiderRoute: false,
+                _routePoints.length >= 2 ||
+                (showRiderOnMap && navTarget != null)),
+        showLiveRiderRoute: showRiderOnMap && _routePoints.isEmpty,
         routePoints: _routePoints.length >= 2
             ? _routePoints
             : (showRiderOnMap &&
@@ -696,28 +768,25 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
         onMapTap: tracking ? null : _onMapTap,
       ),
       floatingMapChild: tracking
-          ? SafeArea(
-              child: Align(
-                alignment: Alignment.topCenter,
-                child: Padding(
-                  padding: const EdgeInsets.only(top: 64),
-                  child: TripStatusChip(
-                    label: customerTripHeadline(active),
-                    searching: searching,
-                    nearbyCount: searching ? _nearbyRiders.length : null,
-                    etaPhrase: _etaPhrase,
-                    showRiderApproaching: showRiderOnMap,
-                  ),
-                ),
-              ),
+          ? LiveTripMapHud(
+              order: active,
+              searching: searching,
+              nearbyCount: searching ? _nearbyRiders.length : null,
+              etaPhrase: _etaPhrase,
+              riderPosition: _riderPosition,
+              navTarget: navTarget,
+              onRecenter: () => _mapKey.currentState?.fitAllMarkers(),
             )
           : null,
       sheet: RideSheet(
-        maxHeightFraction: widget.embedded ? 0.52 : 0.68,
+        maxHeightFraction: tracking
+            ? (widget.embedded ? 0.42 : 0.38)
+            : (widget.embedded ? 0.58 : 0.72),
         bottomInset: widget.embedded ? 4 : 0,
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
         footer: !tracking
             ? RidePrimaryButton(
-                label: 'Request bike',
+                label: fee > 0 ? 'Request bike · ${formatCedis(fee)}' : 'Request bike',
                 icon: Icons.two_wheeler,
                 loading: _booking,
                 onPressed: _requestDelivery,
@@ -727,74 +796,97 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (!tracking && !widget.embedded) ...[
-              _quickActions(),
-              const SizedBox(height: 10),
-            ],
-            Text(
-              tracking ? 'Track delivery' : 'Bike delivery',
-              style: BytzGoTheme.sheetTitle(),
-            ),
-            const SizedBox(height: 4),
-            if (!tracking)
-              Text(
-                'Search an address or tap the map',
-                style: BytzGoTheme.sheetBody(14),
+            if (!tracking && widget.embedded) ...[
+              DeliveryBookingHeader(
+                firstName: userFirstName(_session.user!),
+                balance: _session.user?.balance ?? 0,
+                onShops: widget.onOpenShops,
+                onWallet: widget.onOpenWallet,
+                onTrips: widget.onOpenActivity,
+                onProfile: widget.onOpenProfile,
               ),
+              const SizedBox(height: 14),
+            ],
             if (tracking) ...[
-              const SizedBox(height: 12),
               CustomerDeliveryTracker(
                 order: active,
                 onOrderUpdated: _replaceOrder,
                 etaPhrase: _etaPhrase,
                 pickupLabel: _trackingPickupLabel,
                 dropoffLabel: _trackingDropoffLabel,
+                riderPosition: _riderPosition,
+                navTarget: navTarget,
+                searching: searching,
+                nearbyCount: _nearbyRiders.length,
               ),
             ],
             if (!tracking) ...[
               if (!widget.embedded) ...[
-                const SizedBox(height: 10),
-                const BrandPromoBanner(
-                  title: 'Trusted handoffs',
-                  subtitle: 'Real riders. Live tracking. Pay on delivery.',
-                ),
-              ],
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  _pickChip('Pickup', MapPickMode.pickup),
-                  const SizedBox(width: 8),
-                  _pickChip('Drop-off', MapPickMode.destination),
-                ],
-              ),
-              const SizedBox(height: 10),
-              _locationCard(),
-              const SizedBox(height: 10),
-              TextField(
-                controller: _itemCtrl,
-                style: const TextStyle(
-                  color: BytzGoTheme.sheetText,
-                  fontWeight: FontWeight.w600,
-                ),
-                decoration: InputDecoration(
-                  labelText: 'What are you sending?',
-                  labelStyle: BytzGoTheme.sheetBody(),
-                  filled: true,
-                  fillColor: BytzGoTheme.sheetDivider.withValues(alpha: 0.35),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide.none,
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(18),
+                  child: Image.asset(
+                    'assets/branding/onboarding_delivery.png',
+                    height: 72,
+                    width: double.infinity,
+                    fit: BoxFit.cover,
                   ),
                 ),
+                const SizedBox(height: 12),
+              ],
+              Text(
+                'Plan your trip',
+                style: BytzGoTheme.sheetTitle(18),
               ),
-              const SizedBox(height: 10),
+              const SizedBox(height: 4),
+              Text(
+                'Search below or tap the map to pin pickup & drop-off',
+                style: BytzGoTheme.sheetBody(13),
+              ),
+              const SizedBox(height: 12),
+              MapPickModeChips(
+                mode: _pickMode,
+                onMode: (m) => setState(() => _pickMode = m),
+              ),
+              const SizedBox(height: 12),
+              VisualRouteCard(
+                pickupChild: LocationAutocompleteField(
+                  icon: pickupDot(),
+                  hint: 'Pickup — your location or address',
+                  controller: _pickupCtrl,
+                  locating: _locatingPickup,
+                  resolving: _resolvingPickup,
+                  showUseMyLocation: true,
+                  onUseMyLocation: () => _applyCurrentLocation(toPickup: true),
+                  onTap: () => setState(() => _pickMode = MapPickMode.pickup),
+                  onLocation: _onPickupLocation,
+                  onAddressEdited: (text) =>
+                      _onAddressEdited(isPickup: true, text: text),
+                ),
+                dropoffChild: LocationAutocompleteField(
+                  icon: dropoffSquare(),
+                  hint: 'Drop-off — where to?',
+                  controller: _dropoffCtrl,
+                  resolving: _resolvingDropoff,
+                  onTap: () => setState(() => _pickMode = MapPickMode.destination),
+                  onLocation: _onDropoffLocation,
+                  onAddressEdited: (text) =>
+                      _onAddressEdited(isPickup: false, text: text),
+                ),
+              ),
+              const SizedBox(height: 14),
+              PackageTypeSelector(
+                selected: _packageType,
+                onSelected: (v) => setState(() => _itemCtrl.text = v),
+              ),
+              const SizedBox(height: 12),
               RideAnimatedReveal(
                 visible: fee > 0,
-                child: ServiceTypeTile(
-                  key: ValueKey('fee-$fee'),
-                  title: 'Bike courier',
-                  subtitle: 'Pay when rider arrives',
-                  price: formatCedis(fee),
+                child: DeliveryQuoteCard(
+                  key: ValueKey('fee-$fee-$_surgeActive'),
+                  fee: fee,
+                  distanceKm: _routeDistanceKm,
+                  surgeActive: _surgeActive,
+                  loading: _quoteLoading,
                 ),
               ),
             ],
@@ -816,145 +908,6 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
               ),
           ],
         ),
-      ),
-    );
-  }
-
-  Widget _quickActions() {
-    return SizedBox(
-      height: 76,
-      child: ListView(
-        scrollDirection: Axis.horizontal,
-        children: [
-          _quickAction(Icons.storefront_outlined, 'Shops', widget.onOpenShops),
-          _quickAction(Icons.add_card, 'Top up', widget.onOpenWallet),
-          _quickAction(Icons.route_outlined, 'Trips', widget.onOpenActivity),
-          _quickAction(Icons.person_outline, 'Profile', widget.onOpenProfile),
-          _quickAction(Icons.headset_mic_outlined, 'Help', () {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Support: support@bytzgo.com'),
-                behavior: SnackBarBehavior.floating,
-              ),
-            );
-          }),
-        ],
-      ),
-    );
-  }
-
-  Widget _quickAction(IconData icon, String label, VoidCallback? onTap) {
-    return Padding(
-      padding: const EdgeInsets.only(right: 10),
-      child: PressableScale(
-        onTap: onTap,
-        child: Container(
-          width: 72,
-          decoration: BoxDecoration(
-            color: BytzGoTheme.sheetBg,
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: BytzGoTheme.sheetDivider),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.04),
-                blurRadius: 8,
-                offset: const Offset(0, 2),
-              ),
-            ],
-          ),
-          padding: const EdgeInsets.symmetric(vertical: 12),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(icon, color: BytzGoTheme.brandBlue, size: 22),
-              const SizedBox(height: 5),
-              Text(
-                label,
-                style: const TextStyle(
-                  fontSize: 10,
-                  fontWeight: FontWeight.w800,
-                  color: BytzGoTheme.sheetText,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _pickChip(String label, MapPickMode mode) {
-    final selected = _pickMode == mode;
-    return Expanded(
-      child: PressableScale(
-        onTap: () => setState(() => _pickMode = mode),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 200),
-          curve: Curves.easeOutCubic,
-          decoration: BoxDecoration(
-            color: selected
-                ? BytzGoTheme.accent.withValues(alpha: 0.18)
-                : BytzGoTheme.sheetDivider.withValues(alpha: 0.4),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: selected ? BytzGoTheme.accent : Colors.transparent,
-              width: 1.5,
-            ),
-          ),
-          padding: const EdgeInsets.symmetric(vertical: 11),
-          child: Text(
-            label,
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              fontWeight: FontWeight.w800,
-              fontSize: 13,
-              color: selected ? BytzGoTheme.accentDark : BytzGoTheme.sheetMuted,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _locationCard() {
-    return Container(
-      decoration: BoxDecoration(
-        color: BytzGoTheme.sheetBg,
-        border: Border.all(color: BytzGoTheme.sheetDivider),
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Column(
-        children: [
-          LocationAutocompleteField(
-            icon: pickupDot(),
-            hint: 'Current location or address',
-            controller: _pickupCtrl,
-            locating: _locatingPickup,
-            resolving: _resolvingPickup,
-            showUseMyLocation: true,
-            onUseMyLocation: () => _applyCurrentLocation(toPickup: true),
-            onTap: () => setState(() => _pickMode = MapPickMode.pickup),
-            onLocation: _onPickupLocation,
-            onAddressEdited: (text) => _onAddressEdited(isPickup: true, text: text),
-          ),
-          Divider(height: 1, color: BytzGoTheme.sheetDivider.withValues(alpha: 0.8)),
-          LocationAutocompleteField(
-            icon: dropoffSquare(),
-            hint: 'Where to?',
-            controller: _dropoffCtrl,
-            resolving: _resolvingDropoff,
-            onTap: () => setState(() => _pickMode = MapPickMode.destination),
-            onLocation: _onDropoffLocation,
-            onAddressEdited: (text) => _onAddressEdited(isPickup: false, text: text),
-          ),
-        ],
       ),
     );
   }

@@ -7,6 +7,8 @@ import '../../models/order.dart';
 import '../../shared/customer_trip.dart';
 import '../../shared/format.dart';
 import '../../shared/theme.dart';
+import '../../models/location_point.dart';
+import '../../shared/delivery_pricing.dart';
 import '../../shared/widgets/biker_search_radar.dart';
 import '../../shared/trip_contact.dart';
 import '../../shared/widgets/ride_ui.dart';
@@ -22,6 +24,10 @@ class CustomerDeliveryTracker extends StatelessWidget {
     this.etaPhrase,
     this.pickupLabel,
     this.dropoffLabel,
+    this.riderPosition,
+    this.navTarget,
+    this.searching = false,
+    this.nearbyCount = 0,
   });
 
   final Order order;
@@ -29,13 +35,51 @@ class CustomerDeliveryTracker extends StatelessWidget {
   final String? etaPhrase;
   final String? pickupLabel;
   final String? dropoffLabel;
+  final LocationPoint? riderPosition;
+  final LocationPoint? navTarget;
+  final bool searching;
+  final int nearbyCount;
+
+  double? get _riderDistanceKm {
+    if (riderPosition == null || navTarget == null) return null;
+    if (!riderPosition!.hasCoords || !navTarget!.hasCoords) return null;
+    return haversineDistanceKm(
+      riderPosition!.lat,
+      riderPosition!.lng,
+      navTarget!.lat,
+      navTarget!.lng,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
+    final dist = _riderDistanceKm;
+    final hasRider = order.riderId != null && !searching;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _StatusHero(order: order, etaPhrase: etaPhrase),
+        _LiveMapHint(
+          searching: searching,
+          hasRider: hasRider,
+          nearbyCount: nearbyCount,
+          distanceKm: dist,
+        ),
+        const SizedBox(height: 12),
+        _StatusHero(
+          order: order,
+          etaPhrase: etaPhrase,
+          distanceKm: dist,
+          searching: searching,
+        ),
+        if (hasRider && order.riderName != null && order.riderName!.isNotEmpty) ...[
+          const SizedBox(height: 10),
+          _RiderLiveCard(
+            order: order,
+            distanceKm: dist,
+            etaPhrase: etaPhrase,
+          ),
+        ],
         if (pickupLabel != null || dropoffLabel != null) ...[
           const SizedBox(height: 10),
           _AddressSummary(
@@ -75,6 +119,175 @@ class CustomerDeliveryTracker extends StatelessWidget {
           _DeliveredBanner(),
         ],
       ],
+    );
+  }
+}
+
+class _LiveMapHint extends StatelessWidget {
+  const _LiveMapHint({
+    required this.searching,
+    required this.hasRider,
+    required this.nearbyCount,
+    this.distanceKm,
+  });
+
+  final bool searching;
+  final bool hasRider;
+  final int nearbyCount;
+  final double? distanceKm;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            BytzGoTheme.sheetText,
+            BytzGoTheme.sheetText.withValues(alpha: 0.92),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            searching ? Icons.radar : Icons.map,
+            color: searching ? BytzGoTheme.accent : BytzGoTheme.brandBlueBright,
+            size: 22,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  searching
+                      ? 'Radar scan active'
+                      : hasRider
+                          ? 'Live biker on map'
+                          : 'Track on map above',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w900,
+                    fontSize: 14,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  searching
+                      ? (nearbyCount > 0
+                          ? '$nearbyCount biker${nearbyCount == 1 ? '' : 's'} visible on radar'
+                          : 'Pinging nearby riders…')
+                      : hasRider && distanceKm != null
+                          ? '${distanceKm!.toStringAsFixed(1)} km away — orange pin is your biker'
+                          : 'Pinch the map · tap ↻ to re-center',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.72),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (searching)
+            const BikerSearchRadar(size: 36, color: BytzGoTheme.accent)
+          else if (hasRider)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.orange.withValues(alpha: 0.25),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Icon(Icons.two_wheeler, color: Colors.orange, size: 22),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _RiderLiveCard extends StatelessWidget {
+  const _RiderLiveCard({
+    required this.order,
+    this.distanceKm,
+    this.etaPhrase,
+  });
+
+  final Order order;
+  final double? distanceKm;
+  final String? etaPhrase;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: BytzGoTheme.brandBlue.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: BytzGoTheme.brandBlue.withValues(alpha: 0.25)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 52,
+            height: 52,
+            decoration: BoxDecoration(
+              color: Colors.orange.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: Colors.orange.withValues(alpha: 0.5), width: 2),
+            ),
+            child: const Icon(Icons.two_wheeler, color: Colors.orange, size: 30),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  order.riderName ?? 'Your biker',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w900,
+                    fontSize: 16,
+                    color: BytzGoTheme.sheetText,
+                  ),
+                ),
+                if (distanceKm != null)
+                  Text(
+                    '${distanceKm!.toStringAsFixed(1)} km · approaching on radar',
+                    style: BytzGoTheme.sheetBody(12),
+                  )
+                else if (etaPhrase != null && etaPhrase!.isNotEmpty)
+                  Text(etaPhrase!, style: BytzGoTheme.sheetBody(12)),
+              ],
+            ),
+          ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              const Text(
+                'LIVE',
+                style: TextStyle(
+                  fontSize: 9,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 1,
+                  color: Colors.orange,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Container(
+                width: 10,
+                height: 10,
+                decoration: const BoxDecoration(
+                  color: Colors.orange,
+                  shape: BoxShape.circle,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }
@@ -136,10 +349,17 @@ class _AddressSummary extends StatelessWidget {
 }
 
 class _StatusHero extends StatelessWidget {
-  const _StatusHero({required this.order, this.etaPhrase});
+  const _StatusHero({
+    required this.order,
+    this.etaPhrase,
+    this.distanceKm,
+    this.searching = false,
+  });
 
   final Order order;
   final String? etaPhrase;
+  final double? distanceKm;
+  final bool searching;
 
   @override
   Widget build(BuildContext context) {
@@ -147,7 +367,7 @@ class _StatusHero extends StatelessWidget {
     final sub = customerTripSubline(order, etaPhrase: etaPhrase);
     final isArrived = order.status == 'arrived';
     final isDelivered = order.status == 'delivered';
-    final searching = customerIsSearchingBiker(order);
+    final isSearching = searching || customerIsSearchingBiker(order);
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -186,7 +406,7 @@ class _StatusHero extends StatelessWidget {
               color: BytzGoTheme.sheetBg,
               borderRadius: BorderRadius.circular(14),
             ),
-            child: searching
+            child: isSearching
                 ? const BikerSearchRadar(size: 44, color: BytzGoTheme.brandBlue)
                 : Icon(
                     isDelivered
@@ -222,6 +442,17 @@ class _StatusHero extends StatelessWidget {
                 if (sub.isNotEmpty) ...[
                   const SizedBox(height: 4),
                   Text(sub, style: BytzGoTheme.sheetBody(13)),
+                ],
+                if (distanceKm != null && order.riderId != null && !isSearching) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    'On radar · ${distanceKm!.toStringAsFixed(1)} km to ${order.status == 'picked_up' ? 'you' : 'pickup'}',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w800,
+                      color: BytzGoTheme.brandBlue,
+                    ),
+                  ),
                 ],
               ],
             ),
@@ -801,10 +1032,26 @@ class _CustomerCancelRequestButtonState extends State<CustomerCancelRequestButto
     setState(() => _loading = true);
     HapticFeedback.mediumImpact();
     try {
-      final updated =
+      final result =
           await context.read<OrdersRepository>().cancelOrder(order.id);
       if (!mounted) return;
-      widget.onOrderUpdated(updated);
+      widget.onOrderUpdated(result.order);
+      if (result.walletBalance != null) {
+        context.read<Session>().patchBalance(result.walletBalance!);
+      }
+      final msg = result.refundMessage ??
+          (result.refundCredited
+              ? 'Refund credited to your wallet'
+              : 'Trip cancelled');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(msg),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: result.refundCredited
+              ? BytzGoTheme.accentDark
+              : BytzGoTheme.sheetText,
+        ),
+      );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

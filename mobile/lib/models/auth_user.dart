@@ -17,6 +17,7 @@ class AuthUser {
     this.phone,
     this.address,
     this.coverImage,
+    this.shopCategory,
   });
 
   final String id;
@@ -32,6 +33,7 @@ class AuthUser {
   final String? phone;
   final String? address;
   final String? coverImage;
+  final String? shopCategory;
 
   factory AuthUser.fromJson(Map<String, dynamic> json) {
     return AuthUser(
@@ -48,6 +50,7 @@ class AuthUser {
       phone: json['phone']?.toString(),
       address: json['address']?.toString(),
       coverImage: json['cover_image']?.toString(),
+      shopCategory: json['shop_category']?.toString(),
     );
   }
 
@@ -65,6 +68,7 @@ class AuthUser {
         if (phone != null) 'phone': phone,
         if (address != null) 'address': address,
         if (coverImage != null) 'cover_image': coverImage,
+        if (shopCategory != null) 'shop_category': shopCategory,
       };
 
   AuthUser copyWith({

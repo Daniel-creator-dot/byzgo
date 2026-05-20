@@ -23,11 +23,13 @@ import '../../shared/rider_trip.dart';
 import '../../shared/trip_chat_sheet.dart';
 import '../../shared/trip_contact.dart';
 import '../../shared/theme.dart';
-import '../../shared/widgets/ride_map_background.dart';
+import '../../models/rider_map_offer.dart';
+import '../../shared/widgets/biker_search_radar.dart';
 import '../../shared/widgets/ride_ui.dart';
 import 'delivery_pin_dialog.dart';
 import 'incoming_ride_overlay.dart';
 import 'incoming_ride_ring.dart';
+import 'rider_drive_hud.dart';
 import 'rider_drive_map_layer.dart';
 import 'rider_verification_section.dart';
 
@@ -52,7 +54,10 @@ class _RiderShellState extends State<RiderShell> {
   Order? _incoming;
   final Set<String> _alertedOfferIds = {};
   String? _focusedOrderId;
+  String? _previewOrderId;
   bool _isOnline = false;
+  bool _driveListExpanded = false;
+  final _driveMapKey = GlobalKey<RiderDriveMapLayerState>();
   bool _statusLoading = false;
   bool _accepting = false;
   bool _refreshing = false;
@@ -266,6 +271,7 @@ class _RiderShellState extends State<RiderShell> {
         _orders = orders;
         _vendors = vendors;
       });
+      _driveMapKey.currentState?.fitAllMarkers();
       _trackOffers(orders);
       _syncOfferTimer();
     } catch (e) {
@@ -724,20 +730,38 @@ class _RiderShellState extends State<RiderShell> {
     );
   }
 
+  Order? get _previewOrder {
+    final id = _previewOrderId;
+    if (id == null) return null;
+    for (final o in _availableOrders) {
+      if (o.id == id) return o;
+    }
+    return null;
+  }
+
+  double get _driveSheetFraction {
+    if (!_isOnline) return 0.36;
+    if (_primaryActive != null || _incoming != null) return 0.40;
+    if (_availableOrders.isEmpty) return _driveListExpanded ? 0.32 : 0.24;
+    return _driveListExpanded ? 0.42 : 0.30;
+  }
+
   Widget _buildDriveTab() {
     final showRoute = (_incoming != null || _primaryActive != null) &&
-        _mapPickup() != null &&
-        _mapDestination() != null;
-    final pickup = _mapPickup();
-    final destination = _mapDestination() ?? _myPositionNotifier.value;
+        (_mapPickup() != null || _mapDestination() != null);
 
     return Stack(
       fit: StackFit.expand,
       children: [
         RiderDriveMapLayer(
+          key: _driveMapKey,
           riderPosition: _myPositionNotifier,
-          pickup: pickup,
-          destination: destination,
+          isOnline: _isOnline,
+          availableOrders: _availableOrders,
+          vendors: _vendors,
+          activeOrder: _primaryActive,
+          incomingOrder: _incoming,
+          previewOrderId: _previewOrderId,
           showRoute: showRoute,
         ),
         if (!_isOnline)
@@ -775,10 +799,18 @@ class _RiderShellState extends State<RiderShell> {
               ),
             ),
           ),
-        if (_isOnline && _incoming == null && _primaryActive == null)
-          Align(
-            alignment: const Alignment(0, -0.2),
-            child: MapPulseMarker(),
+        if (_isOnline)
+          RiderDriveHud(
+            isOnline: _isOnline,
+            offerCount: _availableOrders.length,
+            mappedOfferCount: riderMapOffersFromOrders(
+              _availableOrders,
+              _vendors,
+            ).length,
+            previewOrder: _previewOrder ?? _incoming,
+            earningsToday: _earningsToday,
+            tripsToday: _tripsToday,
+            onRecenter: () => _driveMapKey.currentState?.fitAllMarkers(),
           ),
         if (_primaryActive != null && _incoming == null)
           Align(
@@ -908,7 +940,9 @@ class _RiderShellState extends State<RiderShell> {
 
   Widget _driveBottomSheet() {
     return RideSheet(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
+      maxHeightFraction: _driveSheetFraction,
+      minSheetHeight: 128,
+      padding: const EdgeInsets.fromLTRB(16, 6, 16, 16),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -919,6 +953,18 @@ class _RiderShellState extends State<RiderShell> {
               const SizedBox(width: 8),
               _sheetTabBtn('Active', _DriveSheet.active, _activeOrders.length),
               const Spacer(),
+              if (_availableOrders.isNotEmpty)
+                TextButton(
+                  onPressed: () =>
+                      setState(() => _driveListExpanded = !_driveListExpanded),
+                  child: Text(
+                    _driveListExpanded ? 'Map focus' : 'List',
+                    style: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
               if (_refreshing)
                 const SizedBox(
                   width: 18,
@@ -933,10 +979,16 @@ class _RiderShellState extends State<RiderShell> {
                 ),
             ],
           ),
-          const SizedBox(height: 8),
+          if (_isOnline && _driveSheet == _DriveSheet.requests) ...[
+            const SizedBox(height: 6),
+            _mapOfferChips(),
+          ],
+          const SizedBox(height: 6),
           ConstrainedBox(
             constraints: BoxConstraints(
-              maxHeight: MediaQuery.sizeOf(context).height * 0.34,
+              maxHeight: _driveListExpanded
+                  ? MediaQuery.sizeOf(context).height * 0.28
+                  : MediaQuery.sizeOf(context).height * 0.18,
             ),
             child: SingleChildScrollView(
               child: _driveSheet == _DriveSheet.requests
@@ -991,26 +1043,71 @@ class _RiderShellState extends State<RiderShell> {
     );
   }
 
+  Widget _mapOfferChips() {
+    final offers = _availableOrders;
+    if (offers.isEmpty) return const SizedBox.shrink();
+    return SizedBox(
+      height: 44,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: offers.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        itemBuilder: (context, i) {
+          final o = offers[i];
+          final selected = _previewOrderId == o.id;
+          final short =
+              '#${o.id.length > 4 ? o.id.substring(o.id.length - 4) : o.id}';
+          return FilterChip(
+            selected: selected,
+            label: Text('$short · ${formatCedis(o.total)}'),
+            avatar: Icon(
+              o.isCourier ? Icons.local_shipping : Icons.store,
+              size: 16,
+              color: selected ? BytzGoTheme.accentDark : BytzGoTheme.sheetMuted,
+            ),
+            onSelected: (_) {
+              setState(() {
+                _previewOrderId = selected ? null : o.id;
+              });
+              _driveMapKey.currentState?.fitAllMarkers();
+            },
+            selectedColor: BytzGoTheme.accent.withValues(alpha: 0.35),
+            checkmarkColor: BytzGoTheme.accentDark,
+          );
+        },
+      ),
+    );
+  }
+
   Widget _requestsList() {
     if (!_isOnline) {
       return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 24),
-        child: Text('Go online to receive requests', style: BytzGoTheme.sheetBody(), textAlign: TextAlign.center),
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        child: Text(
+          'Go online to receive requests',
+          style: BytzGoTheme.sheetBody(),
+          textAlign: TextAlign.center,
+        ),
       );
     }
     if (_availableOrders.isEmpty) {
       return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 24),
-        child: Column(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Row(
           children: [
-            const Icon(Icons.bolt, color: BytzGoTheme.accent, size: 32),
-            const SizedBox(height: 8),
-            Text('Waiting for rides', style: BytzGoTheme.sheetTitle(16)),
-            const SizedBox(height: 4),
-            Text(
-              'New requests appear here and as pop-ups',
-              style: BytzGoTheme.sheetBody(13),
-              textAlign: TextAlign.center,
+            const BikerSearchRadar(size: 32, color: BytzGoTheme.accent),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Radar scanning', style: BytzGoTheme.sheetTitle(14)),
+                  Text(
+                    'Map stays visible — customer pickups appear as green & blue pins',
+                    style: BytzGoTheme.sheetBody(12),
+                  ),
+                ],
+              ),
             ),
           ],
         ),
@@ -1024,12 +1121,28 @@ class _RiderShellState extends State<RiderShell> {
   Widget _requestCard(Order order) {
     final vendor = _vendorFor(order);
     final secs = offerSecondsRemaining(order);
-    return Container(
+    final selected = _previewOrderId == order.id;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () {
+          setState(() {
+            _previewOrderId = selected ? null : order.id;
+          });
+          _driveMapKey.currentState?.fitAllMarkers();
+        },
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
       margin: const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: BytzGoTheme.sheetDivider.withValues(alpha: 0.35),
+        color: selected
+            ? BytzGoTheme.accent.withValues(alpha: 0.12)
+            : BytzGoTheme.sheetDivider.withValues(alpha: 0.35),
         borderRadius: BorderRadius.circular(16),
+        border: selected
+            ? Border.all(color: BytzGoTheme.accent.withValues(alpha: 0.55), width: 2)
+            : null,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1086,6 +1199,8 @@ class _RiderShellState extends State<RiderShell> {
             onPressed: () => _acceptOrder(order),
           ),
         ],
+      ),
+        ),
       ),
     );
   }

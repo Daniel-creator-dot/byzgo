@@ -9,6 +9,8 @@ class Vendor {
     this.address,
     this.region,
     this.phone,
+    this.shopCategory,
+    this.coverImage,
   });
 
   final String id;
@@ -18,6 +20,8 @@ class Vendor {
   final String? address;
   final String? region;
   final String? phone;
+  final String? shopCategory;
+  final String? coverImage;
 
   factory Vendor.fromJson(Map<String, dynamic> json) {
     return Vendor(
@@ -28,6 +32,8 @@ class Vendor {
       address: json['address']?.toString(),
       region: json['region']?.toString(),
       phone: json['phone']?.toString(),
+      shopCategory: (json['shop_category'] ?? json['shopCategory'])?.toString(),
+      coverImage: (json['cover_image'] ?? json['coverImage'])?.toString(),
     );
   }
 }

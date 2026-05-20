@@ -54,7 +54,12 @@ class _BytzPreloaderState extends State<BytzPreloader>
                 scale: Tween<double>(begin: 0.96, end: 1.0).animate(
                   CurvedAnimation(parent: _pulse, curve: Curves.easeInOut),
                 ),
-                child: const BytzGoLogo(fontSize: 52, alignment: Alignment.center),
+                child: Image.asset(
+                  'assets/branding/app_logo.png',
+                  height: 72,
+                  fit: BoxFit.contain,
+                  filterQuality: FilterQuality.high,
+                ),
               ),
               if (widget.showSpinner) ...[
               const SizedBox(height: 32),

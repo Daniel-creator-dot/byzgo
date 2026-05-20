@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 
 import '../../core/api_client.dart';
 import '../../models/admin_overview.dart';
+import '../../models/admin_pricing_settings.dart';
 import '../../models/rider_document.dart';
 
 class AdminRepository {
@@ -36,6 +37,20 @@ class AdminRepository {
     await _api.dio.patch<Map<String, dynamic>>(
       '/api/admin/riders/$id/reject',
       data: {if (reason != null && reason.isNotEmpty) 'reason': reason},
+    );
+  }
+
+  Future<AdminPricingSettings> fetchPricingSettings() async {
+    final res = await _api.dio.get<Map<String, dynamic>>('/api/admin/settings');
+    return AdminPricingSettings.fromJson(
+      Map<String, dynamic>.from(res.data ?? {}),
+    );
+  }
+
+  Future<void> savePricingSettings(AdminPricingSettings settings) async {
+    await _api.dio.patch<Map<String, dynamic>>(
+      '/api/admin/settings',
+      data: settings.toPatchBody(),
     );
   }
 

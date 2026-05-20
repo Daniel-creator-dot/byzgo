@@ -85,26 +85,13 @@ def load_source(path: Path) -> Image.Image:
 
 
 def build_icon(source: Image.Image, size: int, *, padding: float = 0.06) -> Image.Image:
-    """Resize with padding inside a squircle clip."""
-    canvas = Image.new("RGBA", (size, size), (255, 255, 255, 0))
+    """BytzGO wordmark on black — square launcher / favicon."""
     inner = int(size * (1 - padding * 2))
     resized = source.resize((inner, inner), Image.Resampling.LANCZOS)
+    canvas = Image.new("RGBA", (size, size), (0, 0, 0, 255))
     offset = (size - inner) // 2
-    layer = Image.new("RGBA", (size, size), (255, 255, 255, 255))
-    layer.paste(resized, (offset, offset), resized)
-    mask = superellipse_alpha(size, n=4.6, inset=0.02)
-    layer.putalpha(mask)
-    # Subtle lift shadow
-    shadow = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    sh_draw = ImageDraw.Draw(shadow)
-    sh_draw.rounded_rectangle(
-        (size // 12, size // 10, size - size // 14, size - size // 14),
-        radius=int(size * 0.2),
-        fill=(0, 0, 0, 28),
-    )
-    shadow = shadow.filter(ImageFilter.GaussianBlur(radius=max(2, size // 48)))
-    out = Image.alpha_composite(shadow, layer)
-    return out
+    canvas.paste(resized, (offset, offset), resized)
+    return canvas
 
 
 def build_adaptive_foreground(source: Image.Image, size: int) -> Image.Image:
@@ -174,7 +161,7 @@ def main() -> int:
     colors_file = values / "colors.xml"
     colors_xml = """<?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="ic_launcher_background">#FFFFFF</color>
+    <color name="ic_launcher_background">#000000</color>
 </resources>
 """
     colors_file.write_text(colors_xml, encoding="utf-8")
@@ -193,6 +180,13 @@ def main() -> int:
         marker = build_icon(src, 96, padding=0.08)
         save_png(marker, public / "rider-icon.png")
         save_png(build_icon(src, 192, padding=0.05), public / "bytzgo-icon-192.png")
+        save_png(build_icon(src, 192, padding=0.05), public / "icon-192.png")
+        save_png(build_icon(src, 512, padding=0.05), public / "icon-512.png")
+        save_png(src.resize((640, 640), Image.Resampling.LANCZOS), public / "app-logo.png")
+
+    # In-app wordmark (keeps square proportions from source)
+    save_png(src.resize((1024, 1024), Image.Resampling.LANCZOS), branding / "app_logo.png")
+    save_png(build_icon(src, 512, padding=0.04), branding / "preloader.png")
 
     print(f"Generated icons from {source_path}")
     print(f"  Master: {branding / 'app_icon.png'}")

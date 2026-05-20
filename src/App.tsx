@@ -1269,10 +1269,11 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
         className="relative z-10 min-h-screen flex flex-col items-center justify-end sm:justify-center p-4 pb-8"
       >
         <motion.div className="w-full max-w-md mb-6 sm:mb-8 text-center px-2">
-          <h1 className="text-5xl sm:text-6xl font-black tracking-tighter mb-2 drop-shadow-lg">
-            <span className="text-brand-blue">Bytz</span>
-            <span className="text-brand-green">GO</span>
-          </h1>
+          <img
+            src="/app-logo.png"
+            alt="BytzGO"
+            className="mx-auto mb-2 h-16 sm:h-20 w-auto max-w-[min(100%,320px)] object-contain drop-shadow-lg"
+          />
           <p className="text-white/90 font-semibold text-sm sm:text-base drop-shadow">
             {forcedRole === 'rider'
               ? 'Rider driver app'
@@ -2249,9 +2250,14 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
         onConfirm={async () => {
           if (!orderToCancel) return;
           try {
-            await axios.post(`/api/orders/${orderToCancel.id}/cancel`);
+            const res = await axios.post(`/api/orders/${orderToCancel.id}/cancel`);
             await refreshData();
-            addNotification('Order cancelled and refunded!', 'success');
+            const msg =
+              res.data?.refundMessage ||
+              (res.data?.refundCredited
+                ? `Refund of ₵${Number(res.data.refundAmount || 0).toFixed(2)} added to wallet`
+                : 'Order cancelled');
+            addNotification(msg, res.data?.refundCredited ? 'success' : 'info');
             setOrderToCancel(null);
           } catch (err: any) {
             addNotification(err.response?.data?.message || 'Cancellation failed', 'warning');
@@ -2259,7 +2265,7 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
           }
         }}
         title="Cancel Order"
-        message={`Are you sure you want to cancel order #${orderToCancel?.id.slice(-6)}? The full amount will be refunded to your wallet instantly.`}
+        message={`Cancel order #${orderToCancel?.id.slice(-6)}? If you already paid (wallet or card), the amount is returned to your BytzGo wallet. Pay-on-delivery orders that were not paid yet are cancelled with no charge.`}
         confirmLabel="Yes, Cancel Order"
         type="danger"
       />
@@ -2461,7 +2467,8 @@ function VendorView({
     address: user.address || '', 
     lat: user.lat || GHANA_CENTER.lat, 
     lng: user.lng || GHANA_CENTER.lng,
-    region: user.region || ''
+    region: user.region || '',
+    shop_category: (user as { shop_category?: string }).shop_category || 'food',
   });
   const storeGeoSet = useRef(false);
 
@@ -2795,6 +2802,21 @@ function VendorView({
                   <img src={storeForm.cover_image} alt="Cover Preview" className="w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
                 </div>
               )}
+            </div>
+
+            <div className="space-y-3">
+              <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Shop category (customer browse)</label>
+              <select
+                required
+                value={storeForm.shop_category}
+                onChange={e => setStoreForm({ ...storeForm, shop_category: e.target.value })}
+                className="w-full bg-slate-50 border border-slate-100 rounded-2xl py-4 px-6 font-bold text-sm focus:outline-none focus:border-brand-blue transition-all"
+              >
+                <option value="pharmacy">Pharmacy</option>
+                <option value="food">Food &amp; Drinks</option>
+                <option value="fashion">Fashion</option>
+                <option value="groceries">Groceries</option>
+              </select>
             </div>
 
             <div className="space-y-3">
@@ -3308,6 +3330,12 @@ function AdminView({
     paystack_secret_key: '',
     platform_fee_percent: '10',
     delivery_price_per_km: '4',
+    surge_enabled: false,
+    surge_multiplier: '1.5',
+    surge_start_time: '17:00',
+    surge_end_time: '21:00',
+    surge_active_now: false,
+    ghana_time: '',
     sms_base_url: 'https://www.inteksms.top/api/v1',
     sms_api_key: '',
     sms_sender_id: 'bytzee',
@@ -3355,6 +3383,12 @@ function AdminView({
         paystack_secret_key: '',
         platform_fee_percent: res.data.platform_fee_percent || '10',
         delivery_price_per_km: res.data.delivery_price_per_km || '4',
+        surge_enabled: res.data.surge_enabled === 'true' || res.data.surge_enabled === true,
+        surge_multiplier: res.data.surge_multiplier || '1.5',
+        surge_start_time: res.data.surge_start_time || '17:00',
+        surge_end_time: res.data.surge_end_time || '21:00',
+        surge_active_now: res.data.surge_active_now === true,
+        ghana_time: res.data.ghana_time || '',
         sms_base_url: res.data.sms_base_url || 'https://www.inteksms.top/api/v1',
         sms_api_key: '',
         sms_sender_id: res.data.sms_sender_id || 'bytzee',
@@ -3875,6 +3909,53 @@ function AdminView({
              <p className="text-[10px] text-slate-500 font-bold">
                Courier and food delivery fees = distance (km) × this rate. Zone min/max caps still apply when set.
              </p>
+
+             <div className="pt-4 border-t border-slate-700 space-y-3">
+               <div className="flex items-center justify-between gap-3">
+                 <div>
+                   <h4 className="text-sm font-bold text-white">Surge pricing</h4>
+                   <p className="text-[10px] text-slate-500 font-bold">
+                     Peak hours (Ghana time{settings.ghana_time ? ` · now ${settings.ghana_time}` : ''})
+                     {settings.surge_active_now ? ' · surge active now' : ''}
+                   </p>
+                 </div>
+                 <label className="flex items-center gap-2 text-[10px] font-black uppercase text-slate-400">
+                   <input
+                     type="checkbox"
+                     checked={settings.surge_enabled}
+                     onChange={(e) => setSettings({ ...settings, surge_enabled: e.target.checked })}
+                     className="rounded border-slate-600"
+                   />
+                   On
+                 </label>
+               </div>
+               <DarkInput
+                 label="Surge multiplier (×)"
+                 type="number"
+                 step="0.05"
+                 min="1"
+                 value={settings.surge_multiplier}
+                 onChange={(e) => setSettings({ ...settings, surge_multiplier: e.target.value })}
+                 placeholder="1.50"
+               />
+               <div className="grid grid-cols-2 gap-3">
+                 <DarkInput
+                   label="Surge start (HH:MM)"
+                   value={settings.surge_start_time}
+                   onChange={(e) => setSettings({ ...settings, surge_start_time: e.target.value })}
+                   placeholder="17:00"
+                 />
+                 <DarkInput
+                   label="Surge end (HH:MM)"
+                   value={settings.surge_end_time}
+                   onChange={(e) => setSettings({ ...settings, surge_end_time: e.target.value })}
+                   placeholder="21:00"
+                 />
+               </div>
+               <p className="text-[10px] text-slate-500 font-bold">
+                 Delivery fee is multiplied during this window. Overnight ranges supported (e.g. 22:00 → 06:00).
+               </p>
+             </div>
 
              <div className="pt-4 border-t border-slate-700">
                <h4 className="text-sm font-bold text-white mb-1">SMS / OTP (INTEK)</h4>

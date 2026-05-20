@@ -14,10 +14,12 @@ import '../../shared/format.dart';
 import '../../shared/theme.dart';
 import 'admin_drivers_tab.dart';
 import 'admin_live_map.dart';
+import 'admin_pricing_tab.dart';
 import 'widgets/admin_hero_header.dart';
+import 'widgets/admin_order_detail_sheet.dart';
 import 'widgets/admin_stat_card.dart';
 
-enum _AdminTab { live, drivers, orders, insights }
+enum _AdminTab { live, drivers, orders, pricing, insights }
 
 class AdminHomeScreen extends StatefulWidget {
   const AdminHomeScreen({super.key});
@@ -174,7 +176,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
       child: Row(
         children: [
-          Image.asset('assets/branding/app_icon.png', width: 36, height: 36),
+          Image.asset('assets/branding/app_logo.png', height: 28),
           const SizedBox(width: 10),
           Expanded(
             child: Column(
@@ -233,6 +235,8 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
         );
       case _AdminTab.orders:
         return _buildOrdersTab();
+      case _AdminTab.pricing:
+        return const AdminPricingTab();
       case _AdminTab.insights:
         return _buildInsightsTab();
     }
@@ -555,59 +559,101 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
     );
   }
 
+  void _openOrderDetail(Order o) {
+    showAdminOrderDetailSheet(
+      context,
+      order: o,
+      onOrderUpdated: (updated) {
+        setState(() {
+          final i = _orders.indexWhere((x) => x.id == updated.id);
+          if (i >= 0) _orders[i] = updated;
+        });
+        _refreshOverview(silent: true);
+      },
+      onViewRiderOnMap: o.riderId != null && o.riderId!.isNotEmpty
+          ? () => setState(() {
+                _tab = _AdminTab.live;
+                _selectedRiderId = o.riderId;
+              })
+          : null,
+    );
+  }
+
   Widget _orderTile(Order o) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFF0F172A),
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => _openOrderDetail(o),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFF1E293B)),
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: BytzGoTheme.brandBlue.withValues(alpha: 0.2),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: const Icon(Icons.inventory_2_outlined, color: BytzGoTheme.brandBlueBright, size: 22),
+        child: Container(
+          margin: const EdgeInsets.only(bottom: 10),
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: const Color(0xFF0F172A),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: const Color(0xFF1E293B)),
           ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '#${o.id.length > 6 ? o.id.substring(o.id.length - 6) : o.id}',
-                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: BytzGoTheme.brandBlue.withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(12),
                 ),
-                Text(
-                  o.status.toUpperCase(),
-                  style: TextStyle(
-                    color: BytzGoTheme.accent.withValues(alpha: 0.9),
-                    fontSize: 10,
-                    fontWeight: FontWeight.w800,
-                  ),
+                child: const Icon(Icons.inventory_2_outlined,
+                    color: BytzGoTheme.brandBlueBright, size: 22),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '#${o.id.length > 6 ? o.id.substring(o.id.length - 6) : o.id}',
+                      style: const TextStyle(
+                          color: Colors.white, fontWeight: FontWeight.w900),
+                    ),
+                    Text(
+                      o.status.toUpperCase(),
+                      style: TextStyle(
+                        color: BytzGoTheme.accent.withValues(alpha: 0.9),
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    if (o.customerName.isNotEmpty)
+                      Text(
+                        o.customerName,
+                        style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.45),
+                            fontSize: 11),
+                      ),
+                  ],
                 ),
-                if (o.customerName.isNotEmpty)
+              ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
                   Text(
-                    o.customerName,
-                    style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 11),
+                    formatCedis(o.total),
+                    style: const TextStyle(
+                      color: BytzGoTheme.accent,
+                      fontWeight: FontWeight.w900,
+                      fontSize: 14,
+                    ),
                   ),
-              ],
-            ),
+                  const SizedBox(height: 4),
+                  Icon(
+                    Icons.chevron_right,
+                    color: Colors.white.withValues(alpha: 0.35),
+                    size: 20,
+                  ),
+                ],
+              ),
+            ],
           ),
-          Text(
-            formatCedis(o.total),
-            style: const TextStyle(
-              color: BytzGoTheme.accent,
-              fontWeight: FontWeight.w900,
-              fontSize: 14,
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -738,6 +784,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
               _navItem(_AdminTab.live, Icons.radar, 'Live'),
               _navItem(_AdminTab.drivers, Icons.verified_user, 'Drivers', badge: _pendingDrivers),
               _navItem(_AdminTab.orders, Icons.list_alt, 'Orders'),
+              _navItem(_AdminTab.pricing, Icons.payments_outlined, 'Pricing'),
               _navItem(_AdminTab.insights, Icons.insights, 'Insights'),
             ],
           ),
