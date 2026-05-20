@@ -20,9 +20,9 @@ dotenv.config({ path: path.join(root, '.env.local') });
 
 const VENDOR = {
   name: 'Primecare Pharmacy',
-  email: 'primecare@bytzgo.net',
+  email: 'vendor@bytzgo.net',
   phone: '0244123456',
-  password: 'Pharmacy@2026',
+  password: 'Vendor@2026',
   shop_category: 'pharmacy',
   region: 'Greater Accra',
   address: 'Ring Road Central, Accra',

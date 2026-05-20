@@ -9,6 +9,7 @@
     "dev:admin": "vite --open /admin",
     "backend": "npm --prefix backend run dev",
     "create:admin": "node backend/scripts/create-admin.mjs",
+    "create:vendor": "node backend/scripts/create-vendor.mjs",
     "seed:primecare": "node backend/scripts/seed-primecare-pharmacy.mjs",
     "parse:formulary": "python scripts/parse_drug_formulary.py",
     "app": "npm run flutter:android",
