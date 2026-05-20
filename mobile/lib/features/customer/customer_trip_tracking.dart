@@ -30,11 +30,15 @@ class CustomerDeliveryTracker extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _StatusHero(order: order),
-        if (tripAllowsContact(order) && order.riderPhone != null) ...[
+        if (tripAllowsContact(order)) ...[
           const SizedBox(height: 12),
           TripContactActions(
+            order: order,
             phone: order.riderPhone,
             label: 'Contact your biker',
+            chatTitle: order.riderName != null && order.riderName!.isNotEmpty
+                ? 'Chat with ${order.riderName}'
+                : 'Chat with your biker',
           ),
         ],
         const SizedBox(height: 16),

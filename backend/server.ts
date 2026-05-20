@@ -393,6 +393,17 @@ const initDb = async () => {
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
 
+      CREATE TABLE IF NOT EXISTS order_messages (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+        sender_id UUID NOT NULL REFERENCES users(id),
+        body TEXT NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_order_messages_order_id
+        ON order_messages(order_id, created_at);
+
       CREATE TABLE IF NOT EXISTS order_dispatch_offers (
         order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
         rider_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -507,6 +518,42 @@ const TRIP_CONTACT_STATUSES = new Set(['pending', 'preparing', 'ready', 'picked_
 
 function tripAllowsContact(order: any): boolean {
   return Boolean(order?.rider_id) && TRIP_CONTACT_STATUSES.has(order.status);
+}
+
+function formatOrderMessage(row: any, viewerId: string) {
+  return {
+    id: row.id,
+    orderId: row.order_id,
+    senderId: row.sender_id,
+    senderName: row.sender_name || 'User',
+    body: row.body,
+    createdAt: row.created_at,
+    isMine: row.sender_id === viewerId,
+  };
+}
+
+async function assertOrderChatAccess(orderId: string, userId: string) {
+  const orderRes = await pool.query(
+    'SELECT id, customer_id, rider_id, status FROM orders WHERE id = $1',
+    [orderId]
+  );
+  if (orderRes.rowCount === 0) {
+    const err: any = new Error('Order not found');
+    err.status = 404;
+    throw err;
+  }
+  const order = orderRes.rows[0];
+  if (order.customer_id !== userId && order.rider_id !== userId) {
+    const err: any = new Error('Unauthorized');
+    err.status = 403;
+    throw err;
+  }
+  if (!tripAllowsContact(order)) {
+    const err: any = new Error('Chat is only available during an active trip');
+    err.status = 400;
+    throw err;
+  }
+  return order;
 }
 
 function sanitizeOrderForRole(order: any, role: string, userId: string) {
@@ -2576,6 +2623,67 @@ app.post('/api/orders/:id/cancel', authenticateToken, async (req: any, res) => {
   } catch (err) {
     console.error('Cancel order error:', err);
     res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.get('/api/orders/:id/messages', authenticateToken, async (req: any, res) => {
+  const orderId = req.params.id;
+  try {
+    await assertOrderChatAccess(orderId, req.user.id);
+    const result = await pool.query(
+      `SELECT m.*, u.name AS sender_name
+       FROM order_messages m
+       JOIN users u ON u.id = m.sender_id
+       WHERE m.order_id = $1
+       ORDER BY m.created_at ASC
+       LIMIT 200`,
+      [orderId]
+    );
+    res.json(
+      result.rows.map((row: any) => formatOrderMessage(row, req.user.id))
+    );
+  } catch (err: any) {
+    const status = err.status || 500;
+    res.status(status).json({ message: err.message || 'Server error' });
+  }
+});
+
+app.post('/api/orders/:id/messages', authenticateToken, async (req: any, res) => {
+  const orderId = req.params.id;
+  const body = String(req.body?.body ?? req.body?.text ?? '').trim();
+  if (!body) return res.status(400).json({ message: 'Message cannot be empty' });
+  if (body.length > 1000) {
+    return res.status(400).json({ message: 'Message is too long (max 1000 characters)' });
+  }
+  try {
+    const order = await assertOrderChatAccess(orderId, req.user.id);
+    const inserted = await pool.query(
+      `INSERT INTO order_messages (order_id, sender_id, body)
+       VALUES ($1, $2, $3)
+       RETURNING *`,
+      [orderId, req.user.id, body]
+    );
+    const row = inserted.rows[0];
+    const nameRes = await pool.query('SELECT name FROM users WHERE id = $1', [req.user.id]);
+    row.sender_name = nameRes.rows[0]?.name;
+
+    const payload = formatOrderMessage(row, req.user.id);
+    if (order.customer_id) {
+      io.to(order.customer_id).emit('order:message', {
+        orderId,
+        message: formatOrderMessage(row, order.customer_id),
+      });
+    }
+    if (order.rider_id) {
+      io.to(order.rider_id).emit('order:message', {
+        orderId,
+        message: formatOrderMessage(row, order.rider_id),
+      });
+    }
+    res.status(201).json(payload);
+  } catch (err: any) {
+    const status = err.status || 500;
+    res.status(status).json({ message: err.message || 'Server error' });
   }
 });
 

@@ -9,7 +9,7 @@ import '../../models/location_point.dart';
 import '../../models/order.dart';
 
 import '../../models/product.dart';
-
+import '../../models/trip_message.dart';
 import '../../models/vendor.dart';
 
 
@@ -310,7 +310,25 @@ class OrdersRepository {
     return Order.fromJson(Map<String, dynamic>.from(data));
   }
 
+  Future<List<TripMessage>> fetchTripMessages(String orderId) async {
+    final res = await _api.dio.get<dynamic>('/api/orders/$orderId/messages');
+    final data = res.data;
+    if (data is! List) return [];
+    return data
+        .whereType<Map>()
+        .map((e) => TripMessage.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
+  }
 
+  Future<TripMessage> sendTripMessage(String orderId, String body) async {
+    final res = await _api.dio.post<Map<String, dynamic>>(
+      '/api/orders/$orderId/messages',
+      data: {'body': body},
+    );
+    final data = res.data;
+    if (data == null) throw Exception('Empty message response');
+    return TripMessage.fromJson(Map<String, dynamic>.from(data));
+  }
 
   static String errorMessage(Object err) {
 

@@ -3,6 +3,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../models/order.dart';
 import 'theme.dart';
+import 'trip_chat_sheet.dart';
 
 const _contactStatuses = {'pending', 'preparing', 'ready', 'picked_up', 'arrived'};
 
@@ -49,46 +50,63 @@ Future<bool> launchSms(String? phone) async {
   return launchUrl(uri, mode: LaunchMode.externalApplication);
 }
 
-/// Call / text the other party during an active trip.
+/// Call, SMS, and in-app chat during an active trip.
 class TripContactActions extends StatelessWidget {
   const TripContactActions({
     super.key,
-    required this.phone,
+    required this.order,
+    this.phone,
     this.label = 'Contact',
+    this.chatTitle = 'Trip chat',
     this.compact = false,
   });
 
+  final Order order;
   final String? phone;
   final String label;
+  final String chatTitle;
   final bool compact;
 
   @override
   Widget build(BuildContext context) {
     final normalized = normalizePhone(phone);
-    if (normalized == null) return const SizedBox.shrink();
+    final hasPhone = normalized != null;
 
     if (compact) {
       return Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          IconButton.filled(
-            tooltip: 'Call',
-            onPressed: () => launchPhoneCall(normalized),
-            icon: const Icon(Icons.phone, size: 18),
-            style: IconButton.styleFrom(
-              backgroundColor: BytzGoTheme.brandBlue,
-              foregroundColor: Colors.white,
-              minimumSize: const Size(40, 40),
+          if (hasPhone) ...[
+            IconButton.filled(
+              tooltip: 'Call',
+              onPressed: () => launchPhoneCall(normalized),
+              icon: const Icon(Icons.phone, size: 18),
+              style: IconButton.styleFrom(
+                backgroundColor: BytzGoTheme.brandBlue,
+                foregroundColor: Colors.white,
+                minimumSize: const Size(40, 40),
+              ),
             ),
-          ),
-          const SizedBox(width: 6),
+            const SizedBox(width: 6),
+            IconButton.filled(
+              tooltip: 'Text (SMS)',
+              onPressed: () => launchSms(normalized),
+              icon: const Icon(Icons.sms_outlined, size: 18),
+              style: IconButton.styleFrom(
+                backgroundColor: BytzGoTheme.sheetDivider,
+                foregroundColor: BytzGoTheme.sheetText,
+                minimumSize: const Size(40, 40),
+              ),
+            ),
+            const SizedBox(width: 6),
+          ],
           IconButton.filled(
-            tooltip: 'Text',
-            onPressed: () => launchSms(normalized),
-            icon: const Icon(Icons.sms_outlined, size: 18),
+            tooltip: 'Chat',
+            onPressed: () => showTripChatSheet(context, order: order, title: chatTitle),
+            icon: const Icon(Icons.chat_bubble_outline, size: 18),
             style: IconButton.styleFrom(
-              backgroundColor: BytzGoTheme.sheetDivider,
-              foregroundColor: BytzGoTheme.sheetText,
+              backgroundColor: BytzGoTheme.accent,
+              foregroundColor: const Color(0xFF020617),
               minimumSize: const Size(40, 40),
             ),
           ),
@@ -109,19 +127,34 @@ class TripContactActions extends StatelessWidget {
         const SizedBox(height: 8),
         Row(
           children: [
-            Expanded(
-              child: OutlinedButton.icon(
-                onPressed: () => launchPhoneCall(normalized),
-                icon: const Icon(Icons.phone, size: 18),
-                label: const Text('Call'),
+            if (hasPhone) ...[
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () => launchPhoneCall(normalized),
+                  icon: const Icon(Icons.phone, size: 18),
+                  label: const Text('Call'),
+                ),
               ),
-            ),
-            const SizedBox(width: 8),
+              const SizedBox(width: 8),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () => launchSms(normalized),
+                  icon: const Icon(Icons.sms_outlined, size: 18),
+                  label: const Text('Text'),
+                ),
+              ),
+              const SizedBox(width: 8),
+            ],
             Expanded(
-              child: OutlinedButton.icon(
-                onPressed: () => launchSms(normalized),
-                icon: const Icon(Icons.sms_outlined, size: 18),
-                label: const Text('Text'),
+              child: FilledButton.icon(
+                onPressed: () =>
+                    showTripChatSheet(context, order: order, title: chatTitle),
+                icon: const Icon(Icons.chat_bubble_outline, size: 18),
+                label: const Text('Chat'),
+                style: FilledButton.styleFrom(
+                  backgroundColor: BytzGoTheme.brandBlue,
+                  foregroundColor: Colors.white,
+                ),
               ),
             ),
           ],

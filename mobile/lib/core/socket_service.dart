@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
 
 import '../models/order.dart';
+import '../models/trip_message.dart';
 import 'env.dart';
 import 'json_parse.dart';
 
@@ -9,6 +10,7 @@ typedef OrderHandler = void Function(Order order);
 typedef OrderIdHandler = void Function(String orderId);
 typedef WalletHandler = void Function(double balance);
 typedef LocationHandler = void Function(String riderId, double lat, double lng);
+typedef OrderMessageHandler = void Function(String orderId, TripMessage message);
 
 /// Real-time layer — mirrors `src/lib/socket.ts` and `App.tsx` listeners.
 class SocketService {
@@ -21,6 +23,7 @@ class SocketService {
   OrderHandler? onOrderUpdated;
   WalletHandler? onWalletUpdated;
   LocationHandler? onLocationUpdated;
+  OrderMessageHandler? onOrderMessage;
 
   bool get isConnected => _socket?.connected ?? false;
 
@@ -51,7 +54,8 @@ class SocketService {
       ..on('order:new', _onOrderNew)
       ..on('order:updated', _onOrderUpdated)
       ..on('wallet:updated', _onWalletUpdated)
-      ..on('location:updated', _onLocationUpdated);
+      ..on('location:updated', _onLocationUpdated)
+      ..on('order:message', _onOrderMessage);
   }
 
   void _onRideIncoming(dynamic data) {
@@ -89,6 +93,19 @@ class SocketService {
     final balance = parseJsonDouble(map['balance']);
     if (balance == null) return;
     onWalletUpdated?.call(balance);
+  }
+
+  void _onOrderMessage(dynamic data) {
+    final map = _asMap(data);
+    if (map == null || map['orderId'] == null || map['message'] == null) return;
+    try {
+      final message = TripMessage.fromJson(
+        Map<String, dynamic>.from(map['message'] as Map),
+      );
+      onOrderMessage?.call(map['orderId'].toString(), message);
+    } catch (e) {
+      debugPrint('[socket] bad order:message: $e');
+    }
   }
 
   void _onLocationUpdated(dynamic data) {
@@ -133,6 +150,7 @@ class SocketService {
     onOrderUpdated = null;
     onWalletUpdated = null;
     onLocationUpdated = null;
+    onOrderMessage = null;
   }
 
   void emitLocationUpdate({

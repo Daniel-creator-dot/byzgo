@@ -18,6 +18,7 @@ import '../../models/vendor.dart';
 import '../../shared/format.dart';
 import '../../shared/ghana_regions.dart';
 import '../../shared/rider_trip.dart';
+import '../../shared/trip_chat_sheet.dart';
 import '../../shared/trip_contact.dart';
 import '../../shared/theme.dart';
 import '../../shared/widgets/ride_map_background.dart';
@@ -811,30 +812,48 @@ class _RiderShellState extends State<RiderShell> {
                   ),
                 ],
               ),
-              if (tripAllowsContact(order) && order.customerPhone != null) ...[
+              if (tripAllowsContact(order)) ...[
                 const SizedBox(height: 8),
                 Row(
                   children: [
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: () => launchPhoneCall(order.customerPhone),
-                        icon: const Icon(Icons.phone, size: 16),
-                        label: const Text('Call customer'),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: Colors.white,
-                          side: BorderSide(color: Colors.white.withValues(alpha: 0.35)),
+                    if (order.customerPhone != null) ...[
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () => launchPhoneCall(order.customerPhone),
+                          icon: const Icon(Icons.phone, size: 16),
+                          label: const Text('Call'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: Colors.white,
+                            side: BorderSide(color: Colors.white.withValues(alpha: 0.35)),
+                          ),
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 8),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () => launchSms(order.customerPhone),
+                          icon: const Icon(Icons.sms_outlined, size: 16),
+                          label: const Text('SMS'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: Colors.white,
+                            side: BorderSide(color: Colors.white.withValues(alpha: 0.35)),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                    ],
                     Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: () => launchSms(order.customerPhone),
-                        icon: const Icon(Icons.sms_outlined, size: 16),
-                        label: const Text('Text'),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: Colors.white,
-                          side: BorderSide(color: Colors.white.withValues(alpha: 0.35)),
+                      child: FilledButton.icon(
+                        onPressed: () => showTripChatSheet(
+                          context,
+                          order: order,
+                          title: 'Chat with ${order.customerName.isNotEmpty ? order.customerName : 'customer'}',
+                        ),
+                        icon: const Icon(Icons.chat_bubble_outline, size: 16),
+                        label: const Text('Chat'),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: BytzGoTheme.accent,
+                          foregroundColor: const Color(0xFF020617),
                         ),
                       ),
                     ),
@@ -1090,11 +1109,15 @@ class _RiderShellState extends State<RiderShell> {
             const SizedBox(height: 10),
             Text(nav.label, style: BytzGoTheme.sheetBody(13), maxLines: 2),
           ],
-          if (tripAllowsContact(order) && order.customerPhone != null) ...[
+          if (tripAllowsContact(order)) ...[
             const SizedBox(height: 12),
             TripContactActions(
+              order: order,
               phone: order.customerPhone,
               label: 'Contact customer',
+              chatTitle: order.customerName.isNotEmpty
+                  ? 'Chat with ${order.customerName}'
+                  : 'Chat with customer',
             ),
           ],
           const SizedBox(height: 12),
