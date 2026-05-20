@@ -159,7 +159,7 @@ Email login works **without** Firebase.
 
    Keep your existing **Web** client for `GOOGLE_WEB_CLIENT_ID` / `serverClientId`.
 
-4. Optional: add `google-services.json` (Android) and `GoogleService-Info.plist` (iOS) via `flutterfire configure`.
+4. Firebase FCM (ride alerts when screen is off): `google-services.json` and `GoogleService-Info.plist` are in `android/app/` and `ios/Runner/` for project **bytzgo-9bd89**. See [docs/FIREBASE_PUSH.md](../docs/FIREBASE_PUSH.md). Backend needs `backend/firebase-service-account.json` from Firebase Console.
 5. Run with web client ID:
    ```powershell
    flutter run ^

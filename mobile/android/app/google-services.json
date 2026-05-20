@@ -1,0 +1,54 @@
+{
+  "project_info": {
+    "project_number": "645977332644",
+    "project_id": "bytzgo-9bd89",
+    "storage_bucket": "bytzgo-9bd89.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:645977332644:android:c61f7624820fc1e2977f31",
+        "android_client_info": {
+          "package_name": "com.example.bytzgo"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "645977332644-rv482i78e7hln0u3dh475dn4g0rgoa2l.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.bytzgo",
+            "certificate_hash": "844c315c994787502e212ec2715df5ded74fcc50"
+          }
+        },
+        {
+          "client_id": "645977332644-4gjjf08268b3irafs4bh8b7guct1i1jb.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA8nNArzYmjNfYsgKQzDSxlwcAfH2iTtiY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "645977332644-4gjjf08268b3irafs4bh8b7guct1i1jb.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "645977332644-7r6hmbj6sklvrv96l2i312c34i1kgn4u.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.bytzgo"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

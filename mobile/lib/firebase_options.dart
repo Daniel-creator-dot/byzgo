@@ -1,17 +1,9 @@
 import 'package:firebase_core/firebase_core.dart' show FirebaseOptions;
 import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb, TargetPlatform;
 
-/// Firebase options — from `flutterfire configure` or `--dart-define` at build time.
+/// Firebase project **bytzgo-9bd89** (from google-services.json / GoogleService-Info.plist).
 class DefaultFirebaseOptions {
-  static const String _apiKey = String.fromEnvironment('FIREBASE_API_KEY');
-  static const String _appId = String.fromEnvironment('FIREBASE_APP_ID');
-  static const String _messagingSenderId =
-      String.fromEnvironment('FIREBASE_MESSAGING_SENDER_ID');
-  static const String _projectId =
-      String.fromEnvironment('FIREBASE_PROJECT_ID', defaultValue: 'bytzgo-72f1c');
-
-  static bool get isConfigured =>
-      _apiKey.isNotEmpty && _appId.isNotEmpty && _messagingSenderId.isNotEmpty;
+  static const bool isConfigured = true;
 
   static FirebaseOptions get currentPlatform {
     if (kIsWeb) {
@@ -27,14 +19,28 @@ class DefaultFirebaseOptions {
     }
   }
 
-  static FirebaseOptions get android => FirebaseOptions(
-        apiKey: _apiKey,
-        appId: _appId,
-        messagingSenderId: _messagingSenderId,
-        projectId: _projectId,
-      );
+  static const FirebaseOptions android = FirebaseOptions(
+    apiKey: 'AIzaSyA8nNArzYmjNfYsgKQzDSxlwcAfH2iTtiY',
+    appId: '1:645977332644:android:c61f7624820fc1e2977f31',
+    messagingSenderId: '645977332644',
+    projectId: 'bytzgo-9bd89',
+    storageBucket: 'bytzgo-9bd89.firebasestorage.app',
+  );
 
-  static FirebaseOptions get ios => android;
+  static const FirebaseOptions ios = FirebaseOptions(
+    apiKey: 'AIzaSyAzDpvnJJ6x4zThAMk95KD_ABCF8Eo9ixY',
+    appId: '1:645977332644:ios:0b014667ec40000e977f31',
+    messagingSenderId: '645977332644',
+    projectId: 'bytzgo-9bd89',
+    storageBucket: 'bytzgo-9bd89.firebasestorage.app',
+    iosBundleId: 'com.example.bytzgo',
+  );
 
-  static FirebaseOptions get web => android;
+  static const FirebaseOptions web = FirebaseOptions(
+    apiKey: 'AIzaSyA8nNArzYmjNfYsgKQzDSxlwcAfH2iTtiY',
+    appId: '1:645977332644:android:c61f7624820fc1e2977f31',
+    messagingSenderId: '645977332644',
+    projectId: 'bytzgo-9bd89',
+    storageBucket: 'bytzgo-9bd89.firebasestorage.app',
+  );
 }

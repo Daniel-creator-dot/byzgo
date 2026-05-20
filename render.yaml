@@ -33,7 +33,7 @@ services:
       - key: PAYSTACK_SECRET_KEY
         sync: false
       - key: FIREBASE_PROJECT_ID
-        value: bytzgo-72f1c
+        value: bytzgo-9bd89
       - key: APP_URL
         value: https://bytzgo.net
       - key: PAYSTACK_CALLBACK_URL

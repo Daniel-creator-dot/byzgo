@@ -2,7 +2,7 @@ import 'dart:convert';
 
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
-import 'package:flutter/foundation.dart';
+import 'package:flutter/foundation.dart' show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_ringtone_player/flutter_ringtone_player.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -93,7 +93,20 @@ class PushNotificationService {
 
     try {
       final messaging = FirebaseMessaging.instance;
-      await messaging.requestPermission(alert: true, badge: true, sound: true);
+      await messaging.setForegroundNotificationPresentationOptions(
+        alert: true,
+        badge: true,
+        sound: true,
+      );
+      await messaging.requestPermission(
+        alert: true,
+        badge: true,
+        sound: true,
+        criticalAlert: false,
+      );
+      if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+        await messaging.setAutoInitEnabled(true);
+      }
       final token = await messaging.getToken();
       if (token == null || token.isEmpty) return;
       if (token == _lastToken) return;
@@ -192,8 +205,9 @@ class PushNotificationService {
               ? _rideChannel.name
               : _tripChannel.name,
           importance: Importance.max,
-          priority: Priority.high,
+          priority: type == 'incoming-ride' ? Priority.max : Priority.high,
           fullScreenIntent: type == 'incoming-ride',
+          ticker: title,
           category: high
               ? AndroidNotificationCategory.message
               : AndroidNotificationCategory.status,

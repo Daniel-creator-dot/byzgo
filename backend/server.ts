@@ -19,7 +19,7 @@ import crypto from 'crypto';
 dotenv.config({ path: path.join(__dirname, '.env') });
 dotenv.config({ path: path.join(__dirname, '..', '.env.local') });
 
-const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || 'bytzgo-72f1c';
+const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || 'bytzgo-9bd89';
 const GOOGLE_WEB_CLIENT_ID =
   process.env.GOOGLE_WEB_CLIENT_ID?.trim() ||
   process.env.VITE_GOOGLE_CLIENT_ID?.trim() ||
@@ -53,20 +53,58 @@ async function verifyGoogleIdToken(idToken: string) {
   }
 }
 
+function resolveFirebaseServiceAccountPath(): string | null {
+  const fromEnv = process.env.FIREBASE_SERVICE_ACCOUNT_PATH?.trim();
+  if (fromEnv && fs.existsSync(fromEnv)) return fromEnv;
+  const candidates = [
+    path.join(__dirname, 'firebase-service-account.json'),
+    path.join(__dirname, 'bytzgo-9bd89-firebase-adminsdk.json'),
+    path.join(__dirname, 'bytzgo-72f1c-firebase-adminsdk-fbsvc-51cd0be35b.json'),
+  ];
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p;
+  }
+  try {
+    const files = fs.readdirSync(__dirname).filter(
+      (f) => f.includes('firebase-adminsdk') && f.endsWith('.json')
+    );
+    if (files[0]) return path.join(__dirname, files[0]);
+  } catch (_) {}
+  return null;
+}
+
+function loadFirebaseServiceAccount(): Record<string, unknown> | null {
+  const inline = process.env.FIREBASE_SERVICE_ACCOUNT_JSON?.trim();
+  if (inline) {
+    try {
+      return JSON.parse(inline) as Record<string, unknown>;
+    } catch (e) {
+      console.error('Firebase Admin: FIREBASE_SERVICE_ACCOUNT_JSON is not valid JSON', e);
+    }
+  }
+  const serviceAccountPath = resolveFirebaseServiceAccountPath();
+  if (!serviceAccountPath) return null;
+  return JSON.parse(fs.readFileSync(serviceAccountPath, 'utf8')) as Record<string, unknown>;
+}
+
 try {
-  const serviceAccountPath = path.join(__dirname, 'bytzgo-72f1c-firebase-adminsdk-fbsvc-51cd0be35b.json');
-  if (fs.existsSync(serviceAccountPath)) {
-    const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, 'utf8'));
+  const serviceAccount = loadFirebaseServiceAccount();
+  if (serviceAccount) {
     admin.initializeApp({
-      credential: admin.credential.cert(serviceAccount)
+      credential: admin.credential.cert(serviceAccount as admin.ServiceAccount),
+      projectId: (serviceAccount.project_id as string) || FIREBASE_PROJECT_ID,
     });
     firebaseAdminHasCredentials = true;
-    console.log('Firebase Admin initialized successfully with service account certificate.');
+    console.log(
+      `Firebase Admin initialized (project ${(serviceAccount.project_id as string) || FIREBASE_PROJECT_ID}, FCM enabled).`
+    );
   } else {
     admin.initializeApp({
-      projectId: FIREBASE_PROJECT_ID
+      projectId: FIREBASE_PROJECT_ID,
     });
-    console.warn('Firebase Admin: no service account; Google ID tokens verified via public certs.');
+    console.warn(
+      'Firebase Admin: no service account — set FIREBASE_SERVICE_ACCOUNT_JSON on Render or add backend/firebase-service-account.json (see docs/FIREBASE_PUSH.md).'
+    );
   }
 } catch (err) {
   console.error('Failed to initialize Firebase Admin:', err);
@@ -1292,18 +1330,32 @@ async function sendPushToUserIds(userIds: string[], alert: PushAlert) {
       data: {
         type: alert.type,
         orderId: String(alert.orderId ?? ''),
+        title: alert.title,
+        body: alert.body,
       },
       android: {
         priority: high ? 'high' : 'normal',
+        ttl: high ? 30 * 1000 : 3600 * 1000,
         notification: {
           channelId,
           sound: 'default',
-          priority: high ? ('high' as const) : ('default' as const),
+          priority: high ? ('max' as const) : ('default' as const),
+          visibility: 'public',
+          defaultVibrateTimings: true,
         },
       },
       apns: {
-        headers: { 'apns-priority': high ? '10' : '5' },
-        payload: { aps: { sound: 'default', contentAvailable: true } },
+        headers: {
+          'apns-priority': high ? '10' : '5',
+          'apns-push-type': 'alert',
+        },
+        payload: {
+          aps: {
+            alert: { title: alert.title, body: alert.body },
+            sound: 'default',
+            contentAvailable: true,
+          },
+        },
       },
     });
   } catch (err) {

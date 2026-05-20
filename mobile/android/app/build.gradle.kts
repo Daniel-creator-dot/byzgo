@@ -4,6 +4,7 @@ plugins {
     id("com.android.application")
     id("kotlin-android")
     id("dev.flutter.flutter-gradle-plugin")
+    id("com.google.gms.google-services")
 }
 
 val localProperties = Properties()
@@ -53,7 +54,8 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.bytzgo.bytzgo_mobile"
+        // Must match package_name in android/app/google-services.json (Firebase bytzgo-9bd89).
+        applicationId = "com.example.bytzgo"
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
