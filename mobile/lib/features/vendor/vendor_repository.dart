@@ -83,6 +83,73 @@ class VendorRepository {
     return Product.fromJson(Map<String, dynamic>.from(data));
   }
 
+  Future<String> uploadImage(String filePath) async {
+    final formData = FormData.fromMap({
+      'image': await MultipartFile.fromFile(
+        filePath,
+        filename: 'product.jpg',
+      ),
+    });
+    final res = await _api.dio.post<Map<String, dynamic>>(
+      '/api/upload',
+      data: formData,
+    );
+    final url = res.data?['url']?.toString();
+    if (url == null || url.isEmpty) {
+      throw Exception('Upload failed — no image URL returned');
+    }
+    return url;
+  }
+
+  Future<Product> createProduct({
+    required String name,
+    required String description,
+    required double price,
+    required String category,
+    required String imageUrl,
+  }) async {
+    final res = await _api.dio.post<Map<String, dynamic>>(
+      '/api/products',
+      data: {
+        'name': name,
+        'description': description,
+        'price': price,
+        'category': category,
+        'image_url': imageUrl,
+      },
+    );
+    final data = res.data;
+    if (data == null) throw Exception('Empty product response');
+    return Product.fromJson(Map<String, dynamic>.from(data));
+  }
+
+  Future<Product> updateProduct({
+    required String productId,
+    required String name,
+    required String description,
+    required double price,
+    required String category,
+    required String imageUrl,
+  }) async {
+    final res = await _api.dio.patch<Map<String, dynamic>>(
+      '/api/products/$productId',
+      data: {
+        'name': name,
+        'description': description,
+        'price': price,
+        'category': category,
+        'image_url': imageUrl,
+      },
+    );
+    final data = res.data;
+    if (data == null) throw Exception('Empty product response');
+    return Product.fromJson(Map<String, dynamic>.from(data));
+  }
+
+  Future<void> deleteProduct(String productId) async {
+    await _api.dio.delete('/api/products/$productId');
+  }
+
   static String errorMessage(Object err) {
     if (err is DioException) {
       return ApiClient.messageFromDio(err, 'Vendor request failed');

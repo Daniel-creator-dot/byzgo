@@ -10,6 +10,7 @@ class Product {
     this.category,
     this.imageUrl,
     this.isAvailable = true,
+    this.isApproved = true,
   });
 
   final String id;
@@ -20,6 +21,7 @@ class Product {
   final String? category;
   final String? imageUrl;
   final bool isAvailable;
+  final bool isApproved;
 
   factory Product.fromJson(Map<String, dynamic> json) {
     return Product(
@@ -31,6 +33,7 @@ class Product {
       category: json['category']?.toString(),
       imageUrl: (json['imageUrl'] ?? json['image_url'])?.toString(),
       isAvailable: json['is_available'] != false && json['isAvailable'] != false,
+      isApproved: json['is_approved'] == true || json['isApproved'] == true,
     );
   }
 }

@@ -2696,15 +2696,29 @@ app.get('/api/products', async (req, res) => {
 
 app.post('/api/products', authenticateToken, async (req: any, res) => {
   if (req.user.role !== 'vendor' && req.user.role !== 'admin') return res.sendStatus(403);
-  const { name, description, price, category, image_url } = req.body;
+  const { name, description, price, category, image_url, vendor_id: bodyVendorId } = req.body;
   try {
-    const userRes = await pool.query('SELECT status FROM users WHERE id = $1', [req.user.id]);
-    if (userRes.rows[0]?.status !== 'active' && req.user.role !== 'admin') {
-      return res.status(403).json({ message: 'Your account is pending approval.' });
+    let vendorId = req.user.id;
+    if (req.user.role === 'admin') {
+      const target = bodyVendorId ?? req.user.id;
+      const vCheck = await pool.query(
+        `SELECT id, status FROM users WHERE id = $1 AND role = 'vendor'`,
+        [target]
+      );
+      if (!vCheck.rows[0]) {
+        return res.status(400).json({ message: 'Invalid vendor_id' });
+      }
+      vendorId = vCheck.rows[0].id;
+    } else {
+      const userRes = await pool.query('SELECT status FROM users WHERE id = $1', [req.user.id]);
+      const st = userRes.rows[0]?.status;
+      if (st === 'rejected' || st === 'disabled') {
+        return res.status(403).json({ message: 'Your store account cannot add menu items.' });
+      }
     }
     const result = await pool.query(
       'INSERT INTO products (vendor_id, name, description, price, category, image_url) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
-      [req.user.id, name, description, price, category, image_url]
+      [vendorId, name, description, price, category, image_url]
     );
     res.json(result.rows[0]);
   } catch (err) {
@@ -2717,9 +2731,20 @@ app.patch('/api/products/:id', authenticateToken, async (req: any, res) => {
   const { name, description, price, category, image_url, is_available } = req.body;
   const { id } = req.params;
   try {
-    const userRes = await pool.query('SELECT status FROM users WHERE id = $1', [req.user.id]);
-    if (userRes.rows[0]?.status !== 'active' && req.user.role !== 'admin') {
-      return res.status(403).json({ message: 'Your account is pending approval.' });
+    const productRes = await pool.query('SELECT vendor_id FROM products WHERE id = $1', [id]);
+    if (!productRes.rows[0]) {
+      return res.status(404).json({ message: 'Product not found' });
+    }
+    const ownerVendorId = productRes.rows[0].vendor_id;
+    if (req.user.role === 'vendor') {
+      if (ownerVendorId !== req.user.id) {
+        return res.status(403).json({ message: 'Not authorized to edit this product' });
+      }
+      const userRes = await pool.query('SELECT status FROM users WHERE id = $1', [req.user.id]);
+      const st = userRes.rows[0]?.status;
+      if (st === 'rejected' || st === 'disabled') {
+        return res.status(403).json({ message: 'Your store account cannot edit menu items.' });
+      }
     }
     const result = await pool.query(
       `UPDATE products SET 
@@ -2731,7 +2756,7 @@ app.patch('/api/products/:id', authenticateToken, async (req: any, res) => {
         is_available = COALESCE($6, is_available)
        WHERE id = $7 AND vendor_id = $8
        RETURNING *`,
-      [name, description, price, category, image_url, is_available, id, req.user.id]
+      [name, description, price, category, image_url, is_available, id, ownerVendorId]
     );
     if (result.rows[0]) {
       res.json(result.rows[0]);
@@ -2792,6 +2817,100 @@ app.delete('/api/products/:id', authenticateToken, async (req: any, res) => {
     res.json({ success: true, message: 'Product deleted' });
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Admin vendor accounts (create stores for merchants)
+app.get('/api/admin/vendors', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'admin') return res.sendStatus(403);
+  try {
+    const result = await pool.query(
+      `SELECT u.id, u.name, u.email, u.phone, u.status, u.shop_category, u.address, u.region,
+              u.created_at,
+              (SELECT COUNT(*)::int FROM products p WHERE p.vendor_id = u.id) AS product_count,
+              (SELECT COUNT(*)::int FROM products p WHERE p.vendor_id = u.id AND p.is_approved = false) AS pending_products
+       FROM users u
+       WHERE u.role = 'vendor'
+       ORDER BY u.created_at DESC`
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Admin vendors list error:', err);
+    res.status(500).json({ message: 'Failed to load vendors' });
+  }
+});
+
+app.post('/api/admin/vendors', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'admin') return res.sendStatus(403);
+  const {
+    name,
+    email,
+    password,
+    phone,
+    shop_category,
+    address,
+    lat,
+    lng,
+    region,
+    activate,
+  } = req.body;
+  if (!name || !email || !password) {
+    return res.status(400).json({ message: 'Name, email, and password are required' });
+  }
+  if (String(password).length < 6) {
+    return res.status(400).json({ message: 'Password must be at least 6 characters' });
+  }
+  let shopCat = 'food';
+  if (shop_category != null && String(shop_category).trim()) {
+    const c = String(shop_category).trim().toLowerCase();
+    if (!(SHOP_CATEGORIES as readonly string[]).includes(c)) {
+      return res.status(400).json({
+        message: `shop_category must be one of: ${SHOP_CATEGORIES.join(', ')}`,
+      });
+    }
+    shopCat = c;
+  }
+  let storePhone: string | null = null;
+  if (phone) {
+    if (!isValidGhanaPhone(phone)) {
+      return res.status(400).json({ message: 'Enter a valid Ghana phone (e.g. 0247904675).' });
+    }
+    storePhone = formatGhanaPhone(phone);
+  }
+  const status = activate === false ? 'pending' : 'active';
+  try {
+    const hashedPassword = await bcrypt.hash(String(password), 10);
+    const result = await pool.query(
+      `INSERT INTO users (name, email, password, role, status, phone, shop_category, address, lat, lng, region)
+       VALUES ($1, $2, $3, 'vendor', $4, $5, $6, $7, $8, $9, $10)
+       RETURNING id, name, email, role, balance, phone, status, shop_category, address, lat, lng, region, created_at`,
+      [
+        String(name).trim(),
+        String(email).trim().toLowerCase(),
+        hashedPassword,
+        status,
+        storePhone,
+        shopCat,
+        address ?? null,
+        lat ?? null,
+        lng ?? null,
+        region ?? null,
+      ]
+    );
+    const user = result.rows[0];
+    res.status(201).json({
+      user,
+      message:
+        status === 'active'
+          ? 'Store account created. The merchant can log in on the app with email or phone and upload menu items.'
+          : 'Store account created (pending). Approve the account before they can add menu items.',
+    });
+  } catch (err: any) {
+    console.error('Admin create vendor error:', err);
+    if (err?.code === '23505') {
+      return res.status(400).json({ message: 'Email or phone already registered' });
+    }
+    res.status(500).json({ message: 'Failed to create vendor account' });
   }
 });
 

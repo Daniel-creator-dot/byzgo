@@ -37,6 +37,14 @@ npm run create:admin
 
 Default login: `admin@bytzgo.net` / `Admin@2026`
 
+## Create vendor (store) accounts
+
+**Mobile admin app:** open **Stores** tab → **Create store account**. Enter shop name, email, Ghana phone, password, and category. Turn on **Activate immediately** so the merchant can log in on the app as **Vendor** and upload menu photos (Menu tab → Add item).
+
+**API:** `POST /api/admin/vendors` (admin token) with `name`, `email`, `password`, optional `phone`, `shop_category`, `activate` (default active).
+
+Merchants sign in on the Flutter app with the credentials you share. New menu items need admin product approval before they appear to customers in Shops.
+
 Custom email/password:
 
 ```bash

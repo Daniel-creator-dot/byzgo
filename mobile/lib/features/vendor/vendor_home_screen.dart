@@ -10,7 +10,9 @@ import '../../shared/theme.dart';
 import '../../shared/widgets/bytz_hero_header.dart';
 import '../../shared/widgets/ops_stat_card.dart';
 import '../auth/auth_repository.dart';
+import 'vendor_product_editor.dart';
 import 'vendor_repository.dart';
+import '../../shared/data_url_image.dart';
 
 enum _VendorTab { overview, stock, orders, store }
 
@@ -99,13 +101,54 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
     }
   }
 
+  Future<void> _openAddProduct() async {
+    final user = context.read<Session>().user;
+    if (user?.status == 'rejected' || user?.status == 'disabled') {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Your store account cannot add menu items'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+    final saved = await showVendorProductEditor(context);
+    if (saved == true) {
+      await _load();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Item saved — pending admin approval for customers'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
+  Future<void> _openEditProduct(Product p) async {
+    final saved = await showVendorProductEditor(context, existing: p);
+    if (saved == true) await _load();
+  }
+
   @override
   Widget build(BuildContext context) {
     final user = context.watch<Session>().user!;
+    final vendorActive = user.status == 'active';
     final bottomPad = MediaQuery.paddingOf(context).bottom;
 
     return Scaffold(
       backgroundColor: const Color(0xFF020617),
+      floatingActionButton: _tab == _VendorTab.stock &&
+              user.status != 'rejected' &&
+              user.status != 'disabled'
+          ? FloatingActionButton.extended(
+              onPressed: _openAddProduct,
+              backgroundColor: BytzGoTheme.accent,
+              foregroundColor: const Color(0xFF022C22),
+              icon: const Icon(Icons.add_photo_alternate_outlined),
+              label: const Text('Add item'),
+            )
+          : null,
       body: SafeArea(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -166,6 +209,10 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
                           child: ListView(
                             padding: EdgeInsets.fromLTRB(16, 8, 16, 100 + bottomPad),
                             children: [
+                              if (!vendorActive) ...[
+                                _pendingBanner(),
+                                const SizedBox(height: 12),
+                              ],
                               if (_tab == _VendorTab.overview) ..._overview(user.name),
                               if (_tab == _VendorTab.stock) ..._stock(),
                               if (_tab == _VendorTab.orders) ..._orders(),
@@ -268,7 +315,7 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
       case _VendorTab.overview:
         return 'Overview';
       case _VendorTab.stock:
-        return 'Stock';
+        return 'Menu';
       case _VendorTab.orders:
         return 'Orders';
       case _VendorTab.store:
@@ -326,25 +373,47 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
     ];
   }
 
+  Widget _pendingBanner() => Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF59E0B).withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: const Color(0xFFF59E0B).withValues(alpha: 0.4)),
+        ),
+        child: const Row(
+          children: [
+            Icon(Icons.hourglass_top, color: Color(0xFFFBBF24)),
+            SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                'Store pending approval. Add your menu now — customers see items after admin activates your account.',
+                style: TextStyle(color: Colors.white70, fontSize: 12, height: 1.35),
+              ),
+            ),
+          ],
+        ),
+      );
+
   List<Widget> _stock() {
     final products = _dash?.products ?? [];
     final inStock = products.where((p) => p.isAvailable).length;
+    final pending = _dash?.stats.pendingApproval ?? 0;
     return [
       BytzHeroHeader(
-        kicker: 'Inventory',
-        title: 'Stock control',
+        kicker: 'Your menu',
+        title: 'Items & photos',
         assetPath: 'assets/branding/hero_delivery.png',
         height: 110,
       ),
       const SizedBox(height: 12),
       Text(
-        '$inStock of ${products.length} items available',
+        '$inStock of ${products.length} in stock · $pending awaiting approval',
         style: TextStyle(color: Colors.white.withValues(alpha: 0.55), fontSize: 12),
       ),
       const SizedBox(height: 12),
       ...products.map((p) => _productTile(p)),
       if (products.isEmpty)
-        _emptyCard('Add products on bytzgo.net vendor portal or contact admin'),
+        _emptyCard('Tap “Add item” to upload a photo, price, and description'),
     ];
   }
 
@@ -398,7 +467,7 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
       _infoRow('Address', user.address?.toString() ?? 'Not set'),
       const SizedBox(height: 12),
       Text(
-        'Full menu editing is on the web vendor portal. Use Stock tab to mark items in or out.',
+        'Use the Menu tab to add photos and prices. Toggle stock on/off anytime.',
         style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 11),
       ),
     ];
@@ -438,22 +507,59 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
           color: p.isAvailable ? const Color(0xFF1E293B) : const Color(0xFFF59E0B),
         ),
       ),
-      child: ListTile(
-        title: Text(
-          p.name,
-          style: const TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.w700,
+      child: InkWell(
+        onTap: () => _openEditProduct(p),
+        borderRadius: BorderRadius.circular(16),
+        child: Padding(
+          padding: const EdgeInsets.all(10),
+          child: Row(
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(10),
+                child: SizedBox(
+                  width: 56,
+                  height: 56,
+                  child: dataUrlImage(p.imageUrl, height: 56),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      p.name,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    Text(
+                      '${p.category ?? 'Item'} · ${formatCedis(p.price)}',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.5),
+                        fontSize: 12,
+                      ),
+                    ),
+                    if (!p.isApproved)
+                      const Text(
+                        'Pending approval',
+                        style: TextStyle(
+                          color: Color(0xFFFBBF24),
+                          fontSize: 10,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              Switch(
+                value: p.isAvailable,
+                activeThumbColor: BytzGoTheme.accent,
+                onChanged: (_) => _toggleStock(p),
+              ),
+            ],
           ),
-        ),
-        subtitle: Text(
-          '${p.category ?? 'Item'} · ${formatCedis(p.price)}',
-          style: TextStyle(color: Colors.white.withValues(alpha: 0.5), fontSize: 12),
-        ),
-        trailing: Switch(
-          value: p.isAvailable,
-          activeThumbColor: BytzGoTheme.accent,
-          onChanged: (_) => _toggleStock(p),
         ),
       ),
     );
