@@ -37,7 +37,7 @@ The API must send FCM using a **Firebase Admin service account** from the **same
 4. **Render** — pick one:
 
    **Option A — Secret file (recommended)**  
-   - Dashboard → **byzgo** → **Environment** → **Secret Files** → **Add**  
+   - Dashboard → **byzgo-api** ([web service](https://dashboard.render.com/web/srv-d86e8qv7f7vs7395kgrg)) → **Environment** → **Secret Files** → **Add**  
    - Upload `bytzgo-9bd89-firebase-adminsdk-*.json`  
    - Filename on disk: `firebase-service-account.json`  
    - Add env var: `FIREBASE_SERVICE_ACCOUNT_PATH=/etc/secrets/firebase-service-account.json`

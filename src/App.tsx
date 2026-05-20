@@ -1685,6 +1685,20 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
   );
 }
 
+function isPharmacyShop(vendor: { name?: string; shop_category?: string } | null) {
+  if (!vendor) return false;
+  if ((vendor.shop_category || '').toLowerCase() === 'pharmacy') return true;
+  return /prime\s*care/i.test(vendor.name || '');
+}
+
+function productFallbackImage(item: { image_url?: string; category?: string; name?: string }, vendor: { name?: string; shop_category?: string } | null) {
+  if (item.image_url?.trim()) return item.image_url.trim();
+  if (isPharmacyShop(vendor)) return '/primecare_logo.png';
+  const cat = `${item.category || ''} ${item.name || ''}`.toLowerCase();
+  if (/pharm|medic|capsule|tablet|drug|analges|vitamin|syrup/.test(cat)) return '/primecare_logo.png';
+  return 'https://images.unsplash.com/photo-1567333328061-6d7aae8e2e6b?auto=format&fit=crop&q=80&w=400';
+}
+
 // Location Autocomplete Component (Ghana-only Places search)
 // REST OF THE VIEW COMPONENTS (CustomerView, VendorView, etc.) 
 // UPDATED TO USE REAL DATA FROM PROPS AND API
@@ -2143,7 +2157,7 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
                    <div key={item.id} className="bg-slate-900/90 p-4 sm:p-6 rounded-[2rem] sm:rounded-[2.5rem] border border-slate-800 hover:shadow-2xl hover:shadow-brand-blue/10 transition-all group flex flex-col justify-between">
                       <div>
                         <div className="h-40 sm:h-56 bg-slate-800 rounded-2xl sm:rounded-3xl mb-4 sm:mb-6 flex items-center justify-center relative overflow-hidden group-hover:scale-105 transition-transform">
-                          <img src={item.image_url || 'https://images.unsplash.com/photo-1567333328061-6d7aae8e2e6b?auto=format&fit=crop&q=80&w=400'} alt={item.name} className="w-full h-full object-cover" />
+                          <img src={productFallbackImage(item, selectedVendor)} alt={item.name} className="w-full h-full object-contain p-2 bg-slate-800" />
                           <span className="absolute top-3 left-3 sm:top-4 sm:left-4 bg-white/90 backdrop-blur-md px-3 sm:px-4 py-1 rounded-full text-[8px] sm:text-[10px] font-black uppercase tracking-widest text-slate-400 border border-slate-100">{item.category}</span>
                         </div>
                         <h4 className="font-black text-xl sm:text-2xl text-white tracking-tight leading-tight mb-1 sm:mb-2">{item.name}</h4>

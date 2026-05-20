@@ -7,6 +7,7 @@ import '../../models/vendor.dart';
 import '../../shared/format.dart';
 import '../../shared/rider_trip.dart';
 import '../../shared/theme.dart';
+import '../../shared/widgets/product_tile_image.dart';
 import '../../shared/widgets/sheet_theme_scope.dart';
 import '../orders/orders_repository.dart';
 import 'customer_shop_checkout_screen.dart';
@@ -157,9 +158,27 @@ class _CustomerVendorMenuScreenState extends State<CustomerVendorMenuScreen> {
         backgroundColor: BytzGoTheme.sheetBg,
         foregroundColor: BytzGoTheme.sheetText,
         elevation: 0,
-        title: Text(
-          v.name,
-          style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 18),
+        title: Row(
+          children: [
+            if (ProductTileImage.isPrimeCareVendor(v)) ...[
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: Image.asset(
+                  'assets/branding/primecare_logo.png',
+                  width: 32,
+                  height: 32,
+                  fit: BoxFit.contain,
+                ),
+              ),
+              const SizedBox(width: 10),
+            ],
+            Expanded(
+              child: Text(
+                v.name,
+                style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 18),
+              ),
+            ),
+          ],
         ),
         actions: [
           if (hasCart)
@@ -239,6 +258,7 @@ class _CustomerVendorMenuScreenState extends State<CustomerVendorMenuScreen> {
                                   ),
                                   ...entry.value.map(
                                     (p) => _ProductTile(
+                                      vendor: v,
                                       product: p,
                                       quantity: _cart[p.id] ?? 0,
                                       onAdd: () => _changeQty(p, 1),
@@ -298,12 +318,14 @@ class _CustomerVendorMenuScreenState extends State<CustomerVendorMenuScreen> {
 
 class _ProductTile extends StatelessWidget {
   const _ProductTile({
+    required this.vendor,
     required this.product,
     required this.quantity,
     required this.onAdd,
     required this.onRemove,
   });
 
+  final Vendor vendor;
   final Product product;
   final int quantity;
   final VoidCallback onAdd;
@@ -321,7 +343,7 @@ class _ProductTile extends StatelessWidget {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _ProductImage(imageUrl: product.imageUrl),
+              ProductTileImage(vendor: vendor, product: product),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
@@ -379,45 +401,6 @@ class _ProductTile extends StatelessWidget {
           ),
         ),
       ),
-    );
-  }
-}
-
-class _ProductImage extends StatelessWidget {
-  const _ProductImage({this.imageUrl});
-
-  final String? imageUrl;
-
-  @override
-  Widget build(BuildContext context) {
-    final url = imageUrl?.trim();
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(12),
-      child: Container(
-        width: 72,
-        height: 72,
-        color: BytzGoTheme.accent.withValues(alpha: 0.12),
-        child: url != null && url.isNotEmpty
-            ? Image.network(
-                url,
-                width: 72,
-                height: 72,
-                fit: BoxFit.cover,
-                errorBuilder: (_, __, ___) => const _PlaceholderIcon(),
-              )
-            : const _PlaceholderIcon(),
-      ),
-    );
-  }
-}
-
-class _PlaceholderIcon extends StatelessWidget {
-  const _PlaceholderIcon();
-
-  @override
-  Widget build(BuildContext context) {
-    return const Center(
-      child: Icon(Icons.restaurant, color: BytzGoTheme.accentDark, size: 32),
     );
   }
 }

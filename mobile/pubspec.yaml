@@ -37,6 +37,7 @@ flutter:
   assets:
     - assets/branding/app_icon.png
     - assets/branding/app_logo.png
+    - assets/branding/primecare_logo.png
     - assets/branding/preloader.png
     - assets/branding/hero_login.png
     - assets/branding/hero_delivery.png
