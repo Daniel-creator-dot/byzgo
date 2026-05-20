@@ -84,47 +84,8 @@ const io = new Server(httpServer, {
 app.use(cors());
 app.use(express.json());
 
-function pgPoolSsl(connectionString: string | undefined): false | { rejectUnauthorized: boolean } {
-  if (process.env.PG_SSL === 'false') return false;
-  if (process.env.PG_SSL === 'true') return { rejectUnauthorized: false };
-  const url = connectionString || '';
-  if (
-    process.env.NODE_ENV === 'production' ||
-    /supabase\.com|render\.com|neon\.tech|aws\.amazonaws\.com|pooler\./i.test(url)
-  ) {
-    return { rejectUnauthorized: false };
-  }
-  return false;
-}
-
-const databaseUrl = process.env.DATABASE_URL?.trim();
-if (!databaseUrl) {
-  console.error('DATABASE_URL is missing — auth and data routes will return errors until it is set.');
-}
-if (!process.env.JWT_SECRET?.trim()) {
-  console.error('JWT_SECRET is missing — login tokens cannot be issued.');
-}
-
-// Multer config for in-memory processing (images stored in DB as Base64)
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
-});
-
-const pool = new Pool({
-  connectionString: databaseUrl,
-  ssl: pgPoolSsl(databaseUrl),
-  connectionTimeoutMillis: 15000,
-});
-
-app.get('/api/health', async (_req, res) => {
-  try {
-    await pool.query('SELECT 1');
-    res.json({ ok: true, db: true, service: 'bytzgo-api', client: 'flutter' });
-  } catch (err) {
-    console.error('Health DB check failed:', err);
-    res.status(503).json({ ok: false, db: false, service: 'bytzgo-api', client: 'flutter' });
-  }
+app.get('/api/health', (_req, res) => {
+  res.json({ ok: true, service: 'bytzgo-api', client: 'flutter' });
 });
 
 app.get('/', (_req, res) => {
@@ -133,6 +94,19 @@ app.get('/', (_req, res) => {
     client: 'Flutter mobile app (Android/iOS)',
     health: '/api/health',
   });
+});
+
+
+
+// Multer config for in-memory processing (images stored in DB as Base64)
+const upload = multer({ 
+  storage: multer.memoryStorage(), 
+  limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
+});
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.DATABASE_URL?.includes('supabase.com') ? { rejectUnauthorized: false } : false
 });
 
 // Helper to get system settings from DB
@@ -529,25 +503,88 @@ function generateDeliveryCode(): string {
 
 const deliveryCodeAttempts = new Map<string, { attempts: number; lockedUntil: number }>();
 
+const TRIP_CONTACT_STATUSES = new Set(['pending', 'preparing', 'ready', 'picked_up', 'arrived']);
+
+function tripAllowsContact(order: any): boolean {
+  return Boolean(order?.rider_id) && TRIP_CONTACT_STATUSES.has(order.status);
+}
+
 function sanitizeOrderForRole(order: any, role: string, userId: string) {
   if (!order) return order;
   const o = { ...order };
   if (role !== 'customer' || o.customer_id !== userId) {
     delete o.delivery_code;
   }
+  if (o.customer_name) o.customerName = o.customer_name;
+  if (o.rider_name) o.riderName = o.rider_name;
+
+  if (tripAllowsContact(o)) {
+    if (role === 'customer' && o.customer_id === userId && o.rider_phone) {
+      o.riderPhone = o.rider_phone;
+    }
+    if (role === 'rider' && o.rider_id === userId && o.customer_phone) {
+      o.customerPhone = o.customer_phone;
+    }
+  }
+
+  delete o.customer_phone;
+  delete o.rider_phone;
+  delete o.customer_name;
+  delete o.rider_name;
   return o;
 }
+
+const ORDER_CONTACT_JOINS = `
+  LEFT JOIN users cu ON cu.id = o.customer_id
+  LEFT JOIN users ru ON ru.id = o.rider_id`;
+const ORDER_CONTACT_SELECT = `
+  cu.name AS customer_name, cu.phone AS customer_phone,
+  ru.name AS rider_name, ru.phone AS rider_phone`;
 
 function isCustomerPaymentReady(order: any): boolean {
   if (order.payment_status === 'paid') return true;
   return ['cash', 'wallet', 'paystack'].includes(order.customer_payment_ack);
 }
 
-function broadcastOrderUpdated(order: any) {
-  const sanitized = { ...order, delivery_code: undefined };
-  io.emit('order:updated', sanitized);
-  if (order.customer_id) {
-    io.to(order.customer_id).emit('order:updated', order);
+async function loadOrderWithContacts(orderId: string) {
+  const r = await pool.query(
+    `SELECT o.*, ${ORDER_CONTACT_SELECT}
+     FROM orders o
+     ${ORDER_CONTACT_JOINS}
+     WHERE o.id = $1`,
+    [orderId]
+  );
+  return r.rows[0];
+}
+
+async function broadcastOrderUpdated(order: any) {
+  let full = order;
+  if (order?.id && order.customer_phone === undefined && order.rider_phone === undefined) {
+    try {
+      const loaded = await loadOrderWithContacts(order.id);
+      if (loaded) full = loaded;
+    } catch {
+      /* keep original row */
+    }
+  }
+  const publicPayload = { ...full, delivery_code: undefined };
+  delete publicPayload.customer_phone;
+  delete publicPayload.rider_phone;
+  delete publicPayload.customerPhone;
+  delete publicPayload.riderPhone;
+  io.emit('order:updated', publicPayload);
+
+  if (full.customer_id) {
+    io.to(full.customer_id).emit(
+      'order:updated',
+      sanitizeOrderForRole(full, 'customer', full.customer_id)
+    );
+  }
+  if (full.rider_id) {
+    io.to(full.rider_id).emit(
+      'order:updated',
+      sanitizeOrderForRole(full, 'rider', full.rider_id)
+    );
   }
 }
 
@@ -1360,30 +1397,18 @@ app.post('/api/auth/register', async (req, res) => {
 
 app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body;
-  const jwtSecret = process.env.JWT_SECRET?.trim();
-  if (!jwtSecret) {
-    return res.status(503).json({ message: 'Server misconfigured (JWT). Contact support.' });
-  }
-  if (!databaseUrl) {
-    return res.status(503).json({ message: 'Database unavailable. Try again shortly.' });
-  }
   try {
     const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
     const user = result.rows[0];
     if (user && user.password && await bcrypt.compare(password, user.password)) {
-      const { password: _pw, ...userWithoutPassword } = user;
-      const token = jwt.sign(userWithoutPassword, jwtSecret);
+      const { password, ...userWithoutPassword } = user;
+      const token = jwt.sign(userWithoutPassword, process.env.JWT_SECRET as string);
       res.json({ user: userWithoutPassword, token });
     } else {
       res.status(401).json({ message: 'Invalid credentials' });
     }
   } catch (err) {
-    console.error('Login failed:', err);
-    const msg =
-      err instanceof Error && /connect|timeout|SSL|ECONNREFUSED|ENOTFOUND/i.test(err.message)
-        ? 'Database unavailable. Try again shortly.'
-        : 'Server error';
-    res.status(500).json({ message: msg });
+    res.status(500).json({ message: 'Server error' });
   }
 });
 
@@ -2019,14 +2044,14 @@ app.patch('/api/admin/users/:id/status', authenticateToken, async (req: any, res
 // Order Routes
 app.get('/api/orders', authenticateToken, async (req: any, res) => {
   try {
-    let query = 'SELECT * FROM orders';
+    let query = `SELECT o.*, ${ORDER_CONTACT_SELECT} FROM orders o ${ORDER_CONTACT_JOINS}`;
     const params: any[] = [];
 
     if (req.user.role === 'customer') {
-      query += ' WHERE customer_id = $1';
+      query += ' WHERE o.customer_id = $1';
       params.push(req.user.id);
     } else if (req.user.role === 'vendor') {
-      query += " WHERE vendor_id = $1"; 
+      query += ' WHERE o.vendor_id = $1';
       params.push(req.user.id);
     } else if (req.user.role === 'rider') {
       const userRes = await pool.query('SELECT status FROM users WHERE id = $1', [req.user.id]);
@@ -2035,8 +2060,10 @@ app.get('/api/orders', authenticateToken, async (req: any, res) => {
       }
 
       query = `
-        SELECT o.*, odo.expires_at AS rider_offer_expires_at, odo.wave AS rider_offer_wave
+        SELECT o.*, odo.expires_at AS rider_offer_expires_at, odo.wave AS rider_offer_wave,
+          ${ORDER_CONTACT_SELECT}
         FROM orders o
+        ${ORDER_CONTACT_JOINS}
         LEFT JOIN order_dispatch_offers odo ON odo.order_id = o.id
           AND odo.rider_id = $1
           AND odo.status = 'offered'
@@ -2053,7 +2080,7 @@ app.get('/api/orders', authenticateToken, async (req: any, res) => {
     }
 
     if (req.user.role !== 'rider') {
-      query += ' ORDER BY created_at DESC';
+      query += ' ORDER BY o.created_at DESC';
     }
 
     const result = await pool.query(query, params);
@@ -2855,7 +2882,8 @@ io.on('connection', (socket) => {
 
 /** Production: serve Vite build so bytzgo.net serves web + /api (Flutter uses same host). */
 function attachWebApp() {
-  const shouldServe = process.env.SERVE_WEB === 'true';
+  const shouldServe =
+    process.env.SERVE_WEB === 'true' || process.env.NODE_ENV === 'production';
   if (!shouldServe) return;
 
   const distDir = path.join(__dirname, '..', 'dist');
@@ -2865,10 +2893,12 @@ function attachWebApp() {
     return;
   }
 
-  console.log(`BytzGo: serving web app from ${distDir} (admin: /admin, vendor: /vendor)`);
+  console.log(`BytzGo: serving web app from ${distDir}`);
   app.use(express.static(distDir, { maxAge: '1h', index: false }));
-  // SPA fallback — /admin, /vendor, /motor, etc.
-  app.get(/^\/(?!api|socket\.io|uploads).*/, (_req, res) => {
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api') || req.path.startsWith('/socket.io')) {
+      return next();
+    }
     res.sendFile(indexHtml);
   });
 }

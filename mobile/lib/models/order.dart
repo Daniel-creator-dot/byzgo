@@ -57,6 +57,9 @@ class Order {
     this.deliveryCode,
 
     this.rating,
+    this.customerPhone,
+    this.riderPhone,
+    this.riderName,
 
   });
 
@@ -112,7 +115,11 @@ class Order {
 
   final int? rating;
 
+  final String? customerPhone;
 
+  final String? riderPhone;
+
+  final String? riderName;
 
   bool get isCourier => orderType == 'courier';
 
@@ -191,6 +198,12 @@ class Order {
       deliveryCode: json['delivery_code']?.toString(),
 
       rating: parseJsonInt(json['rating']),
+
+      customerPhone: (json['customerPhone'] ?? json['customer_phone'])?.toString(),
+
+      riderPhone: (json['riderPhone'] ?? json['rider_phone'])?.toString(),
+
+      riderName: (json['riderName'] ?? json['rider_name'])?.toString(),
 
     );
 

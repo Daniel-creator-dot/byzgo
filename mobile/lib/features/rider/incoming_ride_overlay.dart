@@ -1,25 +1,27 @@
 import 'dart:async';
-
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import '../../models/order.dart';
+import '../../models/vendor.dart';
 import '../../shared/format.dart';
 import '../../shared/rider_trip.dart';
 import '../../shared/theme.dart';
 import '../../shared/widgets/ride_ui.dart';
+import 'incoming_ride_ring.dart';
 
-/// Full-screen incoming job alert (parity with web `IncomingRideCallModal`).
+/// Full-screen incoming call UI (parity with web `IncomingRideCallModal`).
 class IncomingRideOverlay extends StatefulWidget {
   const IncomingRideOverlay({
     super.key,
     required this.order,
+    required this.vendors,
     required this.onAccept,
     required this.onDecline,
     this.accepting = false,
   });
 
   final Order order;
+  final List<Vendor> vendors;
   final VoidCallback onAccept;
   final VoidCallback onDecline;
   final bool accepting;
@@ -28,14 +30,25 @@ class IncomingRideOverlay extends StatefulWidget {
   State<IncomingRideOverlay> createState() => _IncomingRideOverlayState();
 }
 
-class _IncomingRideOverlayState extends State<IncomingRideOverlay> {
+class _IncomingRideOverlayState extends State<IncomingRideOverlay>
+    with TickerProviderStateMixin {
   Timer? _tick;
   int? _secs;
+  late final AnimationController _pulseCtrl;
+  late final AnimationController _phoneCtrl;
 
   @override
   void initState() {
     super.initState();
-    HapticFeedback.heavyImpact();
+    IncomingRideRing.start();
+    _pulseCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 2000),
+    )..repeat();
+    _phoneCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1200),
+    )..repeat(reverse: true);
     _syncSecs();
     _tick = Timer.periodic(const Duration(seconds: 1), (_) => _onTick());
   }
@@ -44,7 +57,7 @@ class _IncomingRideOverlayState extends State<IncomingRideOverlay> {
     if (!mounted) return;
     final secs = offerSecondsRemaining(widget.order);
     if (secs != null && secs <= 0) {
-      widget.onDecline();
+      _handleDecline();
       return;
     }
     setState(() => _secs = secs);
@@ -54,131 +67,255 @@ class _IncomingRideOverlayState extends State<IncomingRideOverlay> {
     _secs = offerSecondsRemaining(widget.order);
   }
 
+  void _handleDecline() {
+    IncomingRideRing.stop();
+    widget.onDecline();
+  }
+
+  void _handleAccept() {
+    IncomingRideRing.stop();
+    widget.onAccept();
+  }
+
   @override
   void dispose() {
     _tick?.cancel();
+    _pulseCtrl.dispose();
+    _phoneCtrl.dispose();
+    IncomingRideRing.stop();
     super.dispose();
+  }
+
+  String get _pickupLabel {
+    final order = widget.order;
+    if (order.isCourier) {
+      return order.pickupAddress ?? order.pickup ?? 'Pickup location';
+    }
+    for (final v in widget.vendors) {
+      if (v.id == order.vendorId) {
+        return v.name.isNotEmpty ? v.name : (v.address ?? 'Vendor pickup');
+      }
+    }
+    return 'Vendor pickup';
   }
 
   @override
   Widget build(BuildContext context) {
     final order = widget.order;
     final fee = order.deliveryFee ?? order.total;
+    final ttl = _secs ?? 30;
+    final progress = ttl > 0 ? (ttl / 30.0).clamp(0.0, 1.0) : 0.0;
 
     return Material(
-      color: Colors.black.withValues(alpha: 0.72),
+      color: const Color(0xFF020617).withValues(alpha: 0.96),
       child: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            children: [
-              const Spacer(),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(24),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF0F172A),
-                  borderRadius: BorderRadius.circular(28),
-                  border: Border.all(color: BytzGoTheme.accent.withValues(alpha: 0.5), width: 2),
-                  boxShadow: [
-                    BoxShadow(
-                      color: BytzGoTheme.accent.withValues(alpha: 0.25),
-                      blurRadius: 32,
-                      spreadRadius: 4,
-                    ),
-                  ],
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Row(
-                      children: [
-                        const Icon(Icons.bolt, color: BytzGoTheme.warning, size: 28),
-                        const SizedBox(width: 10),
-                        const Text(
-                          'NEW RIDE',
-                          style: TextStyle(
-                            color: BytzGoTheme.warning,
-                            fontWeight: FontWeight.w900,
-                            fontSize: 14,
-                            letterSpacing: 1.2,
+        child: Stack(
+          children: [
+            ...List.generate(3, (i) {
+              return AnimatedBuilder(
+                animation: _pulseCtrl,
+                builder: (context, _) {
+                  final t = (_pulseCtrl.value + i * 0.33) % 1.0;
+                  final size = 120.0 + t * 200;
+                  return Positioned.fill(
+                    child: Center(
+                      child: Container(
+                        width: size,
+                        height: size,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: BytzGoTheme.accent.withValues(alpha: (1 - t) * 0.45),
+                            width: 2,
                           ),
                         ),
-                        const Spacer(),
-                        if (_secs != null)
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                            decoration: BoxDecoration(
-                              color: BytzGoTheme.warning.withValues(alpha: 0.2),
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: Text(
-                              '${_secs}s',
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w900,
-                                color: BytzGoTheme.warning,
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                    Text(
-                      formatCedis(fee),
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 36,
-                        fontWeight: FontWeight.w900,
                       ),
                     ),
-                    if (order.isCourier && order.pickup != null) ...[
-                      const SizedBox(height: 12),
-                      Text('Pickup: ${order.pickup}', style: _body),
-                    ],
-                    const SizedBox(height: 8),
-                    Text('Drop-off: ${order.address}', style: _body),
-                    if (order.dispatchWave != null) ...[
-                      const SizedBox(height: 8),
+                  );
+                },
+              );
+            }),
+            Column(
+              children: [
+                const SizedBox(height: 12),
+                LinearProgressIndicator(
+                  value: progress,
+                  minHeight: 3,
+                  backgroundColor: Colors.white12,
+                  color: BytzGoTheme.accent,
+                ),
+                const Spacer(),
+                ScaleTransition(
+                  scale: Tween(begin: 1.0, end: 1.08).animate(
+                    CurvedAnimation(parent: _phoneCtrl, curve: Curves.easeInOut),
+                  ),
+                  child: Container(
+                    width: 96,
+                    height: 96,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: BytzGoTheme.accent.withValues(alpha: 0.2),
+                      border: Border.all(color: BytzGoTheme.accent, width: 4),
+                      boxShadow: [
+                        BoxShadow(
+                          color: BytzGoTheme.accent.withValues(alpha: 0.45),
+                          blurRadius: 32,
+                          spreadRadius: 4,
+                        ),
+                      ],
+                    ),
+                    child: const Icon(
+                      Icons.phone_in_talk,
+                      size: 44,
+                      color: BytzGoTheme.accent,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                Text(
+                  'INCOMING RIDE',
+                  style: TextStyle(
+                    color: BytzGoTheme.accent,
+                    fontWeight: FontWeight.w900,
+                    fontSize: 11,
+                    letterSpacing: 3,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  order.isCourier ? 'Courier mission' : 'Delivery pickup',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 24,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  '#${order.id.length > 6 ? order.id.substring(order.id.length - 6).toUpperCase() : order.id.toUpperCase()} · ${_secs ?? '—'}s to answer',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.55),
+                    fontWeight: FontWeight.w700,
+                    fontSize: 13,
+                  ),
+                ),
+                const SizedBox(height: 24),
+                Container(
+                  margin: const EdgeInsets.symmetric(horizontal: 20),
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.06),
+                    borderRadius: BorderRadius.circular(24),
+                    border: Border.all(color: Colors.white12),
+                  ),
+                  child: Column(
+                    children: [
                       Text(
-                        'Dispatch wave ${order.dispatchWave}',
-                        style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 12),
+                        'YOU EARN',
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w800,
+                          color: Colors.white.withValues(alpha: 0.45),
+                          letterSpacing: 1.2,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        formatCedis(fee),
+                        style: const TextStyle(
+                          color: BytzGoTheme.accent,
+                          fontSize: 40,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      _stopRow(Icons.location_on, 'Pickup', _pickupLabel),
+                      const SizedBox(height: 12),
+                      _stopRow(Icons.navigation, 'Drop-off', order.address),
+                    ],
+                  ),
+                ),
+                const Spacer(),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: widget.accepting ? null : _handleDecline,
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: Colors.white70,
+                            side: const BorderSide(color: Color(0xFF475569)),
+                            padding: const EdgeInsets.symmetric(vertical: 16),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                          ),
+                          child: const Text(
+                            'Decline',
+                            style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        flex: 2,
+                        child: RideAccentButton(
+                          label: 'Accept ride',
+                          loading: widget.accepting,
+                          onPressed: _handleAccept,
+                        ),
                       ),
                     ],
-                    const SizedBox(height: 24),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: OutlinedButton(
-                            onPressed: widget.accepting ? null : widget.onDecline,
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: Colors.white70,
-                              side: const BorderSide(color: Color(0xFF475569)),
-                              padding: const EdgeInsets.symmetric(vertical: 14),
-                            ),
-                            child: const Text('Decline', style: TextStyle(fontWeight: FontWeight.w800)),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          flex: 2,
-                          child: RideAccentButton(
-                            label: 'Accept ride',
-                            loading: widget.accepting,
-                            onPressed: widget.onAccept,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
+                  ),
                 ),
-              ),
-              const Spacer(flex: 2),
-            ],
-          ),
+              ],
+            ),
+          ],
         ),
       ),
     );
   }
 
-  static const _body = TextStyle(color: Colors.white70, fontSize: 14, height: 1.35);
+  Widget _stopRow(IconData icon, String label, String value) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 36,
+          height: 36,
+          decoration: BoxDecoration(
+            color: BytzGoTheme.accent.withValues(alpha: 0.15),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(icon, size: 18, color: BytzGoTheme.accent),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label.toUpperCase(),
+                style: TextStyle(
+                  fontSize: 9,
+                  fontWeight: FontWeight.w800,
+                  color: Colors.white.withValues(alpha: 0.4),
+                  letterSpacing: 1,
+                ),
+              ),
+              Text(
+                value,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 14,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
 }

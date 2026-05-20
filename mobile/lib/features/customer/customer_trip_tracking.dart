@@ -8,6 +8,7 @@ import '../../shared/customer_trip.dart';
 import '../../shared/format.dart';
 import '../../shared/theme.dart';
 import '../../shared/widgets/biker_search_radar.dart';
+import '../../shared/trip_contact.dart';
 import '../../shared/widgets/ride_ui.dart';
 import '../orders/orders_repository.dart';
 import '../wallet/wallet_repository.dart';
@@ -29,6 +30,13 @@ class CustomerDeliveryTracker extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _StatusHero(order: order),
+        if (tripAllowsContact(order) && order.riderPhone != null) ...[
+          const SizedBox(height: 12),
+          TripContactActions(
+            phone: order.riderPhone,
+            label: 'Contact your biker',
+          ),
+        ],
         const SizedBox(height: 16),
         DeliveryProgressTimeline(order: order),
         if (customerCanCancelOrder(order)) ...[

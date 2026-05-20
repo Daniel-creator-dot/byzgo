@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
@@ -19,11 +18,13 @@ import '../../models/vendor.dart';
 import '../../shared/format.dart';
 import '../../shared/ghana_regions.dart';
 import '../../shared/rider_trip.dart';
+import '../../shared/trip_contact.dart';
 import '../../shared/theme.dart';
 import '../../shared/widgets/ride_map_background.dart';
 import '../../shared/widgets/ride_ui.dart';
 import 'delivery_pin_dialog.dart';
 import 'incoming_ride_overlay.dart';
+import 'incoming_ride_ring.dart';
 import 'rider_drive_map_layer.dart';
 
 enum _RiderTab { drive, trips, wallet, profile }
@@ -45,6 +46,7 @@ class _RiderShellState extends State<RiderShell> {
   List<Order> _orders = [];
   List<Vendor> _vendors = [];
   Order? _incoming;
+  final Set<String> _alertedOfferIds = {};
   String? _focusedOrderId;
   bool _isOnline = false;
   bool _statusLoading = false;
@@ -160,20 +162,42 @@ class _RiderShellState extends State<RiderShell> {
     _withdrawAccName.dispose();
     _withdrawAccNum.dispose();
     _profilePhone.dispose();
+    IncomingRideRing.stop();
     _socket.clearHandlers();
     super.dispose();
+  }
+
+  void _presentIncoming(Order order) {
+    if (!mounted || !_isOnline || !isOfferableOrder(order)) return;
+    setState(() {
+      _incoming = order;
+      _tab = _RiderTab.drive;
+      _driveSheet = _DriveSheet.requests;
+    });
+  }
+
+  void _trackOffers(List<Order> orders) {
+    if (!_isOnline || _incoming != null) return;
+    final offers = orders.where(isOfferableOrder).toList();
+    for (final o in offers) {
+      if (_alertedOfferIds.contains(o.id)) continue;
+      _alertedOfferIds.add(o.id);
+      _presentIncoming(o);
+      return;
+    }
   }
 
   void _wireSocket() {
     _socket.clearHandlers();
     _socket.onRideIncoming = (order) {
       if (!mounted || !_isOnline || !isOfferableOrder(order)) return;
-      HapticFeedback.heavyImpact();
-      setState(() => _incoming = order);
+      _alertedOfferIds.add(order.id);
+      _presentIncoming(order);
     };
     _socket.onRideTaken = (orderId) {
       if (!mounted) return;
       final wasIncoming = _incoming?.id == orderId;
+      if (wasIncoming) IncomingRideRing.stop();
       setState(() {
         if (wasIncoming) _incoming = null;
         _orders = _orders
@@ -191,6 +215,7 @@ class _RiderShellState extends State<RiderShell> {
           order,
         ];
         if (_incoming?.id == order.id && !isOfferableOrder(order)) {
+          IncomingRideRing.stop();
           _incoming = null;
         }
         if (order.riderId == _user.id && order.status != 'delivered') {
@@ -216,6 +241,7 @@ class _RiderShellState extends State<RiderShell> {
         _orders = orders;
         _vendors = vendors;
       });
+      _trackOffers(orders);
       _syncOfferTimer();
     } catch (e) {
       if (!silent) _snack(OrdersRepository.errorMessage(e));
@@ -291,9 +317,13 @@ class _RiderShellState extends State<RiderShell> {
       if (!mounted) return;
       setState(() {
         _isOnline = online;
-        if (!online) _incoming = null;
+        if (!online) {
+          _incoming = null;
+          _alertedOfferIds.clear();
+        }
       });
       if (online) {
+        _alertedOfferIds.clear();
         await _socket.connect(userId: _user.id);
         _startPolling();
         await _refreshAll();
@@ -318,6 +348,7 @@ class _RiderShellState extends State<RiderShell> {
         currentStatus: order.status,
       );
       if (!mounted) return;
+      IncomingRideRing.stop();
       setState(() {
         _incoming = null;
         _orders = [
@@ -341,6 +372,7 @@ class _RiderShellState extends State<RiderShell> {
   Future<void> _declineRide() async {
     final order = _incoming;
     if (order == null) return;
+    IncomingRideRing.stop();
     try {
       await _ordersRepo.declineOrder(order.id);
       if (!mounted) return;
@@ -510,9 +542,10 @@ class _RiderShellState extends State<RiderShell> {
                 _buildBottomNav(),
               ],
             ),
-            if (_incoming != null && _tab == _RiderTab.drive)
+            if (_incoming != null)
               IncomingRideOverlay(
                 order: _incoming!,
+                vendors: _vendors,
                 accepting: _accepting,
                 onAccept: () => _acceptOrder(_incoming!),
                 onDecline: _declineRide,
@@ -735,43 +768,79 @@ class _RiderShellState extends State<RiderShell> {
         borderRadius: BorderRadius.circular(16),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          child: Row(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      label,
-                      style: const TextStyle(
-                        color: BytzGoTheme.accent,
-                        fontWeight: FontWeight.w900,
-                        fontSize: 12,
-                      ),
+              Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          label,
+                          style: const TextStyle(
+                            color: BytzGoTheme.accent,
+                            fontWeight: FontWeight.w900,
+                            fontSize: 12,
+                          ),
+                        ),
+                        if (nav != null)
+                          Text(
+                            nav.label,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: Colors.white.withValues(alpha: 0.75),
+                              fontSize: 12,
+                            ),
+                          ),
+                      ],
                     ),
-                    if (nav != null)
-                      Text(
-                        nav.label,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.75),
-                          fontSize: 12,
+                  ),
+                  FilledButton.icon(
+                    onPressed: nav == null ? null : () => _openNavigation(order),
+                    icon: const Icon(Icons.navigation, size: 16),
+                    label: const Text('Navigate'),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: BytzGoTheme.accent,
+                      foregroundColor: const Color(0xFF020617),
+                    ),
+                  ),
+                ],
+              ),
+              if (tripAllowsContact(order) && order.customerPhone != null) ...[
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () => launchPhoneCall(order.customerPhone),
+                        icon: const Icon(Icons.phone, size: 16),
+                        label: const Text('Call customer'),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.white,
+                          side: BorderSide(color: Colors.white.withValues(alpha: 0.35)),
                         ),
                       ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () => launchSms(order.customerPhone),
+                        icon: const Icon(Icons.sms_outlined, size: 16),
+                        label: const Text('Text'),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.white,
+                          side: BorderSide(color: Colors.white.withValues(alpha: 0.35)),
+                        ),
+                      ),
+                    ),
                   ],
                 ),
-              ),
-              FilledButton.icon(
-                onPressed: nav == null ? null : () => _openNavigation(order),
-                icon: const Icon(Icons.navigation, size: 16),
-                label: const Text('Navigate'),
-                style: FilledButton.styleFrom(
-                  backgroundColor: BytzGoTheme.accent,
-                  foregroundColor: const Color(0xFF020617),
-                ),
-              ),
+              ],
             ],
           ),
         ),
@@ -1020,6 +1089,13 @@ class _RiderShellState extends State<RiderShell> {
           if (nav != null) ...[
             const SizedBox(height: 10),
             Text(nav.label, style: BytzGoTheme.sheetBody(13), maxLines: 2),
+          ],
+          if (tripAllowsContact(order) && order.customerPhone != null) ...[
+            const SizedBox(height: 12),
+            TripContactActions(
+              phone: order.customerPhone,
+              label: 'Contact customer',
+            ),
           ],
           const SizedBox(height: 12),
           Row(
