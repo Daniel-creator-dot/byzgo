@@ -68,13 +68,13 @@ If **bytzgo** is a **Static Site**, that is what’s breaking the APK.
    |-------|--------|
    | **Name** | `byzgo` |
    | **Runtime** | Node |
-   | **Root Directory** | `backend` |
-   | **Build Command** | `npm ci` |
-   | **Start Command** | `npm start` |
+   | **Root Directory** | *(leave empty — repo root)* |
+   | **Build Command** | `npm ci && npm run build && npm install --prefix backend --omit=dev` |
+   | **Start Command** | `npm --prefix backend run start` |
    | **Health Check Path** | `/api/health` |
 
 3. **Environment** → add variables from `backend/.env` (at minimum `DATABASE_URL`, `JWT_SECRET`).
-4. Set `NODE_ENV` = `production`, `SERVE_WEB` = `false` (API-only for Flutter).
+4. Set `NODE_ENV` = `production`, `SERVE_WEB` = `true` (serves `/admin` + API on one host).
 
 ### Step 4 — Point **bytzgo.net** at the Web Service
 
@@ -110,14 +110,16 @@ APK uses `MOBILE_API_URL=https://bytzgo.net` by default (`mobile/scripts/build_a
 
 ## What `render.yaml` deploys
 
-Single **Web Service** — API only (`SERVE_WEB=false`). No Vite/React on Render.
+Single **Web Service** — API + web admin (`SERVE_WEB=true`).
 
 | Setting | Value |
 |---------|--------|
-| Root dir | `backend` |
-| Build | `npm ci` |
-| Start | `npm start` |
+| Build | `npm ci && npm run build && npm install --prefix backend --omit=dev` |
+| Start | `npm --prefix backend run start` |
 | Health | `/api/health` |
+| Admin | https://bytzgo.net/admin |
+
+See [ADMIN.md](./ADMIN.md) for admin login.
 
 ---
 

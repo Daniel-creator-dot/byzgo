@@ -62,10 +62,13 @@ To use the admin UI locally while talking to production:
 
 ## Production admin URL
 
-Render is currently **API-only** (`SERVE_WEB=false`), so https://bytzgo.net/admin will not load the dashboard until you:
+After deploy with `SERVE_WEB=true` (see `render.yaml`):
 
-1. Build the web app: `npm run build`
-2. Set `SERVE_WEB=true` on the Render Web Service
-3. Redeploy
+| URL |
+|-----|
+| https://bytzgo.net/admin |
+| https://www.bytzgo.net/admin |
 
-Then use: **https://bytzgo.net/admin**
+If you see **`Cannot GET /admin`**, the server is API-only: redeploy with the latest `render.yaml` (builds Vite `dist/` and sets `SERVE_WEB=true`), and ensure the domain points to the **Web Service**, not a Static Site.
+
+Create a production admin user against your production database (set `DATABASE_URL` in `backend/.env` to the Render Postgres URL, then run `npm run create:admin`).

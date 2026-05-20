@@ -84,8 +84,47 @@ const io = new Server(httpServer, {
 app.use(cors());
 app.use(express.json());
 
-app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, service: 'bytzgo-api', client: 'flutter' });
+function pgPoolSsl(connectionString: string | undefined): false | { rejectUnauthorized: boolean } {
+  if (process.env.PG_SSL === 'false') return false;
+  if (process.env.PG_SSL === 'true') return { rejectUnauthorized: false };
+  const url = connectionString || '';
+  if (
+    process.env.NODE_ENV === 'production' ||
+    /supabase\.com|render\.com|neon\.tech|aws\.amazonaws\.com|pooler\./i.test(url)
+  ) {
+    return { rejectUnauthorized: false };
+  }
+  return false;
+}
+
+const databaseUrl = process.env.DATABASE_URL?.trim();
+if (!databaseUrl) {
+  console.error('DATABASE_URL is missing — auth and data routes will return errors until it is set.');
+}
+if (!process.env.JWT_SECRET?.trim()) {
+  console.error('JWT_SECRET is missing — login tokens cannot be issued.');
+}
+
+// Multer config for in-memory processing (images stored in DB as Base64)
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+});
+
+const pool = new Pool({
+  connectionString: databaseUrl,
+  ssl: pgPoolSsl(databaseUrl),
+  connectionTimeoutMillis: 15000,
+});
+
+app.get('/api/health', async (_req, res) => {
+  try {
+    await pool.query('SELECT 1');
+    res.json({ ok: true, db: true, service: 'bytzgo-api', client: 'flutter' });
+  } catch (err) {
+    console.error('Health DB check failed:', err);
+    res.status(503).json({ ok: false, db: false, service: 'bytzgo-api', client: 'flutter' });
+  }
 });
 
 app.get('/', (_req, res) => {
@@ -94,19 +133,6 @@ app.get('/', (_req, res) => {
     client: 'Flutter mobile app (Android/iOS)',
     health: '/api/health',
   });
-});
-
-
-
-// Multer config for in-memory processing (images stored in DB as Base64)
-const upload = multer({ 
-  storage: multer.memoryStorage(), 
-  limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
-});
-
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_URL?.includes('supabase.com') ? { rejectUnauthorized: false } : false
 });
 
 // Helper to get system settings from DB
@@ -1334,18 +1360,30 @@ app.post('/api/auth/register', async (req, res) => {
 
 app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body;
+  const jwtSecret = process.env.JWT_SECRET?.trim();
+  if (!jwtSecret) {
+    return res.status(503).json({ message: 'Server misconfigured (JWT). Contact support.' });
+  }
+  if (!databaseUrl) {
+    return res.status(503).json({ message: 'Database unavailable. Try again shortly.' });
+  }
   try {
     const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
     const user = result.rows[0];
     if (user && user.password && await bcrypt.compare(password, user.password)) {
-      const { password, ...userWithoutPassword } = user;
-      const token = jwt.sign(userWithoutPassword, process.env.JWT_SECRET as string);
+      const { password: _pw, ...userWithoutPassword } = user;
+      const token = jwt.sign(userWithoutPassword, jwtSecret);
       res.json({ user: userWithoutPassword, token });
     } else {
       res.status(401).json({ message: 'Invalid credentials' });
     }
   } catch (err) {
-    res.status(500).json({ message: 'Server error' });
+    console.error('Login failed:', err);
+    const msg =
+      err instanceof Error && /connect|timeout|SSL|ECONNREFUSED|ENOTFOUND/i.test(err.message)
+        ? 'Database unavailable. Try again shortly.'
+        : 'Server error';
+    res.status(500).json({ message: msg });
   }
 });
 
@@ -2827,12 +2865,10 @@ function attachWebApp() {
     return;
   }
 
-  console.log(`BytzGo: serving web app from ${distDir}`);
+  console.log(`BytzGo: serving web app from ${distDir} (admin: /admin, vendor: /vendor)`);
   app.use(express.static(distDir, { maxAge: '1h', index: false }));
-  app.get('*', (req, res, next) => {
-    if (req.path.startsWith('/api') || req.path.startsWith('/socket.io')) {
-      return next();
-    }
+  // SPA fallback — /admin, /vendor, /motor, etc.
+  app.get(/^\/(?!api|socket\.io|uploads).*/, (_req, res) => {
     res.sendFile(indexHtml);
   });
 }
