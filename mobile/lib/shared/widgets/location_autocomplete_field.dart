@@ -41,10 +41,13 @@ class LocationAutocompleteField extends StatefulWidget {
 
 class _LocationAutocompleteFieldState extends State<LocationAutocompleteField> {
   final _focus = FocusNode();
+  final _layerLink = LayerLink();
+  final _anchorKey = GlobalKey();
   List<PlaceSuggestion> _suggestions = [];
   Timer? _debounce;
   bool _loading = false;
   bool _suppressSearch = false;
+  OverlayEntry? _overlayEntry;
 
   PlacesService get _places => context.read<PlacesService>();
 
@@ -58,6 +61,7 @@ class _LocationAutocompleteFieldState extends State<LocationAutocompleteField> {
   @override
   void dispose() {
     _debounce?.cancel();
+    _removeOverlay();
     widget.controller.removeListener(_onTextChanged);
     _focus.dispose();
     super.dispose();
@@ -66,7 +70,90 @@ class _LocationAutocompleteFieldState extends State<LocationAutocompleteField> {
   void _onFocusChanged() {
     if (!_focus.hasFocus) {
       setState(() => _suggestions = []);
+      _removeOverlay();
+    } else {
+      _syncOverlay();
     }
+  }
+
+  void _removeOverlay() {
+    _overlayEntry?.remove();
+    _overlayEntry = null;
+  }
+
+  void _syncOverlay() {
+    _removeOverlay();
+    if (_suggestions.isEmpty || !_focus.hasFocus || !mounted) return;
+
+    final overlay = Overlay.maybeOf(context);
+    if (overlay == null) return;
+
+    _overlayEntry = OverlayEntry(
+      builder: (ctx) {
+        return Positioned(
+          width: _fieldWidth(),
+          child: CompositedTransformFollower(
+            link: _layerLink,
+            showWhenUnlinked: false,
+            offset: Offset(0, _fieldHeight() + 4),
+            child: Material(
+              elevation: 10,
+              shadowColor: Colors.black26,
+              borderRadius: BorderRadius.circular(12),
+              color: BytzGoTheme.sheetBg,
+              child: Container(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: BytzGoTheme.sheetDivider),
+                ),
+                constraints: const BoxConstraints(maxHeight: 220),
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  padding: EdgeInsets.zero,
+                  itemCount: _suggestions.length,
+                  separatorBuilder: (_, __) => Divider(
+                    height: 1,
+                    color: BytzGoTheme.sheetDivider.withValues(alpha: 0.6),
+                  ),
+                  itemBuilder: (context, i) {
+                    final s = _suggestions[i];
+                    return ListTile(
+                      dense: true,
+                      leading: const Icon(
+                        Icons.place_outlined,
+                        size: 20,
+                        color: BytzGoTheme.sheetMuted,
+                      ),
+                      title: Text(
+                        s.description,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: BytzGoTheme.sheetText,
+                        ),
+                      ),
+                      onTap: () => _selectSuggestion(s),
+                    );
+                  },
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+    overlay.insert(_overlayEntry!);
+  }
+
+  double _fieldWidth() {
+    final box = _anchorKey.currentContext?.findRenderObject() as RenderBox?;
+    if (box != null) return box.size.width;
+    return MediaQuery.sizeOf(context).width - 48;
+  }
+
+  double _fieldHeight() {
+    final box = _anchorKey.currentContext?.findRenderObject() as RenderBox?;
+    return box?.size.height ?? 52;
   }
 
   void _onTextChanged() {
@@ -76,7 +163,10 @@ class _LocationAutocompleteFieldState extends State<LocationAutocompleteField> {
     _debounce = Timer(const Duration(milliseconds: 280), () async {
       final q = widget.controller.text.trim();
       if (q.length < 2) {
-        if (mounted) setState(() => _suggestions = []);
+        if (mounted) {
+          setState(() => _suggestions = []);
+          _removeOverlay();
+        }
         return;
       }
       if (!mounted) return;
@@ -87,6 +177,9 @@ class _LocationAutocompleteFieldState extends State<LocationAutocompleteField> {
         _suggestions = list;
         _loading = false;
       });
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _syncOverlay();
+      });
     });
   }
 
@@ -95,6 +188,7 @@ class _LocationAutocompleteFieldState extends State<LocationAutocompleteField> {
       _suggestions = [];
       _loading = true;
     });
+    _removeOverlay();
     final loc = await _places.placeDetails(s.placeId);
     if (!mounted) return;
     setState(() => _loading = false);
@@ -114,117 +208,70 @@ class _LocationAutocompleteFieldState extends State<LocationAutocompleteField> {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            widget.icon,
-            const SizedBox(width: 14),
-            Expanded(
-              child: TextField(
-                controller: widget.controller,
-                focusNode: _focus,
-                onTap: widget.onTap,
-                style: const TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                  color: BytzGoTheme.sheetText,
+    return CompositedTransformTarget(
+      link: _layerLink,
+      child: Row(
+        key: _anchorKey,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          widget.icon,
+          const SizedBox(width: 14),
+          Expanded(
+            child: TextField(
+              controller: widget.controller,
+              focusNode: _focus,
+              onTap: widget.onTap,
+              style: const TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: BytzGoTheme.sheetText,
+              ),
+              decoration: InputDecoration(
+                hintText: widget.locating
+                    ? 'Getting your location…'
+                    : widget.resolving
+                        ? 'Finding address…'
+                        : widget.hint,
+                hintStyle: TextStyle(
+                  color: BytzGoTheme.sheetMuted.withValues(alpha: 0.9),
+                  fontWeight: FontWeight.w500,
                 ),
-                decoration: InputDecoration(
-                  hintText: widget.locating
-                      ? 'Getting your location…'
-                      : widget.resolving
-                          ? 'Finding address…'
-                          : widget.hint,
-                  hintStyle: TextStyle(
-                    color: BytzGoTheme.sheetMuted.withValues(alpha: 0.9),
-                    fontWeight: FontWeight.w500,
-                  ),
-                  border: InputBorder.none,
-                  isDense: true,
-                  contentPadding: const EdgeInsets.symmetric(vertical: 14),
-                  suffixIcon: widget.showUseMyLocation
-                      ? IconButton(
-                          tooltip: 'Use my location',
-                          onPressed: (widget.locating || widget.resolving)
-                              ? null
-                              : _useMyLocation,
-                          icon: (widget.locating || widget.resolving)
-                              ? const SizedBox(
-                                  width: 18,
-                                  height: 18,
-                                  child: CircularProgressIndicator(strokeWidth: 2),
-                                )
-                              : const Icon(
-                                  Icons.my_location,
-                                  size: 20,
-                                  color: BytzGoTheme.accentDark,
-                                ),
-                        )
-                      : (_loading
-                          ? const Padding(
-                              padding: EdgeInsets.all(12),
-                              child: SizedBox(
+                border: InputBorder.none,
+                isDense: true,
+                contentPadding: const EdgeInsets.symmetric(vertical: 14),
+                suffixIcon: widget.showUseMyLocation
+                    ? IconButton(
+                        tooltip: 'Use my location',
+                        onPressed: (widget.locating || widget.resolving)
+                            ? null
+                            : _useMyLocation,
+                        icon: (widget.locating || widget.resolving)
+                            ? const SizedBox(
                                 width: 18,
                                 height: 18,
                                 child: CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : const Icon(
+                                Icons.my_location,
+                                size: 20,
+                                color: BytzGoTheme.accentDark,
                               ),
-                            )
-                          : null),
-                ),
+                      )
+                    : (_loading
+                        ? const Padding(
+                            padding: EdgeInsets.all(12),
+                            child: SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                          )
+                        : null),
               ),
-            ),
-          ],
-        ),
-        if (_suggestions.isNotEmpty)
-          Container(
-            margin: const EdgeInsets.only(left: 24, right: 8, bottom: 4),
-            decoration: BoxDecoration(
-              color: BytzGoTheme.sheetBg,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: BytzGoTheme.sheetDivider),
-              boxShadow: const [
-                BoxShadow(
-                  color: Colors.black12,
-                  blurRadius: 8,
-                  offset: Offset(0, 4),
-                ),
-              ],
-            ),
-            constraints: const BoxConstraints(maxHeight: 220),
-            child: ListView.separated(
-              shrinkWrap: true,
-              padding: EdgeInsets.zero,
-              itemCount: _suggestions.length,
-              separatorBuilder: (_, __) => Divider(
-                height: 1,
-                color: BytzGoTheme.sheetDivider.withValues(alpha: 0.6),
-              ),
-              itemBuilder: (context, i) {
-                final s = _suggestions[i];
-                return ListTile(
-                  dense: true,
-                  leading: const Icon(
-                    Icons.place_outlined,
-                    size: 20,
-                    color: BytzGoTheme.sheetMuted,
-                  ),
-                  title: Text(
-                    s.description,
-                    style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                      color: BytzGoTheme.sheetText,
-                    ),
-                  ),
-                  onTap: () => _selectSuggestion(s),
-                );
-              },
             ),
           ),
-      ],
+        ],
+      ),
     );
   }
 }

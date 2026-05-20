@@ -51,7 +51,7 @@ String customerTripHeadline(Order order) {
       return 'On the way to you';
     case 'ready':
       if (order.riderId != null) {
-        return 'Biker heading to pickup';
+        return 'Biker en route to pickup';
       }
       return 'Finding a biker nearby…';
     case 'preparing':
@@ -110,9 +110,13 @@ String customerTripSubline(Order order, {String? etaPhrase}) {
     case 'picked_up':
       return 'Your package is on the move';
     case 'ready':
+      if (order.riderId != null) {
+        return 'Your biker is heading to the pickup point';
+      }
+      return 'We\'re matching you with the nearest biker';
     case 'pending':
       if (order.riderId != null) {
-        return 'Rider is on the way to collect your package';
+        return 'Biker assigned — waiting at pickup';
       }
       return 'We\'re matching you with the nearest biker';
     default:
@@ -126,10 +130,10 @@ int _tripProgressIndex(Order order) {
   if (order.status == 'picked_up') return 3;
   if (order.riderId != null &&
       ['ready', 'preparing', 'pending'].contains(order.status)) {
-    return 2;
+    return 1;
   }
-  if (order.riderId != null) return 2;
-  return 1;
+  if (order.riderId != null) return 1;
+  return 0;
 }
 
 List<CustomerTripStep> customerTripSteps(Order order) {

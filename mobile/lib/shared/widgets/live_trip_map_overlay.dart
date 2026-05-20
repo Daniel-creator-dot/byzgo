@@ -170,6 +170,8 @@ class _StatusBanner extends StatelessWidget {
                       fontSize: 12,
                       color: BytzGoTheme.brandBlue,
                     ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
                   )
                 else if (searching && nearbyCount != null && nearbyCount! > 0)
                   Text(

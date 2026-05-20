@@ -1,3 +1,5 @@
+import '../core/json_parse.dart';
+
 class AdminPricingSettings {
   const AdminPricingSettings({
     required this.deliveryPricePerKm,
@@ -27,9 +29,7 @@ class AdminPricingSettings {
       deliveryPricePerKm:
           json['delivery_price_per_km']?.toString() ?? '4',
       surgeEnabled: enabled,
-      surgeMultiplier: (json['surge_multiplier'] as num?)?.toDouble() ??
-          double.tryParse(json['surge_multiplier']?.toString() ?? '') ??
-          1.5,
+      surgeMultiplier: parseJsonDouble(json['surge_multiplier']) ?? 1.5,
       surgeStartTime: json['surge_start_time']?.toString() ?? '17:00',
       surgeEndTime: json['surge_end_time']?.toString() ?? '21:00',
       surgeActiveNow: json['surge_active_now'] == true,

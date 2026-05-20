@@ -780,7 +780,7 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
           : null,
       sheet: RideSheet(
         maxHeightFraction: tracking
-            ? (widget.embedded ? 0.42 : 0.38)
+            ? (widget.embedded ? 0.48 : 0.52)
             : (widget.embedded ? 0.58 : 0.72),
         bottomInset: widget.embedded ? 4 : 0,
         padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),

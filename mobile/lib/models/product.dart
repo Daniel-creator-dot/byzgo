@@ -23,6 +23,21 @@ class Product {
   final bool isAvailable;
   final bool isApproved;
 
+  /// Parsed from description seeded by Primecare formulary (`In stock: N`).
+  int? get stockQty {
+    final d = description;
+    if (d == null || d.isEmpty) return null;
+    final m = RegExp(r'In stock:\s*(-?\d+)', caseSensitive: false).firstMatch(d);
+    if (m == null) return null;
+    return int.tryParse(m.group(1)!);
+  }
+
+  bool get canAddToCart {
+    if (!isAvailable || !isApproved) return false;
+    final stock = stockQty;
+    return stock == null || stock > 0;
+  }
+
   factory Product.fromJson(Map<String, dynamic> json) {
     return Product(
       id: json['id']?.toString() ?? '',

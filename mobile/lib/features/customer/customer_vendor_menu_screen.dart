@@ -5,6 +5,7 @@ import '../../models/location_point.dart';
 import '../../models/product.dart';
 import '../../models/vendor.dart';
 import '../../shared/format.dart';
+import '../../shared/pharmacy_display.dart';
 import '../../shared/rider_trip.dart';
 import '../../shared/theme.dart';
 import '../../shared/widgets/product_tile_image.dart';
@@ -248,7 +249,7 @@ class _CustomerVendorMenuScreenState extends State<CustomerVendorMenuScreen> {
                                   Padding(
                                     padding: const EdgeInsets.only(top: 8, bottom: 10),
                                     child: Text(
-                                      entry.key,
+                                      formatPharmacyCategory(entry.key),
                                       style: const TextStyle(
                                         fontWeight: FontWeight.w800,
                                         fontSize: 15,
@@ -333,6 +334,7 @@ class _ProductTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final outOfStock = !product.canAddToCart;
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: Material(
@@ -357,7 +359,17 @@ class _ProductTile extends StatelessWidget {
                         color: BytzGoTheme.sheetText,
                       ),
                     ),
-                    if (product.description != null &&
+                    if (outOfStock) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        'Out of stock',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: BytzGoTheme.danger.withValues(alpha: 0.9),
+                        ),
+                      ),
+                    ] else if (product.description != null &&
                         product.description!.trim().isNotEmpty) ...[
                       const SizedBox(height: 4),
                       Text(
@@ -382,8 +394,13 @@ class _ProductTile extends StatelessWidget {
               Column(
                 children: [
                   IconButton(
-                    onPressed: onAdd,
-                    icon: const Icon(Icons.add_circle, color: BytzGoTheme.brandBlue),
+                    onPressed: outOfStock ? null : onAdd,
+                    icon: Icon(
+                      Icons.add_circle,
+                      color: outOfStock
+                          ? BytzGoTheme.sheetMuted.withValues(alpha: 0.4)
+                          : BytzGoTheme.brandBlue,
+                    ),
                   ),
                   if (quantity > 0) ...[
                     Text('$quantity', style: const TextStyle(fontWeight: FontWeight.w800)),

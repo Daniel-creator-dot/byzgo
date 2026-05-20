@@ -1,3 +1,5 @@
+import '../core/json_parse.dart';
+
 class DeliveryQuote {
   const DeliveryQuote({
     required this.distanceKm,
@@ -19,15 +21,15 @@ class DeliveryQuote {
 
   factory DeliveryQuote.fromJson(Map<String, dynamic> json) {
     return DeliveryQuote(
-      distanceKm: (json['distance_km'] as num?)?.toDouble() ?? 0,
-      deliveryFee: (json['delivery_fee'] as num?)?.toDouble() ??
-          (json['price'] as num?)?.toDouble() ??
+      distanceKm: parseJsonDoubleOrZero(json['distance_km']),
+      deliveryFee: parseJsonDouble(json['delivery_fee']) ??
+          parseJsonDouble(json['price']) ??
           0,
-      pricePerKm: (json['price_per_km'] as num?)?.toDouble() ?? 4,
+      pricePerKm: parseJsonDouble(json['price_per_km']) ?? 4,
       zone: json['zone']?.toString(),
-      baseDeliveryFee: (json['base_delivery_fee'] as num?)?.toDouble(),
+      baseDeliveryFee: parseJsonDouble(json['base_delivery_fee']),
       surgeActive: json['surge_active'] == true,
-      surgeMultiplier: (json['surge_multiplier'] as num?)?.toDouble(),
+      surgeMultiplier: parseJsonDouble(json['surge_multiplier']),
     );
   }
 }

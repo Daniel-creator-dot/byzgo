@@ -418,31 +418,41 @@ class DeliveryQuoteCard extends StatelessWidget {
       child: ClipRRect(
         borderRadius: BorderRadius.circular(18),
         child: Stack(
+          clipBehavior: Clip.hardEdge,
           children: [
             Positioned(
-              right: -8,
-              top: -8,
-              bottom: -8,
-              width: 110,
-              child: Image.asset(
-                'assets/branding/hero_rider.png',
-                fit: BoxFit.cover,
-                alignment: Alignment.centerLeft,
+              right: -4,
+              top: 0,
+              bottom: 0,
+              width: 96,
+              child: Opacity(
+                opacity: 0.35,
+                child: Image.asset(
+                  'assets/branding/hero_rider.png',
+                  fit: BoxFit.cover,
+                  alignment: Alignment.centerLeft,
+                ),
               ),
             ),
-            DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [
-                    BytzGoTheme.sheetBg.withValues(alpha: 0.92),
-                    BytzGoTheme.sheetBg.withValues(alpha: 0.75),
-                    Colors.transparent,
-                  ],
+            Positioned.fill(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.centerLeft,
+                    end: Alignment.centerRight,
+                    colors: [
+                      BytzGoTheme.sheetBg,
+                      BytzGoTheme.sheetBg.withValues(alpha: 0.97),
+                      BytzGoTheme.sheetBg.withValues(alpha: 0.82),
+                      BytzGoTheme.sheetBg.withValues(alpha: 0.45),
+                    ],
+                    stops: const [0.0, 0.45, 0.72, 1.0],
+                  ),
                 ),
               ),
             ),
             Padding(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.fromLTRB(16, 16, 88, 16),
               child: Row(
                 children: [
                   Container(
