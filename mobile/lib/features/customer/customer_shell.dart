@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../../core/session.dart';
 import '../../models/auth_user.dart';
 import '../../models/location_point.dart';
+import '../../models/order.dart';
 import '../../shared/format.dart';
 import '../../shared/system_chrome.dart';
 import '../../shared/theme.dart';
@@ -30,6 +31,8 @@ class CustomerShell extends StatefulWidget {
 class _CustomerShellState extends State<CustomerShell> {
   CustomerTab _tab = CustomerTab.courier;
   LocationPoint? _shopPickup;
+  final _homeKey = GlobalKey<CustomerHomeScreenState>();
+  final _activityKey = GlobalKey<CustomerActivityTabState>();
 
   @override
   void initState() {
@@ -38,12 +41,22 @@ class _CustomerShellState extends State<CustomerShell> {
   }
 
   void _goTab(CustomerTab tab) {
+    final prev = _tab;
     setState(() => _tab = tab);
     if (tab == CustomerTab.courier) {
       BytzSystemChrome.applyMap();
     } else {
       BytzSystemChrome.applyLightSheet();
     }
+    if (tab == CustomerTab.activity && prev != CustomerTab.activity) {
+      _activityKey.currentState?.reload();
+    }
+  }
+
+  void _onShopOrderPlaced(Order order) {
+    _homeKey.currentState?.noteOrder(order);
+    _activityKey.currentState?.noteOrder(order);
+    _goTab(CustomerTab.activity);
   }
 
   void _onShopPickup(LocationPoint pickup) {
@@ -51,6 +64,7 @@ class _CustomerShellState extends State<CustomerShell> {
       _shopPickup = pickup;
       _tab = CustomerTab.courier;
     });
+    _homeKey.currentState?.applyShopPickup(pickup);
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text('Pickup set to ${pickup.address}'),
@@ -88,7 +102,7 @@ class _CustomerShellState extends State<CustomerShell> {
               index: _tab.index,
               children: [
                 CustomerHomeScreen(
-                  key: ValueKey(_shopPickup?.address ?? 'courier'),
+                  key: _homeKey,
                   initialPickup: _shopPickup,
                   embedded: true,
                   onOpenShops: () => _goTab(CustomerTab.shops),
@@ -96,8 +110,14 @@ class _CustomerShellState extends State<CustomerShell> {
                   onOpenActivity: () => _goTab(CustomerTab.activity),
                   onOpenProfile: () => _goTab(CustomerTab.profile),
                 ),
-                CustomerShopsTab(onShopPickup: _onShopPickup),
-                CustomerActivityTab(onTrackOrder: () => _goTab(CustomerTab.courier)),
+                CustomerShopsTab(
+                  onShopPickup: _onShopPickup,
+                  onShopOrderPlaced: _onShopOrderPlaced,
+                ),
+                CustomerActivityTab(
+                  key: _activityKey,
+                  onTrackOrder: () => _goTab(CustomerTab.courier),
+                ),
                 const CustomerProfileTab(),
               ],
             ),

@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../../core/session.dart';
 import '../../models/location_point.dart';
+import '../../models/order.dart';
 import '../../models/vendor.dart';
 import '../../shared/shop_categories.dart';
 import '../../shared/theme.dart';
@@ -18,9 +19,11 @@ class CustomerShopsTab extends StatefulWidget {
   const CustomerShopsTab({
     super.key,
     required this.onShopPickup,
+    this.onShopOrderPlaced,
   });
 
   final void Function(LocationPoint pickup) onShopPickup;
+  final void Function(Order order)? onShopOrderPlaced;
 
   @override
   State<CustomerShopsTab> createState() => _CustomerShopsTabState();
@@ -97,6 +100,7 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
         builder: (ctx) => CustomerVendorMenuScreen(
           vendor: vendor,
           onBookPickup: widget.onShopPickup,
+          onShopOrderPlaced: widget.onShopOrderPlaced,
         ),
       ),
     );

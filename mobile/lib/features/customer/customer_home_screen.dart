@@ -52,10 +52,10 @@ class CustomerHomeScreen extends StatefulWidget {
   final VoidCallback? onOpenProfile;
 
   @override
-  State<CustomerHomeScreen> createState() => _CustomerHomeScreenState();
+  State<CustomerHomeScreen> createState() => CustomerHomeScreenState();
 }
 
-class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
+class CustomerHomeScreenState extends State<CustomerHomeScreen> {
   final _pickupCtrl = TextEditingController();
   final _dropoffCtrl = TextEditingController();
   final _itemCtrl = TextEditingController(text: 'Package');
@@ -136,9 +136,24 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
       if (o.customerId != userId) return false;
       if (['delivered', 'cancelled'].contains(o.status)) return false;
       final type = o.orderType ?? '';
-      return type == 'courier' || o.pickup != null;
+      return type == 'courier' ||
+          type == 'food' ||
+          customerOrderHasShopPickup(o) ||
+          (o.pickup != null && o.pickup!.trim().isNotEmpty);
     });
     return list.isEmpty ? null : list.first;
+  }
+
+  /// After marketplace checkout — show trip on map and in lists.
+  void noteOrder(Order order) => _replaceOrder(order);
+
+  void applyShopPickup(LocationPoint pickup) {
+    final label = displayLocationLabel(pickup.address, pickup.lat, pickup.lng);
+    setState(() {
+      _pickup = pickup.copyWith(address: label);
+      _pickupCtrl.text = label;
+      _pickMode = MapPickMode.pickup;
+    });
   }
 
   @override
@@ -324,6 +339,12 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
           return o.copyWithPulseGuide(lat: lat, lng: lng, phase: phase, at: at);
         }).toList();
       });
+    };
+
+    socket.onOrderNew = (order) {
+      if (!mounted) return;
+      if (order.customerId != _session.user?.id) return;
+      _replaceOrder(order);
     };
 
     socket.onOrderUpdated = (order) {

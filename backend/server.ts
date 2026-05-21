@@ -890,7 +890,17 @@ async function ensureVapidKeys() {
 }
 
 function isOfferableOrder(order: any) {
-  return order?.status === 'ready' && !order?.rider_id;
+  if (order?.rider_id) return false;
+  if (order?.status === 'ready') return true;
+  // Marketplace shop orders (seeded vendors) start ready; legacy food may be pending until vendor marks ready.
+  if (
+    order?.status === 'pending' &&
+    order?.vendor_id &&
+    (order?.order_type === 'food' || order?.order_type === 'courier')
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function generateDeliveryCode(): string {
@@ -3974,7 +3984,10 @@ app.post('/api/orders', authenticateToken, async (req: any, res) => {
       }
     }
 
-    const initialStatus = (finalOrderType === 'courier') ? 'ready' : 'pending';
+    const initialStatus =
+      finalOrderType === 'courier' || (vendorId && finalOrderType === 'food')
+        ? 'ready'
+        : 'pending';
     const scheduled = scheduledTime || scheduled_time || null;
 
     const result = await pool.query(
@@ -3984,6 +3997,9 @@ app.post('/api/orders', authenticateToken, async (req: any, res) => {
     const order = result.rows[0];
     res.json(order);
     io.emit('order:new', order); // Notify vendors/admin
+    if (order.customer_id) {
+      io.to(String(order.customer_id)).emit('order:new', order);
+    }
     if (isOfferableOrder(order)) {
       void broadcastRideOfferToRiders(order);
     }

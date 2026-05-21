@@ -6,6 +6,7 @@ import '../../core/places_service.dart';
 import '../../core/session.dart';
 import '../../models/delivery_quote.dart';
 import '../../models/location_point.dart';
+import '../../models/order.dart';
 import '../../models/product.dart';
 import '../../models/vendor.dart';
 import '../../shared/format.dart';
@@ -25,11 +26,13 @@ class CustomerShopCheckoutScreen extends StatefulWidget {
     required this.vendor,
     required this.pickup,
     required this.cart,
+    this.onOrderPlaced,
   });
 
   final Vendor vendor;
   final LocationPoint pickup;
   final Map<Product, int> cart;
+  final void Function(Order order)? onOrderPlaced;
 
   @override
   State<CustomerShopCheckoutScreen> createState() =>
@@ -150,7 +153,7 @@ class _CustomerShopCheckoutScreenState extends State<CustomerShopCheckoutScreen>
           )
           .toList();
 
-      await context.read<OrdersRepository>().createShopCourierOrder(
+      final order = await context.read<OrdersRepository>().createShopCourierOrder(
             vendorId: widget.vendor.id,
             pickup: widget.pickup,
             destination: dest,
@@ -159,11 +162,12 @@ class _CustomerShopCheckoutScreenState extends State<CustomerShopCheckoutScreen>
             itemDescription: '${widget.vendor.name} order ($_itemCount items)',
           );
       if (!mounted) return;
+      widget.onOrderPlaced?.call(order);
       Navigator.of(context).popUntil((route) => route.isFirst);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            'Order placed — rider goes to ${widget.vendor.name} first (${quote.distanceKm.toStringAsFixed(1)} km delivery)',
+            'Order placed — see Activity tab (${widget.vendor.name}, ${quote.distanceKm.toStringAsFixed(1)} km)',
           ),
           behavior: SnackBarBehavior.floating,
           backgroundColor: BytzGoTheme.accentDark,

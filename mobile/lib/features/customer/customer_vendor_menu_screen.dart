@@ -5,6 +5,7 @@ import '../../core/places_service.dart';
 import '../../core/socket_service.dart';
 import '../../core/json_parse.dart';
 import '../../models/location_point.dart';
+import '../../models/order.dart';
 import '../../models/product.dart';
 import '../../models/vendor.dart';
 import '../../shared/format.dart';
@@ -24,10 +25,12 @@ class CustomerVendorMenuScreen extends StatefulWidget {
     super.key,
     required this.vendor,
     this.onBookPickup,
+    this.onShopOrderPlaced,
   });
 
   final Vendor vendor;
   final void Function(LocationPoint pickup)? onBookPickup;
+  final void Function(Order order)? onShopOrderPlaced;
 
   @override
   State<CustomerVendorMenuScreen> createState() =>
@@ -183,6 +186,7 @@ class _CustomerVendorMenuScreenState extends State<CustomerVendorMenuScreen>
           vendor: widget.vendor,
           pickup: pickup,
           cart: _cartProducts,
+          onOrderPlaced: widget.onShopOrderPlaced,
         ),
       ),
     );

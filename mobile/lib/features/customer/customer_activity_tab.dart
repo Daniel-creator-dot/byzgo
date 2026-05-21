@@ -18,10 +18,10 @@ class CustomerActivityTab extends StatefulWidget {
   final VoidCallback onTrackOrder;
 
   @override
-  State<CustomerActivityTab> createState() => _CustomerActivityTabState();
+  State<CustomerActivityTab> createState() => CustomerActivityTabState();
 }
 
-class _CustomerActivityTabState extends State<CustomerActivityTab> {
+class CustomerActivityTabState extends State<CustomerActivityTab> {
   List<Order> _orders = [];
   bool _loading = true;
   String? _error;
@@ -31,6 +31,21 @@ class _CustomerActivityTabState extends State<CustomerActivityTab> {
     super.initState();
     _load();
   }
+
+  void noteOrder(Order order) {
+    setState(() {
+      final i = _orders.indexWhere((o) => o.id == order.id);
+      if (i >= 0) {
+        _orders[i] = order;
+      } else {
+        _orders = [order, ..._orders];
+      }
+      _loading = false;
+      _error = null;
+    });
+  }
+
+  Future<void> reload() => _load();
 
   Future<void> _load() async {
     setState(() {
@@ -102,7 +117,9 @@ class _CustomerActivityTabState extends State<CustomerActivityTab> {
               (o) => Padding(
                 padding: const EdgeInsets.only(bottom: 10),
                 child: ActiveTripTile(
-                  address: o.address,
+                  address: customerOrderHasShopPickup(o)
+                      ? '${customerShopLabel(o)} → ${o.address}'
+                      : o.address,
                   status: customerTripHeadline(o),
                   price: formatCedis(o.total),
                   onTap: widget.onTrackOrder,
@@ -118,7 +135,8 @@ class _CustomerActivityTabState extends State<CustomerActivityTab> {
               light: true,
               icon: Icons.two_wheeler_outlined,
               title: 'No trips yet',
-              subtitle: 'Book a bike delivery from the Courier tab — your trips will show here.',
+              subtitle:
+                  'Shop orders and bike deliveries appear here after you place them.',
             )
           else
             ...past.map((o) => _historyTile(o)),
