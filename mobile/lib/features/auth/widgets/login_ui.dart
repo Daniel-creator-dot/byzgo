@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../../shared/theme.dart';
 import '../../../shared/widgets/legal_links.dart';
 import '../../../shared/widgets/ride_ui.dart';
+import 'login_decor.dart';
 
 /// Drag handle + optional title row for auth bottom sheet.
 class AuthSheetHeader extends StatelessWidget {
@@ -47,6 +48,8 @@ class AuthSheetHeader extends StatelessWidget {
             ),
           ),
         ),
+        const SizedBox(height: 14),
+        const AuthHeaderIconFlow(),
       ],
     );
   }
@@ -207,8 +210,12 @@ class AuthTextField extends StatelessWidget {
       decoration: InputDecoration(
         labelText: label,
         prefixIcon: icon != null
-            ? Icon(icon, color: BytzGoTheme.brandBlue, size: 22)
+            ? Padding(
+                padding: const EdgeInsets.only(left: 10, top: 8, bottom: 8),
+                child: AuthRoundedIcon(icon: icon!, size: 36),
+              )
             : null,
+        prefixIconConstraints: const BoxConstraints(minWidth: 52, minHeight: 48),
         suffixIcon: suffix,
         filled: true,
         fillColor: const Color(0xFFF8FAFC),
@@ -305,13 +312,22 @@ class AuthOrDivider extends StatelessWidget {
           ),
         ),
         Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14),
-          child: Text(
-            'or continue with',
-            style: BytzGoTheme.sheetBody(12).copyWith(
-              fontWeight: FontWeight.w700,
-              letterSpacing: 0.3,
-            ),
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              AuthRoundedIcon(icon: Icons.link_rounded, size: 26, filled: false),
+              const SizedBox(width: 8),
+              Text(
+                'or continue with',
+                style: BytzGoTheme.sheetBody(12).copyWith(
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.3,
+                ),
+              ),
+              const SizedBox(width: 8),
+              AuthRoundedIcon(icon: Icons.login_rounded, size: 26, filled: false),
+            ],
           ),
         ),
         Expanded(
@@ -490,6 +506,7 @@ class AuthLoginExtras extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         if (showGoogle) ...[
+          const AuthSectionWaveLink(),
           const AuthOrDivider(),
           const SizedBox(height: 14),
           AuthGoogleButton(
@@ -513,22 +530,57 @@ class AuthLoginExtras extends StatelessWidget {
   }
 }
 
-/// Feature chips on login hero.
+/// Feature chips on login hero — rounded icons linked by a soft wave.
 class AuthHeroFeatures extends StatelessWidget {
   const AuthHeroFeatures({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return Wrap(
-      spacing: 8,
-      runSpacing: 8,
-      children: const [
-        _FeatureChip(icon: Icons.two_wheeler_rounded, label: 'Fast bikes'),
-        _FeatureChip(icon: Icons.location_on_outlined, label: 'Live tracking'),
-        _FeatureChip(icon: Icons.account_balance_wallet_outlined, label: 'MoMo wallet'),
-      ],
+    return SizedBox(
+      height: 88,
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: CustomPaint(
+              painter: _HeroFeatureWavePainter(),
+            ),
+          ),
+          const Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: Wrap(
+              spacing: 10,
+              runSpacing: 8,
+              children: [
+                _FeatureChip(icon: Icons.two_wheeler_rounded, label: 'Fast bikes'),
+                _FeatureChip(icon: Icons.location_on_outlined, label: 'Live tracking'),
+                _FeatureChip(icon: Icons.account_balance_wallet_outlined, label: 'MoMo wallet'),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
+}
+
+class _HeroFeatureWavePainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.8
+      ..color = BytzGoTheme.accent.withValues(alpha: 0.35)
+      ..strokeCap = StrokeCap.round;
+    final path = Path()
+      ..moveTo(8, size.height * 0.35)
+      ..cubicTo(60, 8, size.width * 0.45, size.height * 0.55, size.width - 24, 12);
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 /// Kesbridge partnership — clean trust strip aligned with BytzGo blue + lime.
@@ -713,8 +765,8 @@ class _FeatureChip extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 16, color: BytzGoTheme.accent),
-          const SizedBox(width: 6),
+          AuthRoundedIcon(icon: icon, size: 28, filled: true),
+          const SizedBox(width: 8),
           Text(
             label,
             style: TextStyle(

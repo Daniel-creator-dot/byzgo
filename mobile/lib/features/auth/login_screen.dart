@@ -11,6 +11,7 @@ import '../../shared/widgets/bytz_preloader.dart';
 import '../../shared/widgets/ride_ui.dart';
 import 'auth_repository.dart';
 import 'ghana_phone.dart';
+import 'widgets/login_decor.dart';
 import 'widgets/login_ui.dart';
 
 enum _AuthMode { signIn, signUp, forgot }
@@ -290,7 +291,16 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                     ),
                   ],
                 ),
-                child: RideSheet(
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    Positioned(
+                      top: -32,
+                      left: 0,
+                      right: 0,
+                      child: const AuthHeroSheetBridge(),
+                    ),
+                    RideSheet(
                 maxHeightFraction: 0.82,
                 padding: EdgeInsets.fromLTRB(20, 4, 20, 10 + bottomPad),
                 child: Form(
@@ -304,6 +314,7 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       mainAxisSize: MainAxisSize.min,
                       children: [
+                        const AuthSheetTopWave(),
                         AuthSheetHeader(
                           title: _sheetTitle,
                           subtitle: _sheetSubtitle,
@@ -497,8 +508,10 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                     ),
                   ),
                 ),
+                    ),
+                  ],
+                ),
               ),
-            ),
             ),
           ),
           if (_loading)
