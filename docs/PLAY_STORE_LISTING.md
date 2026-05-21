@@ -45,8 +45,16 @@ Privacy: https://www.bytzgo.net/privacy
 
 ## Contact email
 
+Use either (Play Console accepts one public contact):
+
 ```
 support@bytzgo.com
+```
+
+or your Play developer account:
+
+```
+jerryanthony61@gmail.com
 ```
 
 ## Website

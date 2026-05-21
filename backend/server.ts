@@ -4529,7 +4529,9 @@ function serveLegalPage(slug: string) {
     res.type('html').sendFile(file);
   };
 }
+const LEGAL_PATHS = new Set(['/privacy', '/terms', '/account-deletion', '/privacy-policy']);
 app.get('/privacy', serveLegalPage('privacy'));
+app.get('/privacy-policy', (_req, res) => res.redirect(301, '/privacy'));
 app.get('/terms', serveLegalPage('terms'));
 app.get('/account-deletion', serveLegalPage('account-deletion'));
 
@@ -4549,7 +4551,11 @@ function attachWebApp() {
   console.log(`BytzGo: serving web app from ${distDir}`);
   app.use(express.static(distDir, { maxAge: '1h', index: false }));
   app.get('*', (req, res, next) => {
-    if (req.path.startsWith('/api') || req.path.startsWith('/socket.io')) {
+    if (
+      req.path.startsWith('/api') ||
+      req.path.startsWith('/socket.io') ||
+      LEGAL_PATHS.has(req.path)
+    ) {
       return next();
     }
     res.sendFile(indexHtml);
