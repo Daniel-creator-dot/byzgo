@@ -245,11 +245,14 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
     if (!mounted) return;
     setState(() => _quoteLoading = true);
     try {
+      final region = _session.user?.region;
       final q = await _ordersRepo.calculateRouteDelivery(
         pickupLat: _pickup!.lat,
         pickupLng: _pickup!.lng,
         destLat: _destination!.lat,
         destLng: _destination!.lng,
+        pickupRegion: region,
+        destinationRegion: region,
       );
       if (!mounted) return;
       setState(() {
@@ -787,6 +790,7 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
         pickup: pickup,
         destination: dest,
         deliveryFee: fee,
+        region: _session.user?.region,
         itemDescription: _itemCtrl.text.trim().isEmpty
             ? 'Package'
             : _itemCtrl.text.trim(),

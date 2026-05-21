@@ -81,63 +81,36 @@ class OrdersRepository {
   }
 
   Future<Order> createCourierOrder({
-
     required LocationPoint pickup,
-
     required LocationPoint destination,
-
     required double deliveryFee,
-
     String itemDescription = 'Package',
-
     String paymentMethod = 'pay_on_delivery',
-
+    String? region,
   }) async {
-
     final res = await _api.dio.post<Map<String, dynamic>>(
-
       '/api/orders',
-
       data: {
-
         'items': [
-
           {
-
             'id': 'courier-1',
-
             'name': 'Delivery: $itemDescription',
-
             'quantity': 1,
-
-            'price': deliveryFee,
-
+            'price': 0,
           },
-
         ],
-
         'total': deliveryFee,
-
         'order_type': 'courier',
-
         'address': destination.address,
-
         'pickup': pickup.address,
-
         'lat': destination.lat,
-
         'lng': destination.lng,
-
         'pickup_lat': pickup.lat,
-
         'pickup_lng': pickup.lng,
-
         'delivery_fee': deliveryFee,
-
         'payment_method': paymentMethod,
-
+        if (region != null && region.isNotEmpty) 'region': region,
       },
-
     );
 
     final data = res.data;

@@ -93,7 +93,7 @@ export function CustomerDeliveryHome({
 
   const submitCourier = async (extra: Record<string, unknown>) => {
     await onPlaceOrder(
-      [{ id: 'courier-1', name: `Delivery: ${courierForm.itemDesc}`, quantity: 1, price: courierFee }],
+      [{ id: 'courier-1', name: `Delivery: ${courierForm.itemDesc}`, quantity: 1, price: 0 }],
       courierFee,
       undefined,
       extra

@@ -3614,11 +3614,12 @@ app.post('/api/orders', authenticateToken, async (req: any, res) => {
             0
           )
         : 0;
+      // Courier: fee is the whole order — ignore placeholder line items priced as delivery.
       const expectedTotal =
-        finalOrderType === 'courier' && itemsSubtotal <= 0
+        finalOrderType === 'courier'
           ? finalDeliveryFee
           : Math.round((itemsSubtotal + finalDeliveryFee) * 100) / 100;
-      if (Math.abs(Number(total) - expectedTotal) > 1) {
+      if (Math.abs(Number(total) - expectedTotal) > 1.5) {
         return res.status(400).json({
           message: 'Order total does not match items + delivery for route distance',
           distance_km: quote.distance_km,
