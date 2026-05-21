@@ -4526,6 +4526,7 @@ function serveLegalPage(slug: string) {
     if (!fs.existsSync(file)) {
       return res.status(404).type('text/plain').send('Page not found');
     }
+    res.set('Cache-Control', 'no-store');
     res.type('html').sendFile(file);
   };
 }

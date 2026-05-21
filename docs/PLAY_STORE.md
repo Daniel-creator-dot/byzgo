@@ -4,7 +4,7 @@ Everything in the repo for Play review:
 
 | Item | Status |
 |------|--------|
-| Privacy policy URL | https://www.bytzgo.net/privacy (`backend/legal/`) |
+| Privacy policy URL | https://www.bytzgo.net/privacy (also https://byzgo-api.onrender.com/privacy) |
 | Terms | https://www.bytzgo.net/terms |
 | Account deletion | In-app + https://www.bytzgo.net/account-deletion |
 | Data safety answers | [PLAY_STORE_DATA_SAFETY.md](./PLAY_STORE_DATA_SAFETY.md) |
