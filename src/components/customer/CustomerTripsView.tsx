@@ -1,3 +1,4 @@
+import { Fragment } from 'react';
 import axios from 'axios';
 import { Clock, Package, ShoppingBag, Star, AlertTriangle } from 'lucide-react';
 import { motion } from 'motion/react';
@@ -83,17 +84,18 @@ export function CustomerTripsView({
             </p>
           )}
           {otherTrips.map((order) => (
-            <TripHistoryCard
-              key={order.id}
-              order={order}
-              vendors={vendors}
-              user={user}
-              paystackKey={paystackKey}
-              setPaystackKey={setPaystackKey}
-              addNotification={addNotification}
-              refreshData={refreshData}
-              onCancelOrder={onCancelOrder}
-            />
+            <Fragment key={order.id}>
+              <TripHistoryCard
+                order={order}
+                vendors={vendors}
+                user={user}
+                paystackKey={paystackKey}
+                setPaystackKey={setPaystackKey}
+                addNotification={addNotification}
+                refreshData={refreshData}
+                onCancelOrder={onCancelOrder}
+              />
+            </Fragment>
           ))}
         </div>
       )}

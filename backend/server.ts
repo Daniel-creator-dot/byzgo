@@ -15,7 +15,19 @@ import axios from 'axios';
 import { OAuth2Client } from 'google-auth-library';
 import webpush from 'web-push';
 import crypto from 'crypto';
-import sharp from 'sharp';
+import {
+  ALLOWED_UPLOAD_MIME,
+  getStorageConfig,
+  isMediaError,
+  isSupabaseStorageConfigured,
+  parseUploadFolder,
+  persistUploadedImage,
+  probeStorage,
+  resolveImageUrlForClient,
+  resolveUploadFileName,
+  checkUploadRateLimit,
+  type PictureFolder,
+} from './media';
 
 dotenv.config({ path: path.join(__dirname, '.env') });
 dotenv.config({ path: path.join(__dirname, '..', '.env.local') });
@@ -135,12 +147,23 @@ app.use(cors());
 app.use(express.json({ limit: '12mb' }));
 app.use(express.urlencoded({ extended: true, limit: '12mb' }));
 
-app.get('/api/health', (_req, res) => {
+app.get('/api/health', async (_req, res) => {
+  const storage = getStorageConfig();
+  let storageProbe: { ok: boolean; message?: string } = { ok: false, message: 'not configured' };
+  if (storage.configured) {
+    storageProbe = await probeStorage();
+  }
   res.json({
     ok: true,
     service: 'bytzgo-api',
     client: 'flutter',
     fcm: firebaseAdminHasCredentials,
+    media: {
+      storage: storage.configured ? 'supabase' : 'inline_fallback',
+      bucket: storage.bucket,
+      storageOk: storageProbe.ok,
+      storageMessage: storageProbe.message,
+    },
   });
 });
 
@@ -154,19 +177,21 @@ app.get('/', (_req, res) => {
 
 
 
-// Multer config for in-memory processing (images stored in DB as Base64)
-const upload = multer({ 
-  storage: multer.memoryStorage(), 
-  limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
+const imageMimeFilter: multer.Options['fileFilter'] = (_req, file, cb) => {
+  const mime = (file.mimetype || '').toLowerCase().split(';')[0].trim();
+  cb(null, ALLOWED_UPLOAD_MIME.has(mime));
+};
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: imageMimeFilter,
 });
 
 const riderDocUpload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 3 * 1024 * 1024 },
-  fileFilter: (_req, file, cb) => {
-    const ok = /^image\/(jpeg|jpg|pjpeg)$/i.test(file.mimetype);
-    cb(null, ok);
-  },
+  limits: { fileSize: 4 * 1024 * 1024 },
+  fileFilter: imageMimeFilter,
 });
 
 const RIDER_DOC_TYPES = ['license', 'ghana_card', 'photo'] as const;
@@ -179,33 +204,32 @@ function isRiderDocType(value: string): value is RiderDocType {
 const USER_PUBLIC_FIELDS =
   'id, name, email, role, balance, phone, cover_image, avatar_url, address, lat, lng, region, status, is_online, shop_category';
 
-/** JWT payload only — never embed avatar/cover base64 (causes HTTP 431 on API calls). */
-function signAuthToken(user: {
-  id: string | number;
-  name?: string;
-  email?: string;
-  role?: string;
-  balance?: unknown;
-  status?: string;
-  is_online?: boolean;
-  region?: string;
-}): string {
+/** Minimal JWT — large payloads (e.g. base64 in token) trigger HTTP 431 on Render/nginx. */
+function signAuthToken(user: { id: string | number; role?: string }): string {
   return jwt.sign(
-    {
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      role: user.role,
-      balance: user.balance,
-      status: user.status,
-      is_online: user.is_online,
-      region: user.region,
-    },
-    process.env.JWT_SECRET as string
+    { id: user.id, role: user.role },
+    process.env.JWT_SECRET as string,
+    { expiresIn: '30d' }
   );
 }
 
-const SHOP_CATEGORIES = ['pharmacy', 'food', 'fashion', 'groceries'] as const;
+/** Strip huge data URLs from profile fields in JSON responses (body is fine; never put these in JWT). */
+function userForAuthResponse(row: Record<string, unknown> | null | undefined) {
+  if (!row) return row;
+  const u = { ...row } as Record<string, unknown>;
+  delete u.password;
+  if (typeof u.avatar_url === 'string' && u.avatar_url.startsWith('data:')) {
+    u.has_avatar = true;
+    u.avatar_url = null;
+  }
+  if (typeof u.cover_image === 'string' && u.cover_image.startsWith('data:')) {
+    u.has_cover_image = true;
+    u.cover_image = null;
+  }
+  return u;
+}
+
+const SHOP_CATEGORIES = ['pharmacy', 'food', 'restaurant', 'fashion', 'groceries'] as const;
 
 const PRIMECARE_CANONICAL_EMAIL = 'vendor@bytzgo.net';
 
@@ -231,13 +255,21 @@ const pool = new Pool({
   ssl: process.env.DATABASE_URL?.includes('supabase.com') ? { rejectUnauthorized: false } : false
 });
 
-async function fetchRiderDocuments(userId: string) {
+async function fetchRiderDocuments(userId: string, options?: { adminReview?: boolean }) {
   const result = await pool.query(
     `SELECT doc_type, image_url, mime_type, review_status, rejection_reason, uploaded_at, reviewed_at
      FROM rider_documents WHERE user_id = $1 ORDER BY doc_type`,
     [userId]
   );
-  return result.rows;
+  const rows = result.rows as Array<Record<string, unknown>>;
+  return Promise.all(
+    rows.map(async (row) => ({
+      ...row,
+      image_url: await resolveImageUrlForClient(String(row.image_url ?? ''), {
+        adminReview: options?.adminReview,
+      }),
+    }))
+  );
 }
 
 async function riderHasAllDocuments(userId: string): Promise<boolean> {
@@ -642,6 +674,10 @@ const initDb = async () => {
         ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_code_created_at TIMESTAMP WITH TIME ZONE;
         ALTER TABLE orders ADD COLUMN IF NOT EXISTS arrived_at TIMESTAMP WITH TIME ZONE;
         ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_payment_ack TEXT;
+        ALTER TABLE orders ADD COLUMN IF NOT EXISTS pulse_guide_lat DOUBLE PRECISION;
+        ALTER TABLE orders ADD COLUMN IF NOT EXISTS pulse_guide_lng DOUBLE PRECISION;
+        ALTER TABLE orders ADD COLUMN IF NOT EXISTS pulse_guide_at TIMESTAMP WITH TIME ZONE;
+        ALTER TABLE orders ADD COLUMN IF NOT EXISTS pulse_guide_phase TEXT;
       EXCEPTION WHEN others THEN NULL;
       END $$;
 
@@ -794,6 +830,19 @@ const initDb = async () => {
       AND items::text LIKE '%courier-1%'
     `);
     console.log('Database initialized successfully');
+    const mediaCfg = getStorageConfig();
+    if (mediaCfg.configured) {
+      const probe = await probeStorage();
+      if (probe.ok) {
+        console.log(`[media] Supabase bucket "${mediaCfg.bucket}" ready (WebP/JPEG pipeline, CDN URLs)`);
+      } else {
+        console.warn(`[media] Storage misconfigured: ${probe.message}`);
+      }
+    } else {
+      console.warn(
+        '[media] SUPABASE_SERVICE_ROLE_KEY not set — using inline base64 fallback (run backend/supabase-storage.sql)'
+      );
+    }
   } catch (err) {
     console.error('Database initialization failed:', err);
   }
@@ -911,10 +960,28 @@ function sanitizeOrderForRole(order: any, role: string, userId: string) {
     }
   }
 
+  if (role === 'rider' && o.rider_id === userId) {
+    if (o.customer_avatar_url) o.customerAvatarUrl = o.customer_avatar_url;
+    if (o.customer_avg_rating != null) {
+      o.customerAvgRating = parseFloat(String(o.customer_avg_rating));
+    }
+  }
+  if (role === 'customer' && o.customer_id === userId && o.rider_avatar_url) {
+    o.riderAvatarUrl = o.rider_avatar_url;
+  }
+
   delete o.customer_phone;
   delete o.rider_phone;
   delete o.customer_name;
   delete o.rider_name;
+  delete o.customer_avatar_url;
+  delete o.customer_avg_rating;
+  delete o.rider_avatar_url;
+  attachPulseGuideFields(o);
+  delete o.pulse_guide_lat;
+  delete o.pulse_guide_lng;
+  delete o.pulse_guide_at;
+  delete o.pulse_guide_phase;
   return o;
 }
 
@@ -924,13 +991,45 @@ const ORDER_CONTACT_JOINS = `
   LEFT JOIN users vu ON vu.id = o.vendor_id`;
 const ORDER_CONTACT_SELECT = `
   cu.name AS customer_name, cu.phone AS customer_phone,
+  cu.avatar_url AS customer_avatar_url,
+  (SELECT ROUND(AVG(o2.rating)::numeric, 1) FROM orders o2
+   WHERE o2.customer_id = cu.id AND o2.rating IS NOT NULL AND o2.rating > 0) AS customer_avg_rating,
   ru.name AS rider_name, ru.phone AS rider_phone,
+  ru.avatar_url AS rider_avatar_url,
   vu.name AS vendor_name`;
 
 function isCustomerPaymentReady(order: any): boolean {
   if (order.payment_status === 'paid') return true;
   const ack = String(order.customer_payment_ack || '').toLowerCase();
   return ack === 'cash' || ack === 'wallet' || ack === 'paystack';
+}
+
+const PULSE_GUIDE_TTL_MS = 8 * 60 * 1000;
+
+function pulseGuidePhaseForStatus(status: string): 'pickup' | 'dropoff' | null {
+  if (['picked_up', 'arrived'].includes(status)) return 'dropoff';
+  if (['pending', 'ready', 'preparing'].includes(status)) return 'pickup';
+  return null;
+}
+
+function isPulseGuideActive(row: any): boolean {
+  if (row?.pulse_guide_lat == null || row?.pulse_guide_lng == null || !row?.pulse_guide_at) {
+    return false;
+  }
+  const at = new Date(row.pulse_guide_at).getTime();
+  return Number.isFinite(at) && Date.now() - at < PULSE_GUIDE_TTL_MS;
+}
+
+function attachPulseGuideFields(o: any) {
+  if (!o) return o;
+  if (o.pulse_guide_lat != null && o.pulse_guide_lng != null) {
+    o.pulseGuideLat = parseFloat(String(o.pulse_guide_lat));
+    o.pulseGuideLng = parseFloat(String(o.pulse_guide_lng));
+    o.pulseGuideAt = o.pulse_guide_at;
+    o.pulseGuidePhase = o.pulse_guide_phase;
+    o.pulseGuideActive = isPulseGuideActive(o);
+  }
+  return o;
 }
 
 async function loadOrderWithContacts(orderId: string) {
@@ -1639,6 +1738,11 @@ const authenticateToken = (req: any, res: any, next: any) => {
   const token = authHeader && authHeader.split(' ')[1];
 
   if (!token) return res.sendStatus(401);
+  if (token.length > 2048) {
+    return res.status(431).json({
+      message: 'Session token is too large. Sign out and sign in again to refresh your session.',
+    });
+  }
 
   jwt.verify(token, process.env.JWT_SECRET as string, async (err: any, user: any) => {
     if (err) return res.sendStatus(403);
@@ -2107,7 +2211,7 @@ app.post('/api/auth/register', async (req, res) => {
     }
     const user = result.rows[0];
     const token = signAuthToken(user);
-    res.json({ user, token });
+    res.json({ user: userForAuthResponse(user), token });
   } catch (err) {
     console.error('Registration failed:', err);
     res.status(400).json({ message: 'Email or Phone number already exists' });
@@ -2133,7 +2237,7 @@ app.post('/api/auth/login', async (req, res) => {
     if (await bcrypt.compare(password, user.password)) {
       const { password: _pw, ...userWithoutPassword } = user;
       const token = signAuthToken(userWithoutPassword);
-      res.json({ user: userWithoutPassword, token });
+      res.json({ user: userForAuthResponse(userWithoutPassword), token });
     } else {
       res.status(401).json({ message: 'Invalid phone/email or password' });
     }
@@ -2211,7 +2315,7 @@ app.post('/api/auth/google', async (req, res) => {
     }
     
     const token = signAuthToken(user);
-    res.json({ user, token });
+    res.json({ user: userForAuthResponse(user), token });
   } catch (err: any) {
     console.error('Google auth error:', err);
     res.status(500).json({ message: 'Google authentication failed' });
@@ -2264,7 +2368,7 @@ app.post('/api/auth/supabase', async (req, res) => {
     }
 
     const token = signAuthToken(user);
-    res.json({ user, token });
+    res.json({ user: userForAuthResponse(user), token });
   } catch (err: any) {
     console.error('Supabase auth error:', err.response?.data || err.message);
     res.status(500).json({ message: 'Supabase authentication failed' });
@@ -2331,6 +2435,23 @@ app.delete('/api/auth/account', authenticateToken, async (req: any, res) => {
   }
 });
 
+// Refresh session (slim JWT + profile without re-login)
+app.get('/api/auth/me', authenticateToken, async (req: any, res) => {
+  try {
+    const result = await pool.query(`SELECT ${USER_PUBLIC_FIELDS} FROM users WHERE id = $1`, [
+      req.user.id,
+    ]);
+    const row = result.rows[0];
+    if (!row) return res.status(404).json({ message: 'User not found' });
+    const user = userForAuthResponse(row);
+    const token = signAuthToken(row);
+    res.json({ user, token });
+  } catch (err) {
+    console.error('Auth me error:', err);
+    res.status(500).json({ message: 'Failed to load profile' });
+  }
+});
+
 // Profile Update
 app.patch('/api/auth/profile', authenticateToken, async (req: any, res) => {
   const { email, phone, cover_image, avatar_url, address, lat, lng, region, shop_category } = req.body;
@@ -2371,8 +2492,8 @@ app.patch('/api/auth/profile', authenticateToken, async (req: any, res) => {
         req.user.id,
       ]
     );
-    const user = result.rows[0];
-    const token = signAuthToken(user);
+    const user = userForAuthResponse(result.rows[0]);
+    const token = signAuthToken(result.rows[0]);
     res.json({ user, token });
   } catch (err: any) {
     console.error('Profile update error:', err);
@@ -2416,7 +2537,7 @@ app.patch('/api/auth/status', authenticateToken, async (req: any, res) => {
       const user = result.rows[0];
       if (isOnline) await seedRiderLocationFromProfile(user.id);
       const token = signAuthToken(user);
-      res.json({ user, token });
+      res.json({ user: userForAuthResponse(user), token });
       io.to(String(user.id)).emit('status:updated', { status: user.status, is_online: user.is_online });
       return;
     }
@@ -2427,7 +2548,7 @@ app.patch('/api/auth/status', authenticateToken, async (req: any, res) => {
     );
     const user = result.rows[0];
     const token = signAuthToken(user);
-    res.json({ user, token });
+    res.json({ user: userForAuthResponse(user), token });
     io.to(String(user.id)).emit('status:updated', { status });
   } catch (err: any) {
     console.error('Status update error:', err);
@@ -2446,36 +2567,47 @@ app.get('/api/wallet', authenticateToken, async (req: any, res) => {
   }
 });
 
-/** Resize product photos so PATCH /products JSON stays under proxy limits. */
-async function productImageDataUrl(buffer: Buffer, mime?: string): Promise<string> {
-  try {
-    const out = await sharp(buffer)
-      .rotate()
-      .resize(800, 800, { fit: 'inside', withoutEnlargement: true })
-      .jpeg({ quality: 72, mozjpeg: true })
-      .toBuffer();
-    return `data:image/jpeg;base64,${out.toString('base64')}`;
-  } catch (err) {
-    console.warn('[upload] sharp compress failed, using original:', (err as Error).message);
-    const type = mime?.startsWith('image/') ? mime : 'image/jpeg';
-    return `data:${type};base64,${buffer.toString('base64')}`;
+function handleMediaUploadError(res: express.Response, err: unknown) {
+  if (isMediaError(err)) {
+    return res.status(err.statusCode).json({ message: err.message, code: err.code });
   }
+  console.error('Media upload error:', err);
+  return res.status(500).json({ message: 'Image upload failed' });
 }
 
-// File Upload (returns compressed Base64 Data URL to be stored in DB)
+// File upload — validated pipeline → Supabase Storage (or compressed inline fallback)
 app.post('/api/upload', authenticateToken, upload.single('image'), async (req: any, res) => {
   try {
     if (!req.file) return res.status(400).json({ message: 'No file uploaded' });
-    const base64 = await productImageDataUrl(req.file.buffer, req.file.mimetype);
-    if (base64.length > 900_000) {
-      return res.status(413).json({
-        message: 'Image is still too large after compression. Try a smaller photo.',
-      });
+    checkUploadRateLimit(String(req.user.id));
+
+    const role = req.user.role as string;
+    let folder = parseUploadFolder(req.body?.folder, 'products');
+    if (folder === 'products' && role !== 'vendor' && role !== 'admin') {
+      folder = 'avatars';
     }
-    res.json({ url: base64 });
+    if (folder === 'rider-documents') {
+      return res.status(403).json({ message: 'Use rider document upload for KYC photos.' });
+    }
+
+    const fileName = resolveUploadFileName(folder);
+    const result = await persistUploadedImage({
+      folder,
+      userId: String(req.user.id),
+      fileName,
+      buffer: req.file.buffer,
+      mime: req.file.mimetype,
+    });
+
+    res.json({
+      url: result.url,
+      storage: result.storage,
+      contentType: result.contentType,
+      width: result.width,
+      height: result.height,
+    });
   } catch (err) {
-    console.error('Product image upload error:', err);
-    res.status(500).json({ message: 'Image upload failed' });
+    return handleMediaUploadError(res, err);
   }
 });
 
@@ -2508,10 +2640,18 @@ app.post(
       return res.status(400).json({ message: 'Invalid document type. Use license, ghana_card, or photo.' });
     }
     if (!req.file) {
-      return res.status(400).json({ message: 'No JPEG image uploaded' });
+      return res.status(400).json({ message: 'No image uploaded' });
     }
     try {
-      const base64 = `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`;
+      checkUploadRateLimit(String(req.user.id));
+      const imageResult = await persistUploadedImage({
+        folder: 'rider-documents',
+        userId: String(req.user.id),
+        fileName: resolveUploadFileName('rider-documents', docType),
+        buffer: req.file.buffer,
+        mime: req.file.mimetype,
+      });
+      const imageRef = imageResult.url;
       await pool.query(
         `INSERT INTO rider_documents (user_id, doc_type, image_url, mime_type, review_status, rejection_reason, reviewed_by, reviewed_at)
          VALUES ($1, $2, $3, $4, 'pending', NULL, NULL, NULL)
@@ -2523,7 +2663,7 @@ app.post(
            reviewed_by = NULL,
            reviewed_at = NULL,
            uploaded_at = CURRENT_TIMESTAMP`,
-        [req.user.id, docType, base64, req.file.mimetype]
+        [req.user.id, docType, imageRef, imageResult.contentType]
       );
 
       if (await riderHasAllDocuments(req.user.id)) {
@@ -2538,10 +2678,15 @@ app.post(
       const userRes = await pool.query(`SELECT ${USER_PUBLIC_FIELDS} FROM users WHERE id = $1`, [req.user.id]);
       const user = userRes.rows[0];
       const token = signAuthToken(user);
-      res.json({ url: base64, documents, user, token });
+      res.json({
+        url: await resolveImageUrlForClient(imageRef),
+        storage: imageResult.storage,
+        documents,
+        user: userForAuthResponse(user),
+        token,
+      });
     } catch (err) {
-      console.error('Rider document upload error:', err);
-      res.status(500).json({ message: 'Document upload failed' });
+      return handleMediaUploadError(res, err);
     }
   }
 );
@@ -2564,7 +2709,12 @@ app.post('/api/rider/documents/submit', authenticateToken, async (req: any, res)
     const userRes = await pool.query(`SELECT ${USER_PUBLIC_FIELDS} FROM users WHERE id = $1`, [req.user.id]);
     const user = userRes.rows[0];
     const token = signAuthToken(user);
-    res.json({ message: 'Submitted for admin review', user, token, documents: await fetchRiderDocuments(req.user.id) });
+    res.json({
+      message: 'Submitted for admin review',
+      user: userForAuthResponse(user),
+      token,
+      documents: await fetchRiderDocuments(req.user.id),
+    });
     io.to(String(req.user.id)).emit('status:updated', { status: 'pending', is_online: false });
   } catch (err) {
     console.error('Rider document submit error:', err);
@@ -3074,7 +3224,18 @@ app.post('/api/products', authenticateToken, async (req: any, res) => {
       'INSERT INTO products (vendor_id, name, description, price, category, image_url) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
       [vendorId, name, description, price, category, image_url]
     );
-    res.json(result.rows[0]);
+    const product = result.rows[0];
+    io.emit('product:updated', {
+      vendorId,
+      product: {
+        id: product.id,
+        vendor_id: product.vendor_id,
+        name: product.name,
+        price: product.price,
+        is_available: product.is_available,
+      },
+    });
+    res.json(product);
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
   }
@@ -3113,7 +3274,18 @@ app.patch('/api/products/:id', authenticateToken, async (req: any, res) => {
       [name, description, price, category, image_url, is_available, id, ownerVendorId]
     );
     if (result.rows[0]) {
-      res.json(result.rows[0]);
+      const product = result.rows[0];
+      io.emit('product:updated', {
+        vendorId: ownerVendorId,
+        product: {
+          id: product.id,
+          vendor_id: product.vendor_id,
+          name: product.name,
+          price: product.price,
+          is_available: product.is_available,
+        },
+      });
+      res.json(product);
     } else {
       res.status(404).json({ message: 'Product not found or unauthorized' });
     }
@@ -3390,7 +3562,22 @@ app.get('/api/admin/pending-riders', authenticateToken, async (req: any, res) =>
        GROUP BY u.id
        ORDER BY u.created_at DESC`
     );
-    res.json(result.rows);
+    const rows = result.rows as Array<{ documents?: Array<{ image_url?: string }> }>;
+    const withUrls = await Promise.all(
+      rows.map(async (row) => {
+        const docs = Array.isArray(row.documents) ? row.documents : [];
+        const documents = await Promise.all(
+          docs.map(async (d) => ({
+            ...d,
+            image_url: await resolveImageUrlForClient(String(d.image_url ?? ''), {
+              adminReview: true,
+            }),
+          }))
+        );
+        return { ...row, documents };
+      })
+    );
+    res.json(withUrls);
   } catch (err) {
     console.error('Pending riders error:', err);
     res.status(500).json({ message: 'Failed to fetch pending riders' });
@@ -3739,9 +3926,21 @@ app.post('/api/orders', authenticateToken, async (req: any, res) => {
       Number(lat) &&
       Number(lng)
     ) {
+      let quotePickupLat = Number(pickupLat);
+      let quotePickupLng = Number(pickupLng);
+      if (
+        vendorId &&
+        pickup_lat != null &&
+        pickup_lng != null &&
+        Number(pickup_lat) &&
+        Number(pickup_lng)
+      ) {
+        quotePickupLat = Number(pickup_lat);
+        quotePickupLng = Number(pickup_lng);
+      }
       const quote = await calculateDeliveryFeeFromCoords(
-        Number(pickupLat),
-        Number(pickupLng),
+        quotePickupLat,
+        quotePickupLng,
         Number(lat),
         Number(lng),
         finalRegion,
@@ -3755,9 +3954,14 @@ app.post('/api/orders', authenticateToken, async (req: any, res) => {
             0
           )
         : 0;
-      // Courier: fee is the whole order — ignore placeholder line items priced as delivery.
+      const isVendorShopOrder =
+        Boolean(vendorId) &&
+        itemsSubtotal > 0.5 &&
+        Array.isArray(items) &&
+        items.some((it: any) => Number(it.price || 0) > 0);
+      // Pure courier: total = delivery only. Shop/vendor carts: items + delivery.
       const expectedTotal =
-        finalOrderType === 'courier'
+        finalOrderType === 'courier' && !isVendorShopOrder
           ? finalDeliveryFee
           : Math.round((itemsSubtotal + finalDeliveryFee) * 100) / 100;
       if (Math.abs(Number(total) - expectedTotal) > 1.5) {
@@ -4240,6 +4444,84 @@ app.post('/api/orders/:id/cancel', authenticateToken, async (req: any, res) => {
     client.release();
     console.error('Cancel order error:', err);
     res.status(500).json({ message: 'Server error' });
+  }
+});
+
+/** Pulse Guide™ — customer flashes live GPS so rider finds them without phone calls. */
+app.post('/api/orders/:id/pulse-guide', authenticateToken, async (req: any, res) => {
+  const orderId = req.params.id;
+  const lat = Number(req.body?.lat);
+  const lng = Number(req.body?.lng);
+  let phase = String(req.body?.phase || '').trim().toLowerCase();
+
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return res.status(400).json({ message: 'Valid lat and lng are required' });
+  }
+
+  try {
+    const orderRes = await pool.query(
+      `SELECT o.*, ${ORDER_CONTACT_SELECT}
+       FROM orders o ${ORDER_CONTACT_JOINS} WHERE o.id = $1`,
+      [orderId]
+    );
+    const order = orderRes.rows[0];
+    if (!order) return res.status(404).json({ message: 'Order not found' });
+    if (order.customer_id !== req.user.id) {
+      return res.status(403).json({ message: 'Only the customer can activate Pulse Guide' });
+    }
+    if (!order.rider_id) {
+      return res.status(400).json({ message: 'Wait until a biker accepts your trip' });
+    }
+
+    const allowedPhase = pulseGuidePhaseForStatus(order.status);
+    if (!allowedPhase) {
+      return res.status(400).json({ message: 'Pulse Guide is not available for this trip stage' });
+    }
+    if (phase !== 'pickup' && phase !== 'dropoff') phase = allowedPhase;
+    if (phase !== allowedPhase) {
+      return res.status(400).json({
+        message: phase === 'pickup' ? 'Use drop-off pulse for this stage' : 'Use pickup pulse for this stage',
+      });
+    }
+
+    const updated = await pool.query(
+      `UPDATE orders SET
+         pulse_guide_lat = $1,
+         pulse_guide_lng = $2,
+         pulse_guide_at = CURRENT_TIMESTAMP,
+         pulse_guide_phase = $3,
+         updated_at = CURRENT_TIMESTAMP
+       WHERE id = $4
+       RETURNING *`,
+      [lat, lng, phase, orderId]
+    );
+    const full = await loadOrderWithContacts(orderId);
+
+    const pulsePayload = {
+      orderId,
+      lat,
+      lng,
+      phase,
+      at: full?.pulse_guide_at,
+      active: true,
+    };
+    io.to(String(order.rider_id)).emit('pulse:guide', pulsePayload);
+    io.to(String(order.customer_id)).emit('pulse:guide', pulsePayload);
+
+    const phaseLabel = phase === 'pickup' ? 'pickup' : 'drop-off';
+    void sendPushToUserIds([order.rider_id], {
+      title: 'Pulse Guide active',
+      body: `Customer is flashing live ${phaseLabel} location on your map — follow the pulse`,
+      type: 'pulse-guide',
+      orderId,
+      highPriority: true,
+    });
+
+    broadcastOrderUpdated(full);
+    res.json(sanitizeOrderForRole(full, 'customer', req.user.id));
+  } catch (err: any) {
+    console.error('Pulse Guide error:', err);
+    res.status(500).json({ message: 'Could not activate Pulse Guide' });
   }
 });
 

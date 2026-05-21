@@ -1,0 +1,392 @@
+[
+  {
+    "name": "Papaye Fast Foods (Osu)",
+    "slug": "papaye-osu",
+    "phone": "0302778444",
+    "address": "14th Lane, Oxford Street, Osu, Accra",
+    "lat": 5.55503,
+    "lng": -0.17542,
+    "shop_category": "restaurant",
+    "tagline": "Fried chicken, jollof & rice — Accra favourite",
+    "menu": [
+      { "name": "Jollof & Chicken", "price": 48 },
+      { "name": "Fried Rice & Chicken", "price": 45 },
+      { "name": "Banku & Tilapia", "price": 55 }
+    ]
+  },
+  {
+    "name": "Frankie's Restaurant & Bar (Osu)",
+    "slug": "frankies-osu",
+    "phone": "0302776171",
+    "address": "Oxford Street, Osu, Accra",
+    "lat": 5.55641,
+    "lng": -0.18089,
+    "shop_category": "restaurant",
+    "tagline": "Pizza, burgers & grills since 1995",
+    "menu": [
+      { "name": "Margherita Pizza", "price": 75 },
+      { "name": "Classic Burger", "price": 65 },
+      { "name": "Grilled Chicken", "price": 85 }
+    ]
+  },
+  {
+    "name": "KFC (Accra Mall)",
+    "slug": "kfc-accra-mall",
+    "phone": "0302780350",
+    "address": "Tetteh Quarshie Interchange, Accra Mall, Accra",
+    "lat": 5.62118,
+    "lng": -0.17352,
+    "shop_category": "restaurant",
+    "tagline": "Fried chicken & sides",
+    "menu": [
+      { "name": "Streetwise 2 Piece", "price": 42 },
+      { "name": "Zinger Box Meal", "price": 58 },
+      { "name": "Family Bucket", "price": 120 }
+    ]
+  },
+  {
+    "name": "Burger King (Accra Mall)",
+    "slug": "burger-king-accra-mall",
+    "phone": "0302781122",
+    "address": "Accra Mall, Spintex Road, Accra",
+    "lat": 5.62062,
+    "lng": -0.17408,
+    "shop_category": "restaurant",
+    "tagline": "Flame-grilled burgers",
+    "menu": [
+      { "name": "Whopper Meal", "price": 72 },
+      { "name": "Chicken Royale", "price": 55 },
+      { "name": "Crispy Chicken", "price": 48 }
+    ]
+  },
+  {
+    "name": "Pizza Inn (Osu)",
+    "slug": "pizza-inn-osu",
+    "phone": "0302773890",
+    "address": "Oxford Street, Osu, Accra",
+    "lat": 5.55476,
+    "lng": -0.17738,
+    "shop_category": "restaurant",
+    "tagline": "Pizza, pasta & chicken",
+    "menu": [
+      { "name": "BBQ Chicken Pizza (Medium)", "price": 95 },
+      { "name": "Pepperoni Classic", "price": 88 },
+      { "name": "Spaghetti Bolognese", "price": 52 }
+    ]
+  },
+  {
+    "name": "Barcelos (Osu)",
+    "slug": "barcelos-osu",
+    "phone": "0302774555",
+    "address": "Liberation Road, Osu, Accra",
+    "lat": 5.55592,
+    "lng": -0.17895,
+    "shop_category": "restaurant",
+    "tagline": "Flame-grilled peri-peri chicken",
+    "menu": [
+      { "name": "Quarter Chicken Meal", "price": 55 },
+      { "name": "Full Chicken & Chips", "price": 110 },
+      { "name": "Prego Roll", "price": 38 }
+    ]
+  },
+  {
+    "name": "Chase Restaurant (Airport)",
+    "slug": "chase-restaurant-airport",
+    "phone": "0302774388",
+    "address": "Airport City, Accra",
+    "lat": 5.60482,
+    "lng": -0.16795,
+    "shop_category": "restaurant",
+    "tagline": "Continental & Ghanaian buffet",
+    "menu": [
+      { "name": "Lunch Buffet", "price": 150 },
+      { "name": "Grilled Tilapia", "price": 95 },
+      { "name": "Club Sandwich", "price": 65 }
+    ]
+  },
+  {
+    "name": "Cafe Kwae (Airport City)",
+    "slug": "cafe-kwae-airport",
+    "phone": "0302789001",
+    "address": "Airport City, Accra",
+    "lat": 5.60124,
+    "lng": -0.17088,
+    "shop_category": "restaurant",
+    "tagline": "Coffee, brunch & light meals",
+    "menu": [
+      { "name": "Avocado Toast", "price": 55 },
+      { "name": "Kwae Breakfast Plate", "price": 78 },
+      { "name": "Fresh Juice", "price": 28 }
+    ]
+  },
+  {
+    "name": "Azmera Restaurant (Labadi)",
+    "slug": "azmera-labadi",
+    "phone": "0302779922",
+    "address": "Labadi Road, Accra",
+    "lat": 5.56688,
+    "lng": -0.15162,
+    "shop_category": "restaurant",
+    "tagline": "Ethiopian & East African dining",
+    "menu": [
+      { "name": "Injera Combo (Veg)", "price": 70 },
+      { "name": "Doro Wat", "price": 85 },
+      { "name": "Coffee Ceremony Set", "price": 45 }
+    ]
+  },
+  {
+    "name": "Peter's Grill (Ring Road)",
+    "slug": "peters-grill-ring-road",
+    "phone": "0302772144",
+    "address": "Ring Road Central, Accra",
+    "lat": 5.57192,
+    "lng": -0.20815,
+    "shop_category": "restaurant",
+    "tagline": "Grills, kebabs & late-night bites",
+    "menu": [
+      { "name": "Mixed Grill Platter", "price": 120 },
+      { "name": "Beef Suya", "price": 45 },
+      { "name": "Chips & Chicken", "price": 50 }
+    ]
+  },
+  {
+    "name": "Noble House (Ring Road)",
+    "slug": "noble-house-ring-road",
+    "phone": "0302773500",
+    "address": "Ring Road Central, Accra",
+    "lat": 5.57038,
+    "lng": -0.21042,
+    "shop_category": "restaurant",
+    "tagline": "Chinese & Asian cuisine",
+    "menu": [
+      { "name": "Sweet & Sour Chicken", "price": 75 },
+      { "name": "Fried Rice Special", "price": 65 },
+      { "name": "Hot & Sour Soup", "price": 35 }
+    ]
+  },
+  {
+    "name": "Tante Marie (Osu)",
+    "slug": "tante-marie-osu",
+    "phone": "0302776010",
+    "address": "Oxford Street, Osu, Accra",
+    "lat": 5.55762,
+    "lng": -0.17822,
+    "shop_category": "restaurant",
+    "tagline": "Pastries, coffee & quick meals",
+    "menu": [
+      { "name": "Meat Pie", "price": 12 },
+      { "name": "Club Sandwich", "price": 42 },
+      { "name": "Fresh Croissant", "price": 18 }
+    ]
+  },
+  {
+    "name": "Chicken Republik (Spintex)",
+    "slug": "chicken-republik-spintex",
+    "phone": "0302812345",
+    "address": "Spintex Road, Accra",
+    "lat": 5.63482,
+    "lng": -0.09785,
+    "shop_category": "restaurant",
+    "tagline": "Local chicken & rice bowls",
+    "menu": [
+      { "name": "Republik Box", "price": 40 },
+      { "name": "Spicy Wings (6pc)", "price": 35 },
+      { "name": "Jollof Max", "price": 38 }
+    ]
+  },
+  {
+    "name": "Santoku (Villagio)",
+    "slug": "santoku-villagio",
+    "phone": "0302784455",
+    "address": "Villagio, Tetteh Quarshie, Accra",
+    "lat": 5.63592,
+    "lng": -0.10742,
+    "shop_category": "restaurant",
+    "tagline": "Japanese sushi & robata",
+    "menu": [
+      { "name": "Salmon Nigiri Set", "price": 95 },
+      { "name": "Chicken Teriyaki Bowl", "price": 88 },
+      { "name": "Miso Soup", "price": 25 }
+    ]
+  },
+  {
+    "name": "Coco Lounge (Osu)",
+    "slug": "coco-lounge-osu",
+    "phone": "0302778899",
+    "address": "Oxford Street, Osu, Accra",
+    "lat": 5.55548,
+    "lng": -0.17658,
+    "shop_category": "restaurant",
+    "tagline": "Lounge dining & cocktails",
+    "menu": [
+      { "name": "Grilled Lamb Chops", "price": 145 },
+      { "name": "Seafood Pasta", "price": 110 },
+      { "name": "Caesar Salad", "price": 55 }
+    ]
+  },
+  {
+    "name": "Indigo Restaurant (Cantonments)",
+    "slug": "indigo-cantonments",
+    "phone": "0302771234",
+    "address": "Cantonments, Accra",
+    "lat": 5.57238,
+    "lng": -0.16842,
+    "shop_category": "restaurant",
+    "tagline": "Fine dining & wine bar",
+    "menu": [
+      { "name": "Chef's Tasting Plate", "price": 180 },
+      { "name": "Grilled Sea Bass", "price": 165 },
+      { "name": "Chocolate Fondant", "price": 48 }
+    ]
+  },
+  {
+    "name": "Buka Restaurant (Osu)",
+    "slug": "buka-osu",
+    "phone": "0302775566",
+    "address": "10th Lane, Osu, Accra",
+    "lat": 5.55692,
+    "lng": -0.18012,
+    "shop_category": "restaurant",
+    "tagline": "Nigerian soups & swallow",
+    "menu": [
+      { "name": "Egusi & Pounded Yam", "price": 70 },
+      { "name": "Pepper Soup (Goat)", "price": 65 },
+      { "name": "Jollof Rice", "price": 45 }
+    ]
+  },
+  {
+    "name": "Kōm Restaurant (Labone)",
+    "slug": "kom-labone",
+    "phone": "0302777788",
+    "address": "Labone, Accra",
+    "lat": 5.56492,
+    "lng": -0.16488,
+    "shop_category": "restaurant",
+    "tagline": "Modern Ghanaian tasting menu",
+    "menu": [
+      { "name": "Tasting Menu (3 courses)", "price": 220 },
+      { "name": "Waakye Bowl", "price": 55 },
+      { "name": "Palm Nut Soup", "price": 68 }
+    ]
+  },
+  {
+    "name": "Beef Town (Dzorwulu)",
+    "slug": "beef-town-dzorwulu",
+    "phone": "0302782233",
+    "address": "Dzorwulu, Accra",
+    "lat": 5.59782,
+    "lng": -0.19452,
+    "shop_category": "restaurant",
+    "tagline": "Steaks, burgers & ribs",
+    "menu": [
+      { "name": "Ribeye Steak 300g", "price": 185 },
+      { "name": "BBQ Ribs Half Rack", "price": 120 },
+      { "name": "Loaded Fries", "price": 42 }
+    ]
+  },
+  {
+    "name": "Fiesta Royale Restaurant",
+    "slug": "fiesta-royale",
+    "phone": "0302779000",
+    "address": "North Kaneshie, Accra",
+    "lat": 5.59182,
+    "lng": -0.21985,
+    "shop_category": "restaurant",
+    "tagline": "Hotel restaurant & events",
+    "menu": [
+      { "name": "Buffet Lunch", "price": 140 },
+      { "name": "Grilled Chicken", "price": 75 },
+      { "name": "Continental Breakfast", "price": 65 }
+    ]
+  },
+  {
+    "name": "Labadi Beach Hotel Restaurant",
+    "slug": "labadi-beach-hotel",
+    "phone": "0302771111",
+    "address": "1 La Bypass, Labadi, Accra",
+    "lat": 5.56242,
+    "lng": -0.14782,
+    "shop_category": "restaurant",
+    "tagline": "Seafood & beachfront dining",
+    "menu": [
+      { "name": "Grilled Lobster", "price": 250 },
+      { "name": "Fish Platter", "price": 165 },
+      { "name": "Tropical Cocktail", "price": 45 }
+    ]
+  },
+  {
+    "name": "Saddlers Restaurant (Cantonments)",
+    "slug": "saddlers-cantonments",
+    "phone": "0302773344",
+    "address": "Cantonments, Accra",
+    "lat": 5.57112,
+    "lng": -0.16992,
+    "shop_category": "restaurant",
+    "tagline": "Continental & pub classics",
+    "menu": [
+      { "name": "Fish & Chips", "price": 85 },
+      { "name": "Shepherd's Pie", "price": 72 },
+      { "name": "Sunday Roast", "price": 130 }
+    ]
+  },
+  {
+    "name": "Mama Mia Pizzeria (East Legon)",
+    "slug": "mama-mia-east-legon",
+    "phone": "0302815678",
+    "address": "American House, East Legon, Accra",
+    "lat": 5.63842,
+    "lng": -0.15422,
+    "shop_category": "restaurant",
+    "tagline": "Wood-fired pizza & pasta",
+    "menu": [
+      { "name": "Quattro Formaggi", "price": 92 },
+      { "name": "Lasagna", "price": 78 },
+      { "name": "Garlic Bread", "price": 22 }
+    ]
+  },
+  {
+    "name": "Osteria Michelangelo (Airport)",
+    "slug": "osteria-michelangelo",
+    "phone": "0302786677",
+    "address": "Airport Residential Area, Accra",
+    "lat": 5.60282,
+    "lng": -0.17542,
+    "shop_category": "restaurant",
+    "tagline": "Italian trattoria",
+    "menu": [
+      { "name": "Spaghetti Carbonara", "price": 88 },
+      { "name": "Margherita Pizza", "price": 82 },
+      { "name": "Tiramisu", "price": 38 }
+    ]
+  },
+  {
+    "name": "Starbites (Airport City)",
+    "slug": "starbites-airport",
+    "phone": "0302783344",
+    "address": "Airport City, Accra",
+    "lat": 5.60342,
+    "lng": -0.16922,
+    "shop_category": "restaurant",
+    "tagline": "Food court — local & fast food",
+    "menu": [
+      { "name": "Waakye Special", "price": 35 },
+      { "name": "Kebab & Fries", "price": 40 },
+      { "name": "Smoothie Bowl", "price": 32 }
+    ]
+  },
+  {
+    "name": "Bread & Wine (Labone)",
+    "slug": "bread-wine-labone",
+    "phone": "0302774455",
+    "address": "Labone, Accra",
+    "lat": 5.56582,
+    "lng": -0.16612,
+    "shop_category": "restaurant",
+    "tagline": "Bakery café & brunch",
+    "menu": [
+      { "name": "Sourdough & Soup", "price": 48 },
+      { "name": "Full English Breakfast", "price": 72 },
+      { "name": "Cappuccino", "price": 22 }
+    ]
+  }
+]

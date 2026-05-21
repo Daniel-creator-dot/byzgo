@@ -18,6 +18,7 @@ class AuthUser {
     this.address,
     this.coverImage,
     this.avatarUrl,
+    this.hasAvatar = false,
     this.shopCategory,
   });
 
@@ -35,7 +36,14 @@ class AuthUser {
   final String? address;
   final String? coverImage;
   final String? avatarUrl;
+  final bool hasAvatar;
   final String? shopCategory;
+
+  static String? _persistImageField(String? url) {
+    if (url == null || url.isEmpty) return null;
+    if (url.startsWith('data:')) return null;
+    return url;
+  }
 
   factory AuthUser.fromJson(Map<String, dynamic> json) {
     return AuthUser(
@@ -53,6 +61,7 @@ class AuthUser {
       address: json['address']?.toString(),
       coverImage: json['cover_image']?.toString(),
       avatarUrl: json['avatar_url']?.toString(),
+      hasAvatar: json['has_avatar'] == true,
       shopCategory: json['shop_category']?.toString(),
     );
   }
@@ -70,8 +79,9 @@ class AuthUser {
         if (lng != null) 'lng': lng,
         if (phone != null) 'phone': phone,
         if (address != null) 'address': address,
-        if (coverImage != null) 'cover_image': coverImage,
-        if (avatarUrl != null) 'avatar_url': avatarUrl,
+        if (coverImage != null) 'cover_image': _persistImageField(coverImage),
+        if (avatarUrl != null) 'avatar_url': _persistImageField(avatarUrl),
+        if (hasAvatar) 'has_avatar': hasAvatar,
         if (shopCategory != null) 'shop_category': shopCategory,
       };
 
@@ -84,6 +94,8 @@ class AuthUser {
     double? lng,
     String? phone,
     String? address,
+    String? avatarUrl,
+    bool? hasAvatar,
   }) {
     return AuthUser(
       id: id,
@@ -99,7 +111,8 @@ class AuthUser {
       phone: phone ?? this.phone,
       address: address ?? this.address,
       coverImage: coverImage,
-      avatarUrl: avatarUrl,
+      avatarUrl: avatarUrl ?? this.avatarUrl,
+      hasAvatar: hasAvatar ?? this.hasAvatar,
       shopCategory: shopCategory,
     );
   }

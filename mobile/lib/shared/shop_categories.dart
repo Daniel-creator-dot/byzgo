@@ -24,8 +24,14 @@ class ShopCategory {
     ShopCategory(
       id: 'food',
       label: 'Food & Drinks',
-      icon: Icons.restaurant_outlined,
+      icon: Icons.local_cafe_outlined,
       accent: Color(0xFFF59E0B),
+    ),
+    ShopCategory(
+      id: 'restaurant',
+      label: 'Restaurants',
+      icon: Icons.restaurant_outlined,
+      accent: Color(0xFFEF4444),
     ),
     ShopCategory(
       id: 'fashion',

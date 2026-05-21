@@ -60,9 +60,17 @@ class Order {
 
     this.rating,
     this.customerPhone,
+    this.customerAvatarUrl,
+    this.customerAvgRating,
     this.riderPhone,
     this.riderName,
+    this.riderAvatarUrl,
     this.vendorName,
+    this.pulseGuideLat,
+    this.pulseGuideLng,
+    this.pulseGuideAt,
+    this.pulseGuidePhase,
+    this.pulseGuideActive,
 
   });
 
@@ -123,11 +131,23 @@ class Order {
 
   final String? customerPhone;
 
+  final String? customerAvatarUrl;
+
+  final double? customerAvgRating;
+
   final String? riderPhone;
 
   final String? riderName;
 
+  final String? riderAvatarUrl;
+
   final String? vendorName;
+
+  final double? pulseGuideLat;
+  final double? pulseGuideLng;
+  final String? pulseGuideAt;
+  final String? pulseGuidePhase;
+  final bool? pulseGuideActive;
 
   bool get isCourier => orderType == 'courier';
 
@@ -215,14 +235,79 @@ class Order {
 
       customerPhone: (json['customerPhone'] ?? json['customer_phone'])?.toString(),
 
+      customerAvatarUrl:
+          (json['customerAvatarUrl'] ?? json['customer_avatar_url'])?.toString(),
+
+      customerAvgRating: parseJsonDouble(
+        json['customerAvgRating'] ?? json['customer_avg_rating'],
+      ),
+
       riderPhone: (json['riderPhone'] ?? json['rider_phone'])?.toString(),
 
       riderName: (json['riderName'] ?? json['rider_name'])?.toString(),
 
+      riderAvatarUrl:
+          (json['riderAvatarUrl'] ?? json['rider_avatar_url'])?.toString(),
+
       vendorName: (json['vendorName'] ?? json['vendor_name'])?.toString(),
+
+      pulseGuideLat: parseJsonDouble(json['pulseGuideLat'] ?? json['pulse_guide_lat']),
+      pulseGuideLng: parseJsonDouble(json['pulseGuideLng'] ?? json['pulse_guide_lng']),
+      pulseGuideAt: (json['pulseGuideAt'] ?? json['pulse_guide_at'])?.toString(),
+      pulseGuidePhase: (json['pulseGuidePhase'] ?? json['pulse_guide_phase'])?.toString(),
+      pulseGuideActive: json['pulseGuideActive'] == true || json['pulse_guide_active'] == true,
 
     );
 
+  }
+
+  Order copyWithPulseGuide({
+    required double lat,
+    required double lng,
+    required String phase,
+    String? at,
+    bool active = true,
+  }) {
+    return Order(
+      id: id,
+      customerId: customerId,
+      customerName: customerName,
+      items: items,
+      total: total,
+      status: status,
+      createdAt: createdAt,
+      address: address,
+      vendorId: vendorId,
+      riderId: riderId,
+      pickup: pickup,
+      pickupAddress: pickupAddress,
+      orderType: orderType,
+      lat: lat,
+      lng: lng,
+      pickupLat: pickupLat,
+      pickupLng: pickupLng,
+      deliveryFee: deliveryFee,
+      expiresAt: expiresAt,
+      dispatchWave: dispatchWave,
+      offerDistanceKm: offerDistanceKm,
+      paymentStatus: paymentStatus,
+      paymentMethod: paymentMethod,
+      customerPaymentAck: customerPaymentAck,
+      deliveryCode: deliveryCode,
+      rating: rating,
+      customerPhone: customerPhone,
+      customerAvatarUrl: customerAvatarUrl,
+      customerAvgRating: customerAvgRating,
+      riderPhone: riderPhone,
+      riderName: riderName,
+      riderAvatarUrl: riderAvatarUrl,
+      vendorName: vendorName,
+      pulseGuideLat: lat,
+      pulseGuideLng: lng,
+      pulseGuideAt: at ?? DateTime.now().toUtc().toIso8601String(),
+      pulseGuidePhase: phase,
+      pulseGuideActive: active,
+    );
   }
 
 }

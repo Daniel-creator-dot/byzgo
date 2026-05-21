@@ -11,6 +11,8 @@ import '../../core/location_service.dart';
 import '../../core/push_notification_service.dart';
 import '../../core/session.dart';
 import '../../core/socket_service.dart';
+import '../../core/trip_chat_unread.dart';
+import '../../models/trip_message.dart';
 import '../../features/auth/auth_repository.dart';
 import '../../features/orders/orders_repository.dart';
 import '../../features/wallet/wallet_repository.dart';
@@ -32,6 +34,9 @@ import '../../shared/widgets/profile_avatar_upload.dart';
 import '../../shared/widgets/legal_links.dart';
 import '../../shared/widgets/bolt_eta_pill.dart';
 import '../../shared/widgets/bytz_scaffold.dart';
+import '../../shared/pulse_guide.dart';
+import '../../shared/widgets/customer_trip_identity.dart';
+import '../../shared/widgets/pulse_guide_hud.dart';
 import '../../shared/widgets/ride_ui.dart';
 import 'delivery_pin_dialog.dart';
 import 'incoming_ride_alert.dart';
@@ -82,6 +87,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
   List<LocationPoint> _navRoutePoints = [];
   String? _navEtaPhrase;
   String? _navDistanceText;
+  OrderMessageHandler? _chatNotifyHandler;
   int? _navEtaMinutes;
   DateTime? _navEtaExpiresAt;
 
@@ -242,8 +248,51 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
     }
   }
 
+  void _patchOrderPulseGuide(
+    String orderId, {
+    required double lat,
+    required double lng,
+    required String phase,
+    String? at,
+  }) {
+    setState(() {
+      _orders = _orders.map((o) {
+        if (o.id != orderId) return o;
+        return o.copyWithPulseGuide(lat: lat, lng: lng, phase: phase, at: at);
+      }).toList();
+    });
+    unawaited(PushNotificationService.instance.showTripAlert(
+      title: 'Pulse Guide active',
+      body: 'Customer is flashing their live location — follow the red pulse',
+      type: 'pulse-guide',
+      orderId: orderId,
+      highPriority: true,
+    ));
+  }
+
+  void _onTripChatMessage(String orderId, TripMessage message) {
+    final userId = _user.id;
+    if (message.senderId == userId) return;
+    context.read<TripChatUnread>().markUnread(orderId);
+    final preview = message.body.length > 120
+        ? '${message.body.substring(0, 117)}…'
+        : message.body;
+    unawaited(PushNotificationService.instance.showTripAlert(
+      title: 'New message',
+      body: preview,
+      type: 'trip-message',
+      orderId: orderId,
+      highPriority: true,
+    ));
+  }
+
   void _wireSocket() {
     _socket.clearHandlers();
+    if (_chatNotifyHandler != null) {
+      _socket.removeOrderMessageListener(_chatNotifyHandler!);
+    }
+    _chatNotifyHandler = _onTripChatMessage;
+    _socket.addOrderMessageListener(_chatNotifyHandler!);
     _socket.onStatusUpdated = ({required status, isOnline, reason}) {
       if (!mounted) return;
       final u = _session.user;
@@ -305,6 +354,16 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
     _socket.onWalletUpdated = (balance) {
       if (!mounted) return;
       _session.patchBalance(balance);
+    };
+    _socket.onPulseGuide = ({
+      required orderId,
+      required lat,
+      required lng,
+      required phase,
+      at,
+    }) {
+      if (!mounted) return;
+      _patchOrderPulseGuide(orderId, lat: lat, lng: lng, phase: phase, at: at);
     };
   }
 
@@ -883,10 +942,10 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
   }
 
   double get _driveSheetFraction {
-    if (!_isOnline) return 0.36;
-    if (_primaryActive != null || _incoming != null) return 0.48;
-    if (_availableOrders.isEmpty) return _driveListExpanded ? 0.32 : 0.24;
-    return _driveListExpanded ? 0.42 : 0.30;
+    if (!_isOnline) return 0.32;
+    if (_primaryActive != null || _incoming != null) return 0.26;
+    if (_availableOrders.isEmpty) return _driveListExpanded ? 0.28 : 0.20;
+    return _driveListExpanded ? 0.34 : 0.26;
   }
 
   Widget _buildDriveTab() {
@@ -955,6 +1014,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
             previewOrder: _previewOrder ?? _incoming,
             earningsToday: _earningsToday,
             tripsToday: _tripsToday,
+            compactMap: _primaryActive != null && _incoming == null,
             onRecenter: () => _driveMapKey.currentState?.fitAllMarkers(),
           ),
         if (_primaryActive != null && _incoming == null)
@@ -989,6 +1049,20 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             mainAxisSize: MainAxisSize.min,
             children: [
+              CustomerTripIdentity(order: order, light: true),
+              const SizedBox(height: 8),
+              ValueListenableBuilder<LocationPoint?>(
+                valueListenable: _myPositionNotifier,
+                builder: (context, pos, _) {
+                  final dist = pulseGuideDistanceMeters(
+                    order,
+                    riderLat: pos?.lat,
+                    riderLng: pos?.lng,
+                  );
+                  return PulseGuideHud(order: order, distanceMeters: dist);
+                },
+              ),
+              const SizedBox(height: 8),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -1094,18 +1168,30 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
                       const SizedBox(width: 6),
                     ],
                     Expanded(
-                      child: FilledButton.icon(
-                        onPressed: () => showTripChatSheet(
-                          context,
-                          order: order,
-                          title: 'Chat with ${order.customerName.isNotEmpty ? order.customerName : 'customer'}',
-                        ),
-                        icon: const Icon(Icons.chat_bubble_outline, size: 16),
-                        label: const Text('Chat'),
-                        style: FilledButton.styleFrom(
-                          backgroundColor: BytzGoTheme.accent,
-                          foregroundColor: const Color(0xFF020617),
-                        ),
+                      child: Consumer<TripChatUnread>(
+                        builder: (context, unread, _) {
+                          final n = unread.countFor(order.id);
+                          return FilledButton.icon(
+                            onPressed: () => showTripChatSheet(
+                              context,
+                              order: order,
+                              title:
+                                  'Chat with ${order.customerName.isNotEmpty ? order.customerName : 'customer'}',
+                            ),
+                            icon: n > 0
+                                ? Badge(
+                                    label: Text(n > 9 ? '9+' : '$n'),
+                                    backgroundColor: const Color(0xFFEF4444),
+                                    child: const Icon(Icons.chat_bubble_outline, size: 16),
+                                  )
+                                : const Icon(Icons.chat_bubble_outline, size: 16),
+                            label: Text(n > 0 ? 'Chat ($n)' : 'Chat'),
+                            style: FilledButton.styleFrom(
+                              backgroundColor: BytzGoTheme.accent,
+                              foregroundColor: const Color(0xFF020617),
+                            ),
+                          );
+                        },
                       ),
                     ),
                   ],
@@ -1125,7 +1211,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
 
     return RideSheet(
       maxHeightFraction: _driveSheetFraction,
-      minSheetHeight: pinTripCta ? 220 : 128,
+      minSheetHeight: pinTripCta ? 168 : 112,
       padding: const EdgeInsets.fromLTRB(16, 6, 16, 12),
       footerPadding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
       scrollBottomPadding: pinTripCta ? 8 : 0,
@@ -1540,14 +1626,19 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
             Text(nav.label, style: BytzGoTheme.sheetBody(13), maxLines: 2),
           ],
           if (tripAllowsContact(order)) ...[
-            const SizedBox(height: 12),
-            TripContactActions(
-              order: order,
-              phone: order.customerPhone,
-              label: 'Contact customer',
-              chatTitle: order.customerName.isNotEmpty
-                  ? 'Chat with ${order.customerName}'
-                  : 'Chat with customer',
+            const SizedBox(height: 10),
+            CustomerTripIdentity(order: order),
+            const SizedBox(height: 10),
+            Consumer<TripChatUnread>(
+              builder: (context, unread, _) => TripContactActions(
+                order: order,
+                phone: order.customerPhone,
+                label: 'Contact customer',
+                chatTitle: order.customerName.isNotEmpty
+                    ? 'Chat with ${order.customerName}'
+                    : 'Chat with customer',
+                unreadCount: unread.countFor(order.id),
+              ),
             ),
           ],
           if (!hideTripActions) ...[

@@ -180,6 +180,7 @@ class AuthRepository {
         filePath,
         filename: 'profile.jpg',
       ),
+      'folder': 'avatars',
     });
     final res = await _api.dio.post<Map<String, dynamic>>(
       '/api/upload',
@@ -190,6 +191,11 @@ class AuthRepository {
       throw Exception('Upload failed — no image URL returned');
     }
     return url;
+  }
+
+  Future<AuthResult> refreshSession() async {
+    final res = await _api.dio.get<Map<String, dynamic>>('/api/auth/me');
+    return _parseAuthResponse(res.data);
   }
 
   Future<AuthResult> updateProfile({

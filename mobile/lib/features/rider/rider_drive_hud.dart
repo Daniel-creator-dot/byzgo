@@ -15,6 +15,7 @@ class RiderDriveHud extends StatelessWidget {
     this.previewOrder,
     this.earningsToday,
     this.tripsToday,
+    this.compactMap = false,
     this.onRecenter,
   });
 
@@ -24,11 +25,27 @@ class RiderDriveHud extends StatelessWidget {
   final Order? previewOrder;
   final double? earningsToday;
   final int? tripsToday;
+  /// When navigating an active trip, hide heavy HUD so the map stays visible.
+  final bool compactMap;
   final VoidCallback? onRecenter;
 
   @override
   Widget build(BuildContext context) {
     if (!isOnline) return const SizedBox.shrink();
+
+    if (compactMap) {
+      return SafeArea(
+        child: Align(
+          alignment: Alignment.bottomRight,
+          child: Padding(
+            padding: const EdgeInsets.only(right: 12, bottom: 8),
+            child: onRecenter != null
+                ? _RecenterFab(onPressed: onRecenter!)
+                : const SizedBox.shrink(),
+          ),
+        ),
+      );
+    }
 
     return SafeArea(
       child: Stack(

@@ -35,6 +35,7 @@ export function ProfileAvatarUpload({
     try {
       const formData = new FormData();
       formData.append('image', file);
+      formData.append('folder', 'avatars');
       const up = await axios.post('/api/upload', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });

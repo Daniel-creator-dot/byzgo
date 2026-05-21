@@ -11,6 +11,7 @@ import '../../core/places_service.dart';
 import '../../core/push_notification_service.dart';
 import '../../core/session.dart';
 import '../../core/socket_service.dart';
+import '../../core/trip_chat_unread.dart';
 import '../../models/trip_message.dart';
 import '../../models/location_point.dart';
 import '../../models/order.dart';
@@ -309,6 +310,21 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
     }
     _chatNotifyHandler = (orderId, message) => _onTripChatMessage(orderId, message);
     socket.addOrderMessageListener(_chatNotifyHandler!);
+    socket.onPulseGuide = ({
+      required orderId,
+      required lat,
+      required lng,
+      required phase,
+      at,
+    }) {
+      if (!mounted) return;
+      setState(() {
+        _orders = _orders.map((o) {
+          if (o.id != orderId) return o;
+          return o.copyWithPulseGuide(lat: lat, lng: lng, phase: phase, at: at);
+        }).toList();
+      });
+    };
 
     socket.onOrderUpdated = (order) {
       if (!mounted) return;
@@ -408,6 +424,7 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
   void _onTripChatMessage(String orderId, TripMessage message) {
     final userId = _session.user?.id;
     if (userId == null || message.senderId == userId) return;
+    context.read<TripChatUnread>().markUnread(orderId);
     final preview = message.body.length > 120
         ? '${message.body.substring(0, 117)}…'
         : message.body;

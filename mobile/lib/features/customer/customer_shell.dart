@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/session.dart';
@@ -12,7 +11,6 @@ import '../../shared/user_display.dart';
 import '../../shared/widgets/user_avatar.dart';
 import '../../shared/widgets/bytz_brand.dart';
 import '../../shared/widgets/sheet_theme_scope.dart';
-import '../../shared/widgets/bytz_scaffold.dart';
 import '../../shared/widgets/ride_ui.dart';
 import 'customer_activity_tab.dart';
 import 'customer_home_screen.dart';
@@ -60,12 +58,6 @@ class _CustomerShellState extends State<CustomerShell> {
         backgroundColor: BytzGoTheme.accentDark,
       ),
     );
-  }
-
-  Future<void> _logout() async {
-    if (!await confirmSignOut(context)) return;
-    await context.read<Session>().clear();
-    if (mounted) context.go('/login');
   }
 
   @override

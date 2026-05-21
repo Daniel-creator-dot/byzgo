@@ -6,8 +6,11 @@ import '../../models/location_point.dart';
 import '../../models/vendor.dart';
 import '../../shared/shop_categories.dart';
 import '../../shared/theme.dart';
+import '../../shared/vendor_contact.dart';
+import '../../shared/widgets/accra_shops_map.dart';
 import '../../shared/widgets/bytz_hero_header.dart';
 import '../../shared/widgets/ops_stat_card.dart';
+import '../../shared/widgets/vendor_shop_avatar.dart';
 import '../orders/orders_repository.dart';
 import 'customer_vendor_menu_screen.dart';
 
@@ -28,7 +31,8 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
   bool _loading = true;
   String? _error;
   final _searchCtrl = TextEditingController();
-  String _categoryId = ShopCategory.ordered.first.id;
+  String _categoryId = 'restaurant';
+  String? _mapSelectedVendorId;
 
   @override
   void initState() {
@@ -87,6 +91,7 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
   }
 
   void _openVendorMenu(Vendor vendor) {
+    setState(() => _mapSelectedVendorId = vendor.id);
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (ctx) => CustomerVendorMenuScreen(
@@ -113,7 +118,11 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
               child: BytzHeroHeader(
                 kicker: 'Marketplace',
-                title: 'Shops near you',
+                title: _categoryId == 'restaurant'
+                    ? 'Popular restaurants in Accra'
+                    : _categoryId == 'groceries'
+                        ? 'Popular groceries in Accra'
+                        : 'Shops near you',
                 assetPath: 'assets/branding/hero_delivery.png',
                 dark: false,
                 height: 120,
@@ -176,6 +185,14 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
                   }).toList(),
                 ),
               ),
+            ),
+          ),
+          SliverToBoxAdapter(
+            child: AccraShopsMap(
+              vendors: filtered,
+              categoryId: _categoryId,
+              selectedVendorId: _mapSelectedVendorId,
+              onVendorTap: _openVendorMenu,
             ),
           ),
           SliverToBoxAdapter(
@@ -297,19 +314,10 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
                             padding: const EdgeInsets.all(14),
                             child: Row(
                               children: [
-                                Container(
-                                  width: 56,
-                                  height: 56,
-                                  decoration: BoxDecoration(
-                                    borderRadius: BorderRadius.circular(14),
-                                    gradient: LinearGradient(
-                                      colors: [
-                                        chip.accent.withValues(alpha: 0.2),
-                                        chip.accent.withValues(alpha: 0.05),
-                                      ],
-                                    ),
-                                  ),
-                                  child: Icon(chip.icon, color: chip.accent, size: 28),
+                                VendorShopAvatar(
+                                  vendor: v,
+                                  size: 56,
+                                  categoryId: _categoryId,
                                 ),
                                 const SizedBox(width: 14),
                                 Expanded(
@@ -352,6 +360,46 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
                                           style: BytzGoTheme.sheetBody(12),
                                         ),
                                       ],
+                                      if (v.phone != null && v.phone!.trim().isNotEmpty) ...[
+                                        const SizedBox(height: 6),
+                                        Text(
+                                          formatVendorPhone(v.phone),
+                                          style: BytzGoTheme.sheetBody(12).copyWith(
+                                            fontWeight: FontWeight.w700,
+                                            color: BytzGoTheme.brandBlue,
+                                          ),
+                                        ),
+                                      ],
+                                      const SizedBox(height: 8),
+                                      Row(
+                                        children: [
+                                          if (v.phone != null && v.phone!.trim().isNotEmpty)
+                                            TextButton.icon(
+                                              onPressed: () => callVendorPhone(v.phone),
+                                              icon: const Icon(Icons.phone, size: 16),
+                                              label: const Text('Call'),
+                                              style: TextButton.styleFrom(
+                                                foregroundColor: BytzGoTheme.brandBlue,
+                                                padding: EdgeInsets.zero,
+                                                minimumSize: const Size(0, 32),
+                                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                              ),
+                                            ),
+                                          if (v.phone != null && v.phone!.trim().isNotEmpty)
+                                            const SizedBox(width: 8),
+                                          TextButton.icon(
+                                            onPressed: () => openVendorInGoogleMaps(v),
+                                            icon: const Icon(Icons.map, size: 16),
+                                            label: const Text('Maps'),
+                                            style: TextButton.styleFrom(
+                                              foregroundColor: BytzGoTheme.sheetMuted,
+                                              padding: EdgeInsets.zero,
+                                              minimumSize: const Size(0, 32),
+                                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
                                     ],
                                   ),
                                 ),

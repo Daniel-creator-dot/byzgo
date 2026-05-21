@@ -4,6 +4,7 @@ import '../../models/location_point.dart';
 import '../../models/order.dart';
 import '../../models/rider_map_offer.dart';
 import '../../models/vendor.dart';
+import '../../shared/pulse_guide.dart';
 import '../../shared/rider_trip.dart';
 import '../../shared/widgets/ride_google_map.dart';
 
@@ -115,6 +116,19 @@ class RiderDriveMapLayerState extends State<RiderDriveMapLayer> {
 
     final hasDrivingRoute = widget.routePoints.length >= 2;
 
+    LocationPoint? pulseGuide;
+    final active = widget.activeOrder;
+    if (active != null &&
+        isPulseGuideActive(active) &&
+        active.pulseGuideLat != null &&
+        active.pulseGuideLng != null) {
+      pulseGuide = LocationPoint(
+        address: 'Pulse Guide™',
+        lat: active.pulseGuideLat!,
+        lng: active.pulseGuideLng!,
+      );
+    }
+
     return ValueListenableBuilder<LocationPoint?>(
       valueListenable: widget.riderPosition,
       builder: (context, pos, _) {
@@ -142,6 +156,8 @@ class RiderDriveMapLayerState extends State<RiderDriveMapLayer> {
                   selectedOrderId: selectedId,
                 ),
           followRider: widget.followRider,
+          pulseGuide: pulseGuide,
+          showPulseGuide: pulseGuide != null,
         );
       },
     );

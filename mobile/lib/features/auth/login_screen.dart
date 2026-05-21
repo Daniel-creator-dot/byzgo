@@ -223,11 +223,223 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
     }
   }
 
+  Widget _buildAuthForm({
+    required bool isForgot,
+    required bool isSignUp,
+  }) {
+    return Form(
+      key: _formKey,
+      child: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 280),
+        switchInCurve: Curves.easeOutCubic,
+        switchOutCurve: Curves.easeInCubic,
+        child: Column(
+          key: ValueKey(_mode),
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const AuthSheetTopWave(),
+            AuthSheetHeader(
+              title: _sheetTitle,
+              subtitle: _sheetSubtitle,
+            ),
+            if (!isForgot) ...[
+              const SizedBox(height: 18),
+              AuthModeSegment(
+                signInSelected: _mode == _AuthMode.signIn,
+                onSignIn: () => _setMode(_AuthMode.signIn),
+                onJoin: () => _setMode(_AuthMode.signUp),
+              ),
+            ],
+            if (_error != null) ...[
+              const SizedBox(height: 14),
+              AuthErrorBanner(
+                message: _error!,
+                onDismiss: () => setState(() => _error = null),
+              ),
+            ],
+            const SizedBox(height: 16),
+            if (isSignUp)
+              AuthTextField(
+                controller: _name,
+                label: 'Full name',
+                icon: Icons.person_outline_rounded,
+                validator: (v) =>
+                    v == null || v.trim().isEmpty ? 'Name required' : null,
+              ),
+            if (isSignUp) const SizedBox(height: 12),
+            if (_mode == _AuthMode.signIn)
+              AuthTextField(
+                controller: _login,
+                label: 'Phone or email',
+                icon: Icons.alternate_email_rounded,
+                keyboardType: TextInputType.text,
+                autocorrect: false,
+                validator: (v) {
+                  if (v == null || v.trim().isEmpty) {
+                    return 'Phone or email required';
+                  }
+                  if (!_isValidLoginId(v)) {
+                    return 'Use 024… or name@example.com';
+                  }
+                  return null;
+                },
+              ),
+            if (isSignUp || isForgot) ...[
+              AuthTextField(
+                controller: _email,
+                label: isForgot ? 'Registered email' : 'Email',
+                icon: Icons.mail_outline_rounded,
+                keyboardType: TextInputType.emailAddress,
+                validator: (v) =>
+                    v == null || !v.contains('@') ? 'Valid email required' : null,
+              ),
+              const SizedBox(height: 12),
+              AuthTextField(
+                controller: _phone,
+                label: isForgot ? 'Registered phone' : 'Phone number',
+                icon: Icons.phone_android_rounded,
+                keyboardType: TextInputType.phone,
+                validator: (v) {
+                  if (v == null || v.trim().isEmpty) {
+                    return isSignUp && _signupRole != AppRole.customer
+                        ? null
+                        : 'Phone required';
+                  }
+                  if (!isValidGhanaPhone(v)) {
+                    return 'Use format 0247904675';
+                  }
+                  return null;
+                },
+              ),
+            ],
+            if (isForgot) ...[
+              const SizedBox(height: 12),
+              AuthTextField(
+                controller: _newPassword,
+                label: 'New password',
+                icon: Icons.lock_outline_rounded,
+                obscureText: _obscure,
+                validator: (v) =>
+                    v == null || v.length < 6 ? 'Min 6 characters' : null,
+              ),
+              const SizedBox(height: 12),
+              AuthTextField(
+                controller: _confirmPassword,
+                label: 'Confirm password',
+                icon: Icons.lock_outline_rounded,
+                obscureText: _obscure,
+                suffix: IconButton(
+                  icon: Icon(
+                    _obscure ? Icons.visibility_outlined : Icons.visibility_off_outlined,
+                    color: BytzGoTheme.sheetMuted,
+                  ),
+                  onPressed: () => setState(() => _obscure = !_obscure),
+                ),
+                validator: (v) =>
+                    v != _confirmPassword.text ? 'Passwords must match' : null,
+              ),
+            ],
+            if (!isForgot) ...[
+              const SizedBox(height: 12),
+              AuthTextField(
+                controller: _password,
+                label: 'Password',
+                icon: Icons.lock_outline_rounded,
+                obscureText: _obscure,
+                suffix: IconButton(
+                  icon: Icon(
+                    _obscure ? Icons.visibility_outlined : Icons.visibility_off_outlined,
+                    color: BytzGoTheme.sheetMuted,
+                  ),
+                  onPressed: () => setState(() => _obscure = !_obscure),
+                ),
+                validator: (v) =>
+                    v == null || v.length < 6 ? 'Min 6 characters' : null,
+              ),
+            ],
+            if (isSignUp) ...[
+              const SizedBox(height: 12),
+              DropdownButtonFormField<AppRole>(
+                initialValue: _signupRole,
+                dropdownColor: BytzGoTheme.sheetBg,
+                decoration: const InputDecoration(
+                  labelText: 'I am a',
+                  filled: true,
+                  fillColor: Color(0xFFF3F4F6),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.all(Radius.circular(14)),
+                    borderSide: BorderSide.none,
+                  ),
+                ),
+                items: AppRole.values
+                    .where((r) => r != AppRole.admin)
+                    .map(
+                      (r) => DropdownMenuItem(
+                        value: r,
+                        child: Text(
+                          r.label,
+                          style: const TextStyle(
+                            color: BytzGoTheme.sheetText,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (v) {
+                  if (v != null) setState(() => _signupRole = v);
+                },
+              ),
+            ],
+            const SizedBox(height: 22),
+            RidePrimaryButton(
+              label: _primaryLabel,
+              loading: _loading,
+              icon: _mode == _AuthMode.signIn
+                  ? Icons.arrow_forward_rounded
+                  : Icons.check_rounded,
+              color: BytzGoTheme.accent,
+              onPressed: _submit,
+            ),
+            if (_mode == _AuthMode.signIn) ...[
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(
+                  onPressed: () => _setMode(_AuthMode.forgot),
+                  child: const Text(
+                    'Forgot password?',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ),
+            ],
+            if (isForgot)
+              TextButton(
+                onPressed: () => _setMode(_AuthMode.signIn),
+                child: const Text('Back to sign in'),
+              ),
+            if (!isForgot) ...[
+              const SizedBox(height: 6),
+              AuthLoginExtras(
+                showGoogle: Env.isGoogleSignInEnabled,
+                onGoogle: _loading ? null : _submitGoogle,
+                googleLoading: _googleLoading,
+              ),
+            ],
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final isForgot = _mode == _AuthMode.forgot;
     final isSignUp = _mode == _AuthMode.signUp;
     final bottomPad = MediaQuery.paddingOf(context).bottom;
+    final viewInsets = MediaQuery.viewInsetsOf(context).bottom;
 
     return Scaffold(
       backgroundColor: BytzGoTheme.background,
@@ -237,279 +449,74 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
         children: [
           const BrandHeroBackground(bottomFade: 0.82),
           SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(22, 12, 22, 0),
-              child: FadeTransition(
-                opacity: CurvedAnimation(parent: _heroAnim, curve: Curves.easeOut),
-                child: SlideTransition(
-                  position: Tween<Offset>(
-                    begin: const Offset(0, -0.08),
-                    end: Offset.zero,
-                  ).animate(CurvedAnimation(parent: _heroAnim, curve: Curves.easeOutCubic)),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const BytzGoLogo(fontSize: 44),
-                      const SizedBox(height: 14),
-                      Text(
-                        isForgot
-                            ? 'Reset your password'
-                            : 'Fast bike delivery,\non demand.',
-                        style: TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.w700,
-                          color: Colors.white.withValues(alpha: 0.9),
-                          height: 1.25,
-                          letterSpacing: -0.3,
-                        ),
-                      ),
-                      if (!isForgot) ...[
-                        const SizedBox(height: 16),
-                        const AuthHeroFeatures(),
-                      ],
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
-          Align(
-            alignment: Alignment.bottomCenter,
             child: Theme(
               data: BytzGoTheme.sheetTheme(),
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  borderRadius: const BorderRadius.vertical(
-                    top: Radius.circular(BytzGoTheme.sheetRadius),
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: BytzGoTheme.brandBlue.withValues(alpha: 0.12),
-                      blurRadius: 28,
-                      offset: const Offset(0, -8),
-                    ),
-                  ],
+              child: CustomScrollView(
+                physics: const BouncingScrollPhysics(
+                  parent: AlwaysScrollableScrollPhysics(),
                 ),
-                child: Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    Positioned(
-                      top: -32,
-                      left: 0,
-                      right: 0,
-                      child: const AuthHeroSheetBridge(),
-                    ),
-                    RideSheet(
-                maxHeightFraction: 0.82,
-                padding: EdgeInsets.fromLTRB(20, 4, 20, 10 + bottomPad),
-                child: Form(
-                  key: _formKey,
-                  child: AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 280),
-                    switchInCurve: Curves.easeOutCubic,
-                    switchOutCurve: Curves.easeInCubic,
-                    child: Column(
-                      key: ValueKey(_mode),
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const AuthSheetTopWave(),
-                        AuthSheetHeader(
-                          title: _sheetTitle,
-                          subtitle: _sheetSubtitle,
+                slivers: [
+                  SliverToBoxAdapter(
+                    child: FadeTransition(
+                      opacity: CurvedAnimation(parent: _heroAnim, curve: Curves.easeOut),
+                      child: SlideTransition(
+                        position: Tween<Offset>(
+                          begin: const Offset(0, -0.08),
+                          end: Offset.zero,
+                        ).animate(
+                          CurvedAnimation(parent: _heroAnim, curve: Curves.easeOutCubic),
                         ),
-                        if (!isForgot) ...[
-                          const SizedBox(height: 18),
-                          AuthModeSegment(
-                            signInSelected: _mode == _AuthMode.signIn,
-                            onSignIn: () => _setMode(_AuthMode.signIn),
-                            onJoin: () => _setMode(_AuthMode.signUp),
-                          ),
-                        ],
-                        if (_error != null) ...[
-                          const SizedBox(height: 14),
-                          AuthErrorBanner(
-                            message: _error!,
-                            onDismiss: () => setState(() => _error = null),
-                          ),
-                        ],
-                        const SizedBox(height: 16),
-                        if (isSignUp)
-                          AuthTextField(
-                            controller: _name,
-                            label: 'Full name',
-                            icon: Icons.person_outline_rounded,
-                            validator: (v) =>
-                                v == null || v.trim().isEmpty ? 'Name required' : null,
-                          ),
-                        if (isSignUp) const SizedBox(height: 12),
-                        if (_mode == _AuthMode.signIn)
-                          AuthTextField(
-                            controller: _login,
-                            label: 'Phone or email',
-                            icon: Icons.alternate_email_rounded,
-                            keyboardType: TextInputType.text,
-                            autocorrect: false,
-                            validator: (v) {
-                              if (v == null || v.trim().isEmpty) {
-                                return 'Phone or email required';
-                              }
-                              if (!_isValidLoginId(v)) {
-                                return 'Use 024… or name@example.com';
-                              }
-                              return null;
-                            },
-                          ),
-                        if (isSignUp || isForgot) ...[
-                          AuthTextField(
-                            controller: _email,
-                            label: isForgot ? 'Registered email' : 'Email',
-                            icon: Icons.mail_outline_rounded,
-                            keyboardType: TextInputType.emailAddress,
-                            validator: (v) =>
-                                v == null || !v.contains('@') ? 'Valid email required' : null,
-                          ),
-                          const SizedBox(height: 12),
-                          AuthTextField(
-                            controller: _phone,
-                            label: isForgot ? 'Registered phone' : 'Phone number',
-                            icon: Icons.phone_android_rounded,
-                            keyboardType: TextInputType.phone,
-                            validator: (v) {
-                              if (v == null || v.trim().isEmpty) {
-                                return isSignUp && _signupRole != AppRole.customer
-                                    ? null
-                                    : 'Phone required';
-                              }
-                              if (!isValidGhanaPhone(v)) {
-                                return 'Use format 0247904675';
-                              }
-                              return null;
-                            },
-                          ),
-                        ],
-                        if (isForgot) ...[
-                          const SizedBox(height: 12),
-                          AuthTextField(
-                            controller: _newPassword,
-                            label: 'New password',
-                            icon: Icons.lock_outline_rounded,
-                            obscureText: _obscure,
-                            validator: (v) =>
-                                v == null || v.length < 6 ? 'Min 6 characters' : null,
-                          ),
-                          const SizedBox(height: 12),
-                          AuthTextField(
-                            controller: _confirmPassword,
-                            label: 'Confirm password',
-                            icon: Icons.lock_outline_rounded,
-                            obscureText: _obscure,
-                            suffix: IconButton(
-                              icon: Icon(
-                                _obscure ? Icons.visibility_outlined : Icons.visibility_off_outlined,
-                                color: BytzGoTheme.sheetMuted,
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(22, 12, 22, 8),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const BytzGoLogo(fontSize: 40),
+                              const SizedBox(height: 10),
+                              Text(
+                                isForgot
+                                    ? 'Reset your password'
+                                    : 'Fast bike delivery,\non demand.',
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w700,
+                                  color: Colors.white.withValues(alpha: 0.9),
+                                  height: 1.25,
+                                  letterSpacing: -0.3,
+                                ),
                               ),
-                              onPressed: () => setState(() => _obscure = !_obscure),
-                            ),
-                            validator: (v) =>
-                                v != _confirmPassword.text ? 'Passwords must match' : null,
+                              if (!isForgot) ...[
+                                const SizedBox(height: 12),
+                                const AuthHeroFeatures(),
+                              ],
+                            ],
                           ),
-                        ],
-                        if (!isForgot) ...[
-                          const SizedBox(height: 12),
-                          AuthTextField(
-                            controller: _password,
-                            label: 'Password',
-                            icon: Icons.lock_outline_rounded,
-                            obscureText: _obscure,
-                            suffix: IconButton(
-                              icon: Icon(
-                                _obscure ? Icons.visibility_outlined : Icons.visibility_off_outlined,
-                                color: BytzGoTheme.sheetMuted,
-                              ),
-                              onPressed: () => setState(() => _obscure = !_obscure),
-                            ),
-                            validator: (v) =>
-                                v == null || v.length < 6 ? 'Min 6 characters' : null,
-                          ),
-                        ],
-                        if (isSignUp) ...[
-                          const SizedBox(height: 12),
-                          DropdownButtonFormField<AppRole>(
-                            initialValue: _signupRole,
-                            dropdownColor: BytzGoTheme.sheetBg,
-                            decoration: const InputDecoration(
-                              labelText: 'I am a',
-                              filled: true,
-                              fillColor: Color(0xFFF3F4F6),
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.all(Radius.circular(14)),
-                                borderSide: BorderSide.none,
-                              ),
-                            ),
-                            items: AppRole.values
-                                .where((r) => r != AppRole.admin)
-                                .map(
-                                  (r) => DropdownMenuItem(
-                                    value: r,
-                                    child: Text(
-                                      r.label,
-                                      style: const TextStyle(
-                                        color: BytzGoTheme.sheetText,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
-                                  ),
-                                )
-                                .toList(),
-                            onChanged: (v) {
-                              if (v != null) setState(() => _signupRole = v);
-                            },
-                          ),
-                        ],
-                        const SizedBox(height: 22),
-                        RidePrimaryButton(
-                          label: _primaryLabel,
-                          loading: _loading,
-                          icon: _mode == _AuthMode.signIn
-                              ? Icons.arrow_forward_rounded
-                              : Icons.check_rounded,
-                          color: BytzGoTheme.accent,
-                          onPressed: _submit,
                         ),
-                        if (_mode == _AuthMode.signIn) ...[
-                          Align(
-                            alignment: Alignment.centerRight,
-                            child: TextButton(
-                              onPressed: () => _setMode(_AuthMode.forgot),
-                              child: const Text(
-                                'Forgot password?',
-                                style: TextStyle(fontWeight: FontWeight.w600),
-                              ),
-                            ),
-                          ),
-                        ],
-                        if (isForgot)
-                          TextButton(
-                            onPressed: () => _setMode(_AuthMode.signIn),
-                            child: const Text('Back to sign in'),
-                          ),
-                        if (!isForgot) ...[
-                          const SizedBox(height: 6),
-                          AuthLoginExtras(
-                            showGoogle: Env.isGoogleSignInEnabled,
-                            onGoogle: _loading ? null : _submitGoogle,
-                            googleLoading: _googleLoading,
-                          ),
-                        ],
-                        const SizedBox(height: 8),
-                      ],
+                      ),
                     ),
                   ),
-                ),
+                  SliverToBoxAdapter(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: BytzGoTheme.sheetBg,
+                        borderRadius: const BorderRadius.vertical(
+                          top: Radius.circular(BytzGoTheme.sheetRadius),
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: BytzGoTheme.brandBlue.withValues(alpha: 0.12),
+                            blurRadius: 28,
+                            offset: const Offset(0, -8),
+                          ),
+                        ],
+                      ),
+                      child: Padding(
+                        padding: EdgeInsets.fromLTRB(20, 12, 20, 16 + bottomPad + viewInsets),
+                        child: _buildAuthForm(isForgot: isForgot, isSignUp: isSignUp),
+                      ),
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
             ),
           ),

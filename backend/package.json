@@ -5,7 +5,11 @@
   "scripts": {
     "start": "node --import tsx server.ts",
     "dev": "tsx --watch server.ts",
-    "setup:firebase:android": "node scripts/setup-firebase-android.mjs"
+    "setup:firebase:android": "node scripts/setup-firebase-android.mjs",
+    "verify:storage": "node scripts/verify-storage.mjs",
+    "apply:storage": "node scripts/apply-storage-sql.mjs",
+    "apply:storage-policies": "node scripts/apply-storage-policies.mjs",
+    "setup:supabase-storage": "node scripts/run-supabase-storage-sql.mjs"
   },
   "engines": {
     "node": ">=20"

@@ -3,6 +3,8 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
+import 'widgets/app_network_image.dart';
+
 /// Decodes a `data:image/...;base64,...` URL for [Image.memory].
 Uint8List? decodeDataUrlImage(String? dataUrl) {
   if (dataUrl == null || dataUrl.isEmpty) return null;
@@ -15,15 +17,19 @@ Uint8List? decodeDataUrlImage(String? dataUrl) {
   }
 }
 
-Widget dataUrlImage(String? dataUrl, {double? height, BoxFit fit = BoxFit.cover}) {
-  final bytes = decodeDataUrlImage(dataUrl);
-  if (bytes == null) {
-    return Container(
-      height: height,
-      color: const Color(0xFF1E293B),
-      alignment: Alignment.center,
-      child: const Icon(Icons.image_not_supported, color: Color(0xFF64748B)),
-    );
-  }
-  return Image.memory(bytes, height: height, fit: fit, width: double.infinity);
+/// Displays Supabase/CDN https URLs or legacy inline base64 images.
+Widget dataUrlImage(
+  String? dataUrl, {
+  double? height,
+  double? width,
+  BoxFit fit = BoxFit.cover,
+  BorderRadius? borderRadius,
+}) {
+  return AppNetworkImage(
+    url: dataUrl,
+    height: height,
+    width: width,
+    fit: fit,
+    borderRadius: borderRadius,
+  );
 }

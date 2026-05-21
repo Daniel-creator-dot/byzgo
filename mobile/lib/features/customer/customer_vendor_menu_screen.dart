@@ -2,15 +2,19 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/places_service.dart';
+import '../../core/socket_service.dart';
+import '../../core/json_parse.dart';
 import '../../models/location_point.dart';
 import '../../models/product.dart';
 import '../../models/vendor.dart';
 import '../../shared/format.dart';
 import '../../shared/pharmacy_display.dart';
 import '../../shared/theme.dart';
+import '../../shared/vendor_contact.dart';
 import '../../shared/vendor_pickup.dart';
 import '../../shared/widgets/product_tile_image.dart';
 import '../../shared/widgets/sheet_theme_scope.dart';
+import '../../shared/widgets/vendor_shop_avatar.dart';
 import '../orders/orders_repository.dart';
 import 'customer_shop_checkout_screen.dart';
 
@@ -30,16 +34,60 @@ class CustomerVendorMenuScreen extends StatefulWidget {
       _CustomerVendorMenuScreenState();
 }
 
-class _CustomerVendorMenuScreenState extends State<CustomerVendorMenuScreen> {
+class _CustomerVendorMenuScreenState extends State<CustomerVendorMenuScreen>
+    with WidgetsBindingObserver {
   List<Product> _products = [];
   final Map<String, int> _cart = {};
   bool _loading = true;
   String? _error;
+  ProductUpdatedHandler? _productHandler;
+  late final SocketService _socket;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _load();
+    _socket = context.read<SocketService>();
+    _productHandler = (vendorId, product) {
+      if (vendorId != widget.vendor.id || !mounted) return;
+      final id = product['id']?.toString();
+      if (id == null) return;
+      final idx = _products.indexWhere((p) => p.id == id);
+      if (idx < 0) {
+        _load();
+        return;
+      }
+      setState(() {
+        final prev = _products[idx];
+        _products[idx] = Product(
+          id: prev.id,
+          vendorId: prev.vendorId,
+          name: product['name']?.toString() ?? prev.name,
+          price: parseJsonDoubleOrZero(product['price']),
+          description: prev.description,
+          category: prev.category,
+          imageUrl: prev.imageUrl,
+          isAvailable: product['is_available'] != false,
+          isApproved: prev.isApproved,
+        );
+      });
+    };
+    _socket.onProductUpdated = _productHandler;
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    if (_socket.onProductUpdated == _productHandler) {
+      _socket.onProductUpdated = null;
+    }
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _load();
   }
 
   int get _cartCount => _cart.values.fold(0, (a, b) => a + b);
@@ -201,6 +249,21 @@ class _CustomerVendorMenuScreenState extends State<CustomerVendorMenuScreen> {
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(16),
+              child: SizedBox(
+                height: 120,
+                width: double.infinity,
+                child: VendorShopAvatar(
+                  vendor: v,
+                  size: 120,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+              ),
+            ),
+          ),
           if (v.address != null && v.address!.trim().isNotEmpty)
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
@@ -216,6 +279,26 @@ class _CustomerVendorMenuScreenState extends State<CustomerVendorMenuScreen> {
                 ],
               ),
             ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                if (v.phone != null && v.phone!.trim().isNotEmpty)
+                  ActionChip(
+                    avatar: const Icon(Icons.phone, size: 18, color: BytzGoTheme.brandBlue),
+                    label: Text(formatVendorPhone(v.phone)),
+                    onPressed: () => callVendorPhone(v.phone),
+                  ),
+                ActionChip(
+                  avatar: const Icon(Icons.map, size: 18, color: BytzGoTheme.accentDark),
+                  label: const Text('Open in Google Maps'),
+                  onPressed: () => openVendorInGoogleMaps(v),
+                ),
+              ],
+            ),
+          ),
           Expanded(
             child: _loading
                 ? const Center(child: CircularProgressIndicator())

@@ -33,6 +33,8 @@ class RideGoogleMap extends StatefulWidget {
     this.jobOffers = const [],
     this.showDriverIdleRadar = false,
     this.followRider = false,
+    this.pulseGuide,
+    this.showPulseGuide = false,
   });
 
   final LocationPoint? pickup;
@@ -58,6 +60,9 @@ class RideGoogleMap extends StatefulWidget {
   final bool showDriverIdleRadar;
   /// Keep camera centered on the moving biker (in-app navigation).
   final bool followRider;
+  /// Customer's live Pulse Guide™ position (overrides static pin while active).
+  final LocationPoint? pulseGuide;
+  final bool showPulseGuide;
 
   @override
   State<RideGoogleMap> createState() => RideGoogleMapState();
@@ -82,7 +87,8 @@ class RideGoogleMapState extends State<RideGoogleMap>
     );
     if (widget.showSearchRadar ||
         widget.showRiderApproachRadar ||
-        widget.showDriverIdleRadar) {
+        widget.showDriverIdleRadar ||
+        widget.showPulseGuide) {
       _radarCtrl.repeat();
     }
   }
@@ -209,6 +215,39 @@ class RideGoogleMapState extends State<RideGoogleMap>
           ),
         ),
       );
+    }
+
+    if (widget.showPulseGuide &&
+        widget.pulseGuide != null &&
+        widget.pulseGuide!.hasCoords) {
+      final pg = widget.pulseGuide!;
+      markers.add(
+        Marker(
+          markerId: const MarkerId('pulse_guide'),
+          position: LatLng(pg.lat, pg.lng),
+          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
+          infoWindow: const InfoWindow(
+            title: 'Pulse Guide™',
+            snippet: 'Customer live location — follow this pulse',
+          ),
+          zIndexInt: 4,
+        ),
+      );
+      final center = LatLng(pg.lat, pg.lng);
+      for (var i = 0; i < 4; i++) {
+        final phase = (radarT + i * 0.25) % 1.0;
+        circles.add(
+          Circle(
+            circleId: CircleId('pulse_guide_$i'),
+            center: center,
+            radius: 8 + phase * 45,
+            fillColor: const Color(0xFFEF4444).withValues(alpha: (1 - phase) * 0.35),
+            strokeColor: const Color(0xFFEF4444).withValues(alpha: (1 - phase) * 0.85),
+            strokeWidth: 2,
+            zIndex: 5,
+          ),
+        );
+      }
     }
 
     if (widget.riderPosition != null && widget.riderPosition!.hasCoords) {
@@ -421,23 +460,9 @@ class RideGoogleMapState extends State<RideGoogleMap>
   double? _bearingTowardTarget() {
     final pos = widget.riderPosition;
     if (pos == null || !pos.hasCoords) return null;
-    LatLng? target;
-    if (widget.routePoints.length >= 2) {
-      for (final p in widget.routePoints) {
-        if (!p.hasCoords) continue;
-        final d = (p.lat - pos.lat).abs() + (p.lng - pos.lng).abs();
-        if (d > 0.00015) {
-          target = LatLng(p.lat, p.lng);
-          break;
-        }
-      }
-    }
-    target ??= () {
-      final t = widget.riderNavTarget ?? widget.destination ?? widget.pickup;
-      if (t != null && t.hasCoords) return LatLng(t.lat, t.lng);
-      return null;
-    }();
-    if (target == null) return null;
+    final t = widget.riderNavTarget ?? widget.destination ?? widget.pickup;
+    if (t == null || !t.hasCoords) return null;
+    final target = LatLng(t.lat, t.lng);
     final lat1 = pos.lat * math.pi / 180;
     final lat2 = target.latitude * math.pi / 180;
     final dLon = (target.longitude - pos.lng) * math.pi / 180;
@@ -530,10 +555,12 @@ class RideGoogleMapState extends State<RideGoogleMap>
     super.didUpdateWidget(oldWidget);
     final needsRadar = widget.showSearchRadar ||
         widget.showRiderApproachRadar ||
-        widget.showDriverIdleRadar;
+        widget.showDriverIdleRadar ||
+        widget.showPulseGuide;
     final neededRadar = oldWidget.showSearchRadar ||
         oldWidget.showRiderApproachRadar ||
-        oldWidget.showDriverIdleRadar;
+        oldWidget.showDriverIdleRadar ||
+        oldWidget.showPulseGuide;
     if (needsRadar != neededRadar) {
       if (needsRadar) {
         if (!_radarCtrl.isAnimating) _radarCtrl.repeat();

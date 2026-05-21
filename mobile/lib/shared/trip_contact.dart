@@ -60,6 +60,7 @@ class TripContactActions extends StatelessWidget {
     this.label = 'Contact',
     this.chatTitle = 'Trip chat',
     this.compact = false,
+    this.unreadCount = 0,
   });
 
   final Order order;
@@ -67,6 +68,18 @@ class TripContactActions extends StatelessWidget {
   final String label;
   final String chatTitle;
   final bool compact;
+  final int unreadCount;
+
+  Widget _chatIcon(IconData icon, {double size = 18}) {
+    final iconWidget = Icon(icon, size: size);
+    if (unreadCount <= 0) return iconWidget;
+    return Badge(
+      label: Text(unreadCount > 9 ? '9+' : '$unreadCount'),
+      backgroundColor: const Color(0xFFEF4444),
+      smallSize: 8,
+      child: iconWidget,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -109,7 +122,7 @@ class TripContactActions extends StatelessWidget {
           IconButton.filled(
             tooltip: 'Chat',
             onPressed: () => showTripChatSheet(context, order: order, title: chatTitle),
-            icon: const Icon(Icons.chat_bubble_outline, size: 18),
+            icon: _chatIcon(Icons.chat_bubble_outline),
             style: IconButton.styleFrom(
               backgroundColor: BytzGoTheme.accent,
               foregroundColor: const Color(0xFF020617),
@@ -168,8 +181,8 @@ class TripContactActions extends StatelessWidget {
               child: FilledButton.icon(
                 onPressed: () =>
                     showTripChatSheet(context, order: order, title: chatTitle),
-                icon: const Icon(Icons.chat_bubble_outline, size: 18),
-                label: const Text('Chat'),
+                icon: _chatIcon(Icons.chat_bubble_outline),
+                label: Text(unreadCount > 0 ? 'Chat ($unreadCount)' : 'Chat'),
                 style: FilledButton.styleFrom(
                   backgroundColor: BytzGoTheme.brandBlue,
                   foregroundColor: Colors.white,

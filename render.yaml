@@ -50,3 +50,9 @@ services:
         value: https://www.inteksms.top/api/v1
       - key: SMS_SENDER_ID
         value: bytzee
+      - key: SUPABASE_URL
+        value: https://ypmiurbtmfiyzmrygonh.supabase.co
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_STORAGE_BUCKET
+        value: pictures

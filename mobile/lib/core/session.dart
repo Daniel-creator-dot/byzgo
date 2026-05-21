@@ -1,8 +1,10 @@
 import 'dart:convert';
 
+import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
+import '../features/auth/auth_repository.dart';
 import '../models/auth_user.dart';
 import 'api_client.dart';
 import 'socket_service.dart';
@@ -29,6 +31,22 @@ class Session extends ChangeNotifier {
   AuthUser? get user => _user;
   bool get isAuthenticated => _token != null && _user != null;
   bool get isRestoring => _restoring;
+
+  /// Issues a slim JWT from the server (fixes HTTP 431 from legacy bloated tokens).
+  Future<bool> refreshAuthFromServer() async {
+    if (!isAuthenticated) return false;
+    try {
+      final result = await AuthRepository(_api).refreshSession();
+      await setSession(token: result.token, user: result.user);
+      return true;
+    } catch (e) {
+      debugPrint('Session refresh failed: $e');
+      if (e is DioException && ApiClient.isHeaderTooLargeError(e)) {
+        await clear();
+      }
+      return false;
+    }
+  }
 
   Future<void> restore() async {
     _restoring = true;

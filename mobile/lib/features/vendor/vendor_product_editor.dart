@@ -6,7 +6,6 @@ import 'package:provider/provider.dart';
 
 import '../../models/product.dart';
 import '../../shared/data_url_image.dart';
-import '../../shared/format.dart';
 import '../../shared/theme.dart';
 import 'vendor_repository.dart';
 

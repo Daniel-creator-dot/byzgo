@@ -291,9 +291,9 @@ export function RiderApp({
   const [submittingDocs, setSubmittingDocs] = useState(false);
 
   const docSlots: { type: 'license' | 'ghana_card' | 'photo'; label: string; icon: typeof IdCard }[] = [
-    { type: 'license', label: 'Driver licence (JPEG)', icon: IdCard },
-    { type: 'ghana_card', label: 'Ghana card (JPEG)', icon: IdCard },
-    { type: 'photo', label: 'Profile photo (JPEG)', icon: Camera },
+    { type: 'license', label: 'Driver licence', icon: IdCard },
+    { type: 'ghana_card', label: 'Ghana card', icon: IdCard },
+    { type: 'photo', label: 'Profile photo', icon: Camera },
   ];
 
   useEffect(() => {
@@ -307,8 +307,8 @@ export function RiderApp({
   }, [tab, user.status]);
 
   const uploadRiderDoc = async (docType: 'license' | 'ghana_card' | 'photo', file: File) => {
-    if (!/^image\/(jpeg|jpg|pjpeg)$/i.test(file.type)) {
-      addNotification?.('Use a JPEG image (.jpg)', 'warning');
+    if (!/^image\/(jpeg|jpg|pjpeg|png|webp)$/i.test(file.type)) {
+      addNotification?.('Use a JPEG, PNG, or WebP photo', 'warning');
       return;
     }
     setDocUploading(docType);
@@ -909,7 +909,7 @@ export function RiderApp({
                   avatarUrl={user.avatar_url}
                   size="md"
                   onUpdated={(updatedUser, newToken) => {
-                    setUser(updatedUser as typeof user);
+                    setUser(updatedUser as unknown as typeof user);
                     localStorage.setItem('user', JSON.stringify(updatedUser));
                     localStorage.setItem('token', newToken);
                     addNotification?.('Profile photo updated', 'success');
@@ -924,7 +924,7 @@ export function RiderApp({
 
               <div className="mb-8 p-4 rounded-2xl border border-slate-800 bg-slate-900/60">
                 <h3 className="text-sm font-black uppercase tracking-widest text-slate-300 mb-1">Verification documents</h3>
-                <p className="text-[10px] text-slate-500 font-bold mb-4">Upload JPEG photos of your licence, Ghana card, and a clear profile picture. Admin will review before you can go online.</p>
+                <p className="text-[10px] text-slate-500 font-bold mb-4">Upload clear photos of your licence, Ghana card, and profile picture. Admin will review before you can go online.</p>
                 {docsLoading ? (
                   <p className="text-xs text-slate-500">Loading…</p>
                 ) : (
@@ -950,7 +950,7 @@ export function RiderApp({
                               {docUploading === type ? 'Uploading…' : doc ? 'Replace' : 'Upload'}
                               <input
                                 type="file"
-                                accept="image/jpeg,.jpg"
+                                accept="image/jpeg,image/png,image/webp,.jpg,.png,.webp"
                                 className="hidden"
                                 disabled={docUploading !== null}
                                 onChange={(e) => {

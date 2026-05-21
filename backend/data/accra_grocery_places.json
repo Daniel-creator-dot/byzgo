@@ -1,0 +1,254 @@
+[
+  {
+    "name": "Shoprite (Accra Mall)",
+    "slug": "shoprite-accra-mall",
+    "phone": "0302780350",
+    "address": "Accra Mall, Tetteh Quarshie, Accra",
+    "lat": 5.62118,
+    "lng": -0.17352,
+    "shop_category": "groceries",
+    "google_query": "Shoprite Accra Mall Ghana",
+    "tagline": "Supermarket — fresh produce, household & pantry",
+    "menu": [
+      { "name": "Jasmine Rice 5kg", "price": 85 },
+      { "name": "Cooking Oil 1L", "price": 28 },
+      { "name": "Bottled Water 1.5L (6 pack)", "price": 18 },
+      { "name": "Fresh Tomatoes 1kg", "price": 12 },
+      { "name": "Bread Loaf", "price": 14 }
+    ]
+  },
+  {
+    "name": "Melcom (East Legon)",
+    "slug": "melcom-east-legon",
+    "phone": "0302540123",
+    "address": "American House, East Legon, Accra",
+    "lat": 5.63542,
+    "lng": -0.15688,
+    "shop_category": "groceries",
+    "google_query": "Melcom East Legon Accra",
+    "tagline": "Hypermarket — electronics, groceries & more",
+    "menu": [
+      { "name": "Tinned Sardines", "price": 22 },
+      { "name": "Peak Milk 400g", "price": 18 },
+      { "name": "Indomie (5 pack)", "price": 25 },
+      { "name": "Sugar 1kg", "price": 15 },
+      { "name": "Toilet Tissue (4 roll)", "price": 32 }
+    ]
+  },
+  {
+    "name": "Melcom (Accra Central)",
+    "slug": "melcom-accra-central",
+    "phone": "0302662145",
+    "address": "Kwame Nkrumah Avenue, Accra Central",
+    "lat": 5.55012,
+    "lng": -0.20742,
+    "shop_category": "groceries",
+    "google_query": "Melcom Accra Central Ghana",
+    "tagline": "City hypermarket — value groceries",
+    "menu": [
+      { "name": "Gari 1kg", "price": 10 },
+      { "name": "Beans 1kg", "price": 18 },
+      { "name": "Eggs (tray of 30)", "price": 55 },
+      { "name": "Washing Powder 1kg", "price": 24 },
+      { "name": "Beverage Mix 500g", "price": 20 }
+    ]
+  },
+  {
+    "name": "MaxMart (Dzorwulu)",
+    "slug": "maxmart-dzorwulu",
+    "phone": "0302778899",
+    "address": "Dzorwulu, Accra",
+    "lat": 5.60082,
+    "lng": -0.19452,
+    "shop_category": "groceries",
+    "google_query": "MaxMart Dzorwulu Accra",
+    "tagline": "Premium supermarket — imports & local staples",
+    "menu": [
+      { "name": "Imported Cereal 500g", "price": 48 },
+      { "name": "Cheese Block 200g", "price": 42 },
+      { "name": "Frozen Chicken 1kg", "price": 65 },
+      { "name": "Orange Juice 1L", "price": 28 },
+      { "name": "Salad Greens Pack", "price": 22 }
+    ]
+  },
+  {
+    "name": "MaxMart (Osu)",
+    "slug": "maxmart-osu",
+    "phone": "0302776612",
+    "address": "Oxford Street, Osu, Accra",
+    "lat": 5.55582,
+    "lng": -0.17822,
+    "shop_category": "groceries",
+    "google_query": "MaxMart Osu Accra",
+    "tagline": "Neighbourhood grocery & deli",
+    "menu": [
+      { "name": "Yoghurt 500ml", "price": 18 },
+      { "name": "Granola 400g", "price": 38 },
+      { "name": "Pasta 500g", "price": 16 },
+      { "name": "Tomato Paste", "price": 12 },
+      { "name": "Kitchen Towels", "price": 26 }
+    ]
+  },
+  {
+    "name": "Koala (Ring Road)",
+    "slug": "koala-ring-road",
+    "phone": "0302772233",
+    "address": "Ring Road Central, Accra",
+    "lat": 5.57192,
+    "lng": -0.21012,
+    "shop_category": "groceries",
+    "google_query": "Koala Supermarket Ring Road Accra",
+    "tagline": "Organic-leaning supermarket",
+    "menu": [
+      { "name": "Organic Honey 500g", "price": 75 },
+      { "name": "Avocado (3 pack)", "price": 28 },
+      { "name": "Plantain Bunch", "price": 15 },
+      { "name": "Groundnut Paste 500g", "price": 22 },
+      { "name": "Herbal Tea Box", "price": 35 }
+    ]
+  },
+  {
+    "name": "Palace Supermarket (North Kaneshie)",
+    "slug": "palace-kaneshie",
+    "phone": "0302304455",
+    "address": "North Kaneshie, Accra",
+    "lat": 5.56842,
+    "lng": -0.24782,
+    "shop_category": "groceries",
+    "google_query": "Palace Supermarket North Kaneshie",
+    "tagline": "Community supermarket — bulk value",
+    "menu": [
+      { "name": "Maize Flour 2kg", "price": 24 },
+      { "name": "Palm Oil 1L", "price": 26 },
+      { "name": "Tilapia (frozen)", "price": 45 },
+      { "name": "Onions 1kg", "price": 10 },
+      { "name": "Soft Drinks (6 pack)", "price": 30 }
+    ]
+  },
+  {
+    "name": "Pick n Pay (Marina Mall)",
+    "slug": "picknpay-marina",
+    "phone": "0302779900",
+    "address": "Marina Mall, Airport City, Accra",
+    "lat": 5.61242,
+    "lng": -0.16882,
+    "shop_category": "groceries",
+    "google_query": "Pick n Pay Marina Mall Accra",
+    "tagline": "South African chain — groceries & household",
+    "menu": [
+      { "name": "Baby Diapers (pack)", "price": 85 },
+      { "name": "Beef Mince 500g", "price": 52 },
+      { "name": "Potatoes 2kg", "price": 18 },
+      { "name": "Chocolate Bar", "price": 12 },
+      { "name": "Dish Soap 750ml", "price": 18 }
+    ]
+  },
+  {
+    "name": "China Mall (Spintex)",
+    "slug": "china-mall-spintex",
+    "phone": "0302812345",
+    "address": "Spintex Road, Accra",
+    "lat": 5.63982,
+    "lng": -0.09152,
+    "shop_category": "groceries",
+    "google_query": "China Mall Spintex Accra",
+    "tagline": "Wholesale-style mall — pantry & household",
+    "menu": [
+      { "name": "Rice 25kg bag", "price": 320 },
+      { "name": "Cooking Oil 5L", "price": 95 },
+      { "name": "Biscuits carton", "price": 45 },
+      { "name": "Plastic Storage Set", "price": 55 },
+      { "name": "Laundry Bar (6)", "price": 18 }
+    ]
+  },
+  {
+    "name": "Hm… Market (Osu)",
+    "slug": "hm-market-osu",
+    "phone": "0302771188",
+    "address": "Osu, Accra",
+    "lat": 5.55612,
+    "lng": -0.17652,
+    "shop_category": "groceries",
+    "google_query": "Hm Market Osu Accra",
+    "tagline": "Boutique grocery & ready meals",
+    "menu": [
+      { "name": "Ready Meal — Jollof", "price": 38 },
+      { "name": "Fruit Salad Tub", "price": 28 },
+      { "name": "Cold Brew Coffee", "price": 22 },
+      { "name": "Vegan Spread", "price": 32 },
+      { "name": "Sparkling Water 6 pack", "price": 24 }
+    ]
+  },
+  {
+    "name": "The Orchard (Dzorwulu)",
+    "slug": "orchard-dzorwulu",
+    "phone": "0302775566",
+    "address": "Dzorwulu, Accra",
+    "lat": 5.60122,
+    "lng": -0.19282,
+    "shop_category": "groceries",
+    "google_query": "The Orchard Dzorwulu Accra",
+    "tagline": "Premium fresh market",
+    "menu": [
+      { "name": "Imported Apples 1kg", "price": 42 },
+      { "name": "Fresh Spinach Bunch", "price": 14 },
+      { "name": "Sourdough Loaf", "price": 35 },
+      { "name": "Greek Yoghurt", "price": 28 },
+      { "name": "Olive Oil 500ml", "price": 65 }
+    ]
+  },
+  {
+    "name": "Game (Accra Mall)",
+    "slug": "game-accra-mall",
+    "phone": "0302780400",
+    "address": "Accra Mall, Tetteh Quarshie, Accra",
+    "lat": 5.62062,
+    "lng": -0.17422,
+    "shop_category": "groceries",
+    "google_query": "Game Stores Accra Mall",
+    "tagline": "Household & grocery aisles",
+    "menu": [
+      { "name": "Broom & Mop Set", "price": 75 },
+      { "name": "Pet Food 2kg", "price": 88 },
+      { "name": "Snacks Variety Pack", "price": 35 },
+      { "name": "Batteries (pack)", "price": 25 },
+      { "name": "Bottled Water 5L", "price": 12 }
+    ]
+  },
+  {
+    "name": "Woolworths Food (Accra Mall)",
+    "slug": "woolworths-accra-mall",
+    "phone": "0302780366",
+    "address": "Accra Mall, Tetteh Quarshie, Accra",
+    "lat": 5.62142,
+    "lng": -0.17292,
+    "shop_category": "groceries",
+    "google_query": "Woolworths Accra Mall food",
+    "tagline": "Quality food market",
+    "menu": [
+      { "name": "Prepared Salad Bowl", "price": 45 },
+      { "name": "Whole Chicken Roasted", "price": 95 },
+      { "name": "Croissants (4)", "price": 32 },
+      { "name": "Sparkling Grape Juice", "price": 38 },
+      { "name": "Frozen Berries 500g", "price": 55 }
+    ]
+  },
+  {
+    "name": "Levande (Airport Residential)",
+    "slug": "levande-airport",
+    "phone": "0302773344",
+    "address": "Airport Residential Area, Accra",
+    "lat": 5.60292,
+    "lng": -0.17482,
+    "shop_category": "groceries",
+    "google_query": "Levande supermarket Accra",
+    "tagline": "Gourmet grocery & café staples",
+    "menu": [
+      { "name": "Espresso Beans 250g", "price": 48 },
+      { "name": "Artisan Cheese 150g", "price": 55 },
+      { "name": "Baguette", "price": 18 },
+      { "name": "Organic Eggs (12)", "price": 42 },
+      { "name": "Nut Butter Jar", "price": 38 }
+    ]
+  }
+]

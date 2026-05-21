@@ -57,3 +57,5 @@ Write-Host "Missing in your local env (add in Render if you use them):" -Foregro
 if (-not $merged["PAYSTACK_PUBLIC_KEY"]) { Write-Host "  - PAYSTACK_PUBLIC_KEY" }
 if (-not $merged["PAYSTACK_SECRET_KEY"]) { Write-Host "  - PAYSTACK_SECRET_KEY" }
 if (-not $merged["SMS_API_KEY"]) { Write-Host "  - SMS_API_KEY (optional - OTP SMS)" }
+if (-not $merged["SUPABASE_SERVICE_ROLE_KEY"]) { Write-Host "  - SUPABASE_SERVICE_ROLE_KEY (run scripts/setup-supabase-storage.ps1)" }
+if (-not $merged["SUPABASE_STORAGE_BUCKET"]) { Write-Host "  - SUPABASE_STORAGE_BUCKET (default: pictures)" }

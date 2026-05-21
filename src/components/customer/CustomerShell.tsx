@@ -16,6 +16,8 @@ import { twMerge } from 'tailwind-merge';
 import axios from 'axios';
 import { Order } from '../../types';
 import { openPaystackCheckout, paystackPaymentEmail } from '../../lib/paystackCheckout';
+import { buildShopOrderExtra } from '../../lib/shopOrderExtra';
+import { getApiError } from '../../lib/api';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -33,6 +35,7 @@ interface AuthUser {
 
 export function CustomerShell({
   user,
+  vendors = [],
   activeTab,
   setActiveTab,
   cart,
@@ -52,7 +55,8 @@ export function CustomerShell({
   refreshData,
   children,
 }: {
-  user: AuthUser;
+  user: AuthUser & { address?: string; lat?: number; lng?: number; region?: string };
+  vendors?: { id: string; address?: string; lat?: number; lng?: number }[];
   activeTab: string;
   setActiveTab: (tab: CustomerTab) => void;
   cart: { id: string; name: string; quantity: number; price: number; vendor_id?: string }[];
@@ -92,6 +96,22 @@ export function CustomerShell({
   const arrivedOrders = activeOrders.filter((o) => o.status === 'arrived');
   const liveTrackOrder = activeOrders.find((o) => o.rider_id);
   const firstName = user.name.split(' ')[0] || user.name;
+
+  const cartOrderPayload = (paymentExtra: Record<string, unknown> = {}) => {
+    const vendorId = cart[0]?.vendor_id;
+    const vendor = vendors.find((v) => v.id === vendorId);
+    return {
+      items: cart.map((item) => ({
+        id: item.id,
+        name: item.name,
+        quantity: item.quantity,
+        price: item.price,
+      })),
+      total,
+      vendorId,
+      ...buildShopOrderExtra({ user, vendor, deliveryFee, extra: paymentExtra }),
+    };
+  };
 
   const navItems: { id: CustomerTab; label: string; icon: typeof Zap }[] = [
     { id: 'courier', label: 'Ride', icon: Zap },
@@ -382,22 +402,21 @@ export function CustomerShell({
                             amountGhs: total,
                             metadata: { type: 'order', vendor_id: cart[0]?.vendor_id },
                             onSuccess: async (reference) => {
-                              await axios.post('/api/orders', {
-                                items: cart.map((item) => ({
-                                  id: item.id,
-                                  name: item.name,
-                                  quantity: item.quantity,
-                                  price: item.price,
-                                })),
-                                total,
-                                delivery_fee: deliveryFee,
-                                vendorId: cart[0].vendor_id,
-                                payment_reference: reference,
-                                payment_method: 'paystack',
-                              });
-                              setCart([]);
-                              setActiveTab('tracking');
-                              refreshData();
+                              try {
+                                await axios.post(
+                                  '/api/orders',
+                                  cartOrderPayload({
+                                    payment_reference: reference,
+                                    payment_method: 'paystack',
+                                  })
+                                );
+                                setCart([]);
+                                setActiveTab('tracking');
+                                refreshData();
+                                addNotification('Order placed', 'success');
+                              } catch (err) {
+                                addNotification(getApiError(err, 'Failed to place order'), 'warning');
+                              }
                             },
                           });
                         } catch (err: unknown) {
@@ -413,22 +432,19 @@ export function CustomerShell({
                       type="button"
                       disabled={user.balance < total}
                       onClick={async () => {
-                        await axios.post('/api/orders', {
-                          items: cart.map((item) => ({
-                            id: item.id,
-                            name: item.name,
-                            quantity: item.quantity,
-                            price: item.price,
-                          })),
-                          total,
-                          delivery_fee: deliveryFee,
-                          vendorId: cart[0].vendor_id,
-                          payment_method: 'wallet',
-                        });
-                        setCart([]);
-                        setIsCartOpen(false);
-                        setActiveTab('tracking');
-                        refreshData();
+                        try {
+                          await axios.post(
+                            '/api/orders',
+                            cartOrderPayload({ payment_method: 'wallet' })
+                          );
+                          setCart([]);
+                          setIsCartOpen(false);
+                          setActiveTab('tracking');
+                          refreshData();
+                          addNotification('Order placed', 'success');
+                        } catch (err) {
+                          addNotification(getApiError(err, 'Failed to place order'), 'warning');
+                        }
                       }}
                       className="py-4 bg-brand-blue text-white rounded-2xl font-black uppercase tracking-widest text-[10px] disabled:opacity-30"
                     >
@@ -437,22 +453,19 @@ export function CustomerShell({
                     <button
                       type="button"
                       onClick={async () => {
-                        await axios.post('/api/orders', {
-                          items: cart.map((item) => ({
-                            id: item.id,
-                            name: item.name,
-                            quantity: item.quantity,
-                            price: item.price,
-                          })),
-                          total,
-                          delivery_fee: deliveryFee,
-                          vendorId: cart[0].vendor_id,
-                          payment_method: 'pay_on_delivery',
-                        });
-                        setCart([]);
-                        setIsCartOpen(false);
-                        setActiveTab('tracking');
-                        refreshData();
+                        try {
+                          await axios.post(
+                            '/api/orders',
+                            cartOrderPayload({ payment_method: 'pay_on_delivery' })
+                          );
+                          setCart([]);
+                          setIsCartOpen(false);
+                          setActiveTab('tracking');
+                          refreshData();
+                          addNotification('Order placed', 'success');
+                        } catch (err) {
+                          addNotification(getApiError(err, 'Failed to place order'), 'warning');
+                        }
                       }}
                       className="py-4 bg-brand-green text-white rounded-2xl font-black uppercase tracking-widest text-[10px]"
                     >

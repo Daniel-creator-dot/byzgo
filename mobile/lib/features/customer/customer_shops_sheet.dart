@@ -4,9 +4,11 @@ import 'package:provider/provider.dart';
 import '../../core/places_service.dart';
 import '../../models/location_point.dart';
 import '../../models/vendor.dart';
+import '../../shared/vendor_contact.dart';
 import '../../shared/vendor_pickup.dart';
 import '../../shared/theme.dart';
 import '../../shared/widgets/sheet_theme_scope.dart';
+import '../../shared/widgets/vendor_shop_avatar.dart';
 import '../orders/orders_repository.dart';
 
 /// Pick a shop/vendor as pickup location.
@@ -152,18 +154,7 @@ class _CustomerShopsSheetState extends State<_CustomerShopsSheet> {
                           padding: const EdgeInsets.all(14),
                           child: Row(
                             children: [
-                              Container(
-                                width: 44,
-                                height: 44,
-                                decoration: BoxDecoration(
-                                  color: BytzGoTheme.accent.withValues(alpha: 0.15),
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                child: const Icon(
-                                  Icons.storefront_outlined,
-                                  color: BytzGoTheme.accentDark,
-                                ),
-                              ),
+                              VendorShopAvatar(vendor: v, size: 44),
                               const SizedBox(width: 12),
                               Expanded(
                                 child: Column(
@@ -183,6 +174,14 @@ class _CustomerShopsSheetState extends State<_CustomerShopsSheet> {
                                         style: BytzGoTheme.sheetBody(12),
                                         maxLines: 2,
                                         overflow: TextOverflow.ellipsis,
+                                      ),
+                                    if (v.phone != null && v.phone!.trim().isNotEmpty)
+                                      Text(
+                                        formatVendorPhone(v.phone),
+                                        style: BytzGoTheme.sheetBody(12).copyWith(
+                                          fontWeight: FontWeight.w700,
+                                          color: BytzGoTheme.brandBlue,
+                                        ),
                                       ),
                                   ],
                                 ),

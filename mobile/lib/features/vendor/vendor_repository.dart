@@ -110,6 +110,7 @@ class VendorRepository {
         filePath,
         filename: 'product.jpg',
       ),
+      'folder': 'products',
     });
     final res = await _api.dio.post<Map<String, dynamic>>(
       '/api/upload',

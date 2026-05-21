@@ -49,6 +49,7 @@ import {
   haversineDistanceKm,
 } from './lib/deliveryPricing';
 import { getApiError } from './lib/api';
+import { buildShopOrderExtra } from './lib/shopOrderExtra';
 import {
   unlockIncomingRideAudio,
   playIncomingRidePulse,
@@ -794,7 +795,7 @@ function MainApp() {
           user={user}
           onComplete={() => setShowDeviceSetup(false)}
           onUserRefresh={(updatedUser, newToken) => {
-            setUser(updatedUser as AuthUser);
+            setUser(updatedUser as unknown as AuthUser);
             setToken(newToken);
             localStorage.setItem('user', JSON.stringify(updatedUser));
             localStorage.setItem('token', newToken);
@@ -861,7 +862,7 @@ function MainApp() {
           user={user}
           onComplete={() => setShowDeviceSetup(false)}
           onUserRefresh={(updatedUser, newToken) => {
-            setUser(updatedUser as AuthUser);
+            setUser(updatedUser as unknown as AuthUser);
             setToken(newToken);
             localStorage.setItem('user', JSON.stringify(updatedUser));
             localStorage.setItem('token', newToken);
@@ -879,6 +880,7 @@ function MainApp() {
         <PullToRefresh onRefresh={refreshData} refreshing={refreshing}>
           <CustomerShell
             user={user}
+            vendors={vendors}
             activeTab={activeTab}
             setActiveTab={setActiveTab}
             cart={cart}
@@ -914,19 +916,36 @@ function MainApp() {
               setActiveTab={setActiveTab}
               onPlaceOrder={async (items, totalAmt, vendorId, extra = {}) => {
                 try {
-                  await axios.post('/api/orders', {
-                    items,
-                    total: totalAmt,
-                    vendorId,
-                    address: extra.address || user.address || 'East Legon, Accra',
-                    lat: extra.lat || user.lat,
-                    lng: extra.lng || user.lng,
-                    ...extra,
-                  });
+                  const vendor = vendorId
+                    ? vendors.find((v) => v.id === vendorId)
+                    : undefined;
+                  const payload = vendorId
+                    ? {
+                        items,
+                        total: totalAmt,
+                        vendorId,
+                        ...buildShopOrderExtra({
+                          user,
+                          vendor,
+                          deliveryFee,
+                          extra,
+                        }),
+                      }
+                    : {
+                        items,
+                        total: totalAmt,
+                        vendorId,
+                        address: extra.address || user.address || 'East Legon, Accra',
+                        lat: extra.lat || user.lat,
+                        lng: extra.lng || user.lng,
+                        ...extra,
+                      };
+                  await axios.post('/api/orders', payload);
                   await refreshData();
+                  addNotification('Order placed', 'success');
                 } catch (err) {
                   console.error('Order failed', err);
-                  addNotification('Failed to place order', 'warning');
+                  addNotification(getApiError(err, 'Failed to place order'), 'warning');
                 }
               }}
               zones={zones}
@@ -956,7 +975,7 @@ function MainApp() {
         user={user}
         onComplete={() => setShowDeviceSetup(false)}
         onUserRefresh={(updatedUser, newToken) => {
-          setUser(updatedUser as AuthUser);
+          setUser(updatedUser as unknown as AuthUser);
           setToken(newToken);
           localStorage.setItem('user', JSON.stringify(updatedUser));
           localStorage.setItem('token', newToken);
@@ -2299,7 +2318,7 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
               name={user.name}
               avatarUrl={user.avatar_url}
               onUpdated={(updatedUser, newToken) => {
-                onUserUpdate(updatedUser as AuthUser, newToken);
+                onUserUpdate(updatedUser as unknown as AuthUser, newToken);
                 addNotification('Profile photo updated', 'success');
               }}
               onError={(m) => addNotification(m, 'warning')}
@@ -2556,11 +2575,16 @@ function VendorView({
 
   const activeOrders = orders.filter(o => o.status !== 'delivered' && o.status !== 'cancelled');
 
-  const handleFileUpload = async (file: File, onSuccess: (url: string) => void) => {
+  const handleFileUpload = async (
+    file: File,
+    onSuccess: (url: string) => void,
+    folder: 'products' | 'covers' | 'avatars' = 'products'
+  ) => {
     setUploading(true);
     try {
       const formData = new FormData();
       formData.append('image', file);
+      formData.append('folder', folder);
       const res = await axios.post('/api/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
       onSuccess(res.data.url);
       addNotification('Image uploaded', 'success');
@@ -2757,7 +2781,7 @@ function VendorView({
                            {uploading ? <LoadingIndicator size="sm" /> : 'Upload'}
                            <input type="file" accept="image/*" className="hidden" disabled={uploading} onChange={(e) => {
                              const file = e.target.files?.[0];
-                             if (file) handleFileUpload(file, (url) => setNewProduct({...newProduct, image_url: url}));
+                             if (file) handleFileUpload(file, (url) => setNewProduct({...newProduct, image_url: url}), 'products');
                            }} />
                          </label>
                        </div>
@@ -2797,7 +2821,7 @@ function VendorView({
               avatarUrl={user.avatar_url}
               size="md"
               onUpdated={(updatedUser, newToken) => {
-                onUserUpdate(updatedUser as AuthUser, newToken);
+                onUserUpdate(updatedUser as unknown as AuthUser, newToken);
                 addNotification('Profile photo updated', 'success');
               }}
               onError={(m) => addNotification(m, 'warning')}
@@ -2831,7 +2855,7 @@ function VendorView({
                   {uploading ? <LoadingIndicator size="sm" /> : 'Upload'}
                   <input type="file" accept="image/*" className="hidden" disabled={uploading} onChange={(e) => {
                     const file = e.target.files?.[0];
-                    if (file) handleFileUpload(file, (url) => setStoreForm({...storeForm, cover_image: url}));
+                    if (file) handleFileUpload(file, (url) => setStoreForm({...storeForm, cover_image: url}), 'covers');
                   }} />
                 </label>
               </div>
@@ -2851,6 +2875,7 @@ function VendorView({
                 className="w-full bg-slate-50 border border-slate-100 rounded-2xl py-4 px-6 font-bold text-sm focus:outline-none focus:border-brand-blue transition-all"
               >
                 <option value="pharmacy">Pharmacy</option>
+                <option value="restaurant">Restaurant</option>
                 <option value="food">Food &amp; Drinks</option>
                 <option value="fashion">Fashion</option>
                 <option value="groceries">Groceries</option>

@@ -12,6 +12,14 @@ typedef OrderIdHandler = void Function(String orderId);
 typedef WalletHandler = void Function(double balance);
 typedef LocationHandler = void Function(String riderId, double lat, double lng);
 typedef OrderMessageHandler = void Function(String orderId, TripMessage message);
+typedef ProductUpdatedHandler = void Function(String vendorId, Map<String, dynamic> product);
+typedef PulseGuideHandler = void Function({
+  required String orderId,
+  required double lat,
+  required double lng,
+  required String phase,
+  String? at,
+});
 typedef StatusUpdatedHandler = void Function({
   required String status,
   bool? isOnline,
@@ -31,6 +39,8 @@ class SocketService {
   LocationHandler? onLocationUpdated;
   OrderMessageHandler? onOrderMessage;
   final List<OrderMessageHandler> _orderMessageListeners = [];
+  ProductUpdatedHandler? onProductUpdated;
+  PulseGuideHandler? onPulseGuide;
   StatusUpdatedHandler? onStatusUpdated;
 
   bool get isConnected => _socket?.connected ?? false;
@@ -64,6 +74,8 @@ class SocketService {
       ..on('wallet:updated', _onWalletUpdated)
       ..on('location:updated', _onLocationUpdated)
       ..on('order:message', _onOrderMessage)
+      ..on('product:updated', _onProductUpdated)
+      ..on('pulse:guide', _onPulseGuide)
       ..on('status:updated', _onStatusUpdated);
   }
 
@@ -123,6 +135,29 @@ class SocketService {
 
   void removeOrderMessageListener(OrderMessageHandler listener) {
     _orderMessageListeners.remove(listener);
+  }
+
+  void _onPulseGuide(dynamic data) {
+    final map = _asMap(data);
+    if (map == null || map['orderId'] == null) return;
+    final lat = parseJsonDouble(map['lat']);
+    final lng = parseJsonDouble(map['lng']);
+    if (lat == null || lng == null) return;
+    onPulseGuide?.call(
+      orderId: map['orderId'].toString(),
+      lat: lat,
+      lng: lng,
+      phase: map['phase']?.toString() ?? 'pickup',
+      at: map['at']?.toString(),
+    );
+  }
+
+  void _onProductUpdated(dynamic data) {
+    final map = _asMap(data);
+    if (map == null || map['vendorId'] == null) return;
+    final productMap = _asMap(map['product']);
+    if (productMap == null) return;
+    onProductUpdated?.call(map['vendorId'].toString(), productMap);
   }
 
   void _onOrderMessage(dynamic data) {
@@ -185,6 +220,8 @@ class SocketService {
     onWalletUpdated = null;
     onLocationUpdated = null;
     onOrderMessage = null;
+    onProductUpdated = null;
+    onPulseGuide = null;
     onStatusUpdated = null;
   }
 

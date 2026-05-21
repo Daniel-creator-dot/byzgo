@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../core/socket_service.dart';
+import '../core/trip_chat_unread.dart';
 import '../features/orders/orders_repository.dart';
 import '../models/order.dart';
 import '../models/trip_message.dart';
@@ -13,6 +14,7 @@ Future<void> showTripChatSheet(
   required Order order,
   required String title,
 }) {
+  context.read<TripChatUnread>().markRead(order.id);
   return showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
@@ -23,7 +25,11 @@ Future<void> showTripChatSheet(
     builder: (ctx) => SheetThemeScope(
           child: TripChatSheet(order: order, title: title),
         ),
-  );
+  ).whenComplete(() {
+    if (context.mounted) {
+      context.read<TripChatUnread>().markRead(order.id);
+    }
+  });
 }
 
 class TripChatSheet extends StatefulWidget {

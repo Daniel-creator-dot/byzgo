@@ -173,7 +173,7 @@ class OrdersRepository {
           ),
         ],
         'total': total,
-        'order_type': 'courier',
+        'order_type': 'food',
         'address': destination.address,
         'pickup': pickup.address,
         'lat': destination.lat,
@@ -306,6 +306,22 @@ class OrdersRepository {
 
     await _api.dio.post('/api/orders/$orderId/decline');
 
+  }
+
+  /// Pulse Guide™ — flash live GPS to the assigned rider.
+  Future<Order> activatePulseGuide({
+    required String orderId,
+    required double lat,
+    required double lng,
+    required String phase,
+  }) async {
+    final res = await _api.dio.post<Map<String, dynamic>>(
+      '/api/orders/$orderId/pulse-guide',
+      data: {'lat': lat, 'lng': lng, 'phase': phase},
+    );
+    final data = res.data;
+    if (data == null) throw Exception('Empty pulse guide response');
+    return Order.fromJson(Map<String, dynamic>.from(data));
   }
 
   Future<CancelOrderResult> cancelOrder(String orderId) async {

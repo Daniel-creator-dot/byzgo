@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/trip_chat_unread.dart';
+
 import '../../core/session.dart';
 import '../../models/order.dart';
 import '../../shared/customer_trip.dart';
@@ -12,6 +14,8 @@ import '../../shared/delivery_pricing.dart';
 import '../../shared/widgets/biker_search_radar.dart';
 import '../../shared/widgets/bolt_eta_pill.dart';
 import '../../shared/trip_contact.dart';
+import '../../shared/pulse_guide.dart';
+import '../../shared/widgets/pulse_guide_button.dart';
 import '../../shared/widgets/ride_ui.dart';
 import '../orders/orders_repository.dart';
 import '../wallet/wallet_repository.dart';
@@ -107,15 +111,25 @@ class CustomerDeliveryTracker extends StatelessWidget {
             dropoff: dropoffLabel,
           ),
         ],
+        if (orderAllowsPulseGuide(order)) ...[
+          const SizedBox(height: 12),
+          PulseGuideButton(
+            order: order,
+            onOrderUpdated: onOrderUpdated,
+          ),
+        ],
         if (tripAllowsContact(order)) ...[
           const SizedBox(height: 12),
-          TripContactActions(
-            order: order,
-            phone: order.riderPhone,
-            label: 'Contact your biker',
-            chatTitle: order.riderName != null && order.riderName!.isNotEmpty
-                ? 'Chat with ${order.riderName}'
-                : 'Chat with your biker',
+          Consumer<TripChatUnread>(
+            builder: (context, unread, _) => TripContactActions(
+              order: order,
+              phone: order.riderPhone,
+              label: 'Contact your biker',
+              chatTitle: order.riderName != null && order.riderName!.isNotEmpty
+                  ? 'Chat with ${order.riderName}'
+                  : 'Chat with your biker',
+              unreadCount: unread.countFor(order.id),
+            ),
           ),
         ],
         const SizedBox(height: 16),

@@ -10,6 +10,7 @@ import 'core/places_service.dart';
 import 'core/push_notification_service.dart';
 import 'core/session.dart';
 import 'core/socket_service.dart';
+import 'core/trip_chat_unread.dart';
 import 'features/admin/admin_repository.dart';
 import 'features/auth/auth_repository.dart';
 import 'features/orders/orders_repository.dart';
@@ -33,6 +34,7 @@ class _BytzGoAppState extends State<BytzGoApp> {
   late final ApiClient _api;
   late final SocketService _socket;
   late final Session _session;
+  late final TripChatUnread _tripChatUnread;
   late final GoRouter _router;
   bool _splashDone = false;
 
@@ -43,12 +45,16 @@ class _BytzGoAppState extends State<BytzGoApp> {
     _socket = SocketService();
     _api = ApiClient();
     _session = Session(_api, _socket);
+    _tripChatUnread = TripChatUnread();
     _session.onAuthChanged = () => PushNotificationService.instance.syncActiveRole(
           api: _api,
           user: _session.user,
           session: _session,
         );
-    _api.onUnauthorized = () => _session.clear();
+    _api.onUnauthorized = () {
+      _tripChatUnread.clear();
+      _session.clear();
+    };
     _router = createAppRouter(_session);
     _boot();
   }
@@ -56,6 +62,9 @@ class _BytzGoAppState extends State<BytzGoApp> {
   Future<void> _boot() async {
     final started = DateTime.now();
     await _session.restore();
+    if (_session.isAuthenticated) {
+      await _session.refreshAuthFromServer();
+    }
     await PushNotificationService.instance.syncActiveRole(
       api: _api,
       user: _session.user,
@@ -83,6 +92,7 @@ class _BytzGoAppState extends State<BytzGoApp> {
         Provider<ApiClient>.value(value: _api),
         Provider<SocketService>.value(value: _socket),
         ChangeNotifierProvider<Session>.value(value: _session),
+        ChangeNotifierProvider<TripChatUnread>.value(value: _tripChatUnread),
         Provider(create: (ctx) => AuthRepository(ctx.read<ApiClient>())),
         Provider(create: (ctx) => RiderDocumentsRepository(ctx.read<ApiClient>())),
         Provider(create: (ctx) => AdminRepository(ctx.read<ApiClient>())),
