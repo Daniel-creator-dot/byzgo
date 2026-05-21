@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:math' as math;
+
 import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
@@ -29,6 +32,7 @@ class RideGoogleMap extends StatefulWidget {
     this.riderNavTarget,
     this.jobOffers = const [],
     this.showDriverIdleRadar = false,
+    this.followRider = false,
   });
 
   final LocationPoint? pickup;
@@ -52,6 +56,8 @@ class RideGoogleMap extends StatefulWidget {
   final List<RiderMapOffer> jobOffers;
   /// Pulse rings at driver GPS while waiting for jobs.
   final bool showDriverIdleRadar;
+  /// Keep camera centered on the moving biker (in-app navigation).
+  final bool followRider;
 
   @override
   State<RideGoogleMap> createState() => RideGoogleMapState();
@@ -64,6 +70,7 @@ class RideGoogleMapState extends State<RideGoogleMap>
   GoogleMapController? _controller;
   late final AnimationController _radarCtrl;
   DateTime? _lastBoundsFit;
+  DateTime? _lastFollow;
   static const _accra = LatLng(ghanaCenterLat, ghanaCenterLng);
 
   @override
@@ -364,7 +371,8 @@ class RideGoogleMapState extends State<RideGoogleMap>
     } else if (widget.showLiveRiderRoute &&
         widget.riderPosition != null &&
         widget.riderPosition!.hasCoords) {
-      final target = widget.destination ?? widget.pickup;
+      final target =
+          widget.riderNavTarget ?? widget.destination ?? widget.pickup;
       if (target != null && target.hasCoords) {
         routeLine.add(
           LatLng(widget.riderPosition!.lat, widget.riderPosition!.lng),
@@ -400,8 +408,67 @@ class RideGoogleMapState extends State<RideGoogleMap>
 
   /// Re-frame map to pickup, drop-off, rider, and nearby bikers.
   Future<void> fitAllMarkers() async {
+    if (widget.followRider &&
+        widget.riderPosition != null &&
+        widget.riderPosition!.hasCoords) {
+      await _followRiderCamera();
+      return;
+    }
     _lastBoundsFit = null;
     await _fitBounds();
+  }
+
+  double? _bearingTowardTarget() {
+    final pos = widget.riderPosition;
+    if (pos == null || !pos.hasCoords) return null;
+    LatLng? target;
+    if (widget.routePoints.length >= 2) {
+      for (final p in widget.routePoints) {
+        if (!p.hasCoords) continue;
+        final d = (p.lat - pos.lat).abs() + (p.lng - pos.lng).abs();
+        if (d > 0.00015) {
+          target = LatLng(p.lat, p.lng);
+          break;
+        }
+      }
+    }
+    target ??= () {
+      final t = widget.riderNavTarget ?? widget.destination ?? widget.pickup;
+      if (t != null && t.hasCoords) return LatLng(t.lat, t.lng);
+      return null;
+    }();
+    if (target == null) return null;
+    final lat1 = pos.lat * math.pi / 180;
+    final lat2 = target.latitude * math.pi / 180;
+    final dLon = (target.longitude - pos.lng) * math.pi / 180;
+    final y = math.sin(dLon) * math.cos(lat2);
+    final x = math.cos(lat1) * math.sin(lat2) -
+        math.sin(lat1) * math.cos(lat2) * math.cos(dLon);
+    return (math.atan2(y, x) * 180 / math.pi + 360) % 360;
+  }
+
+  Future<void> _followRiderCamera() async {
+    final pos = widget.riderPosition;
+    if (pos == null || !pos.hasCoords) return;
+    final now = DateTime.now();
+    if (_lastFollow != null &&
+        now.difference(_lastFollow!) < const Duration(seconds: 1)) {
+      return;
+    }
+    _lastFollow = now;
+    final c = _controller;
+    if (c == null) return;
+    final bearing = _bearingTowardTarget();
+    await c.animateCamera(
+      CameraUpdate.newCameraPosition(
+        CameraPosition(
+          target: LatLng(pos.lat, pos.lng),
+          zoom: 17,
+          tilt: 50,
+          bearing: bearing ?? 0,
+        ),
+      ),
+    );
   }
 
   Future<void> _fitBounds() async {
@@ -475,12 +542,26 @@ class RideGoogleMapState extends State<RideGoogleMap>
         _radarCtrl.reset();
       }
     }
+    if (widget.followRider &&
+        widget.riderPosition != null &&
+        widget.riderPosition!.hasCoords) {
+      final moved = oldWidget.riderPosition == null ||
+          !oldWidget.riderPosition!.hasCoords ||
+          (widget.riderPosition!.lat - oldWidget.riderPosition!.lat).abs() >
+              0.00005 ||
+          (widget.riderPosition!.lng - oldWidget.riderPosition!.lng).abs() >
+              0.00005;
+      if (moved) {
+        unawaited(_followRiderCamera());
+        return;
+      }
+    }
     if (oldWidget.pickup != widget.pickup ||
         oldWidget.destination != widget.destination ||
         oldWidget.riderPosition != widget.riderPosition ||
         oldWidget.routePoints.length != widget.routePoints.length ||
         oldWidget.jobOffers.length != widget.jobOffers.length) {
-      _fitBounds();
+      unawaited(_fitBounds());
     }
   }
 }

@@ -179,6 +179,32 @@ function isRiderDocType(value: string): value is RiderDocType {
 const USER_PUBLIC_FIELDS =
   'id, name, email, role, balance, phone, cover_image, avatar_url, address, lat, lng, region, status, is_online, shop_category';
 
+/** JWT payload only — never embed avatar/cover base64 (causes HTTP 431 on API calls). */
+function signAuthToken(user: {
+  id: string | number;
+  name?: string;
+  email?: string;
+  role?: string;
+  balance?: unknown;
+  status?: string;
+  is_online?: boolean;
+  region?: string;
+}): string {
+  return jwt.sign(
+    {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      balance: user.balance,
+      status: user.status,
+      is_online: user.is_online,
+      region: user.region,
+    },
+    process.env.JWT_SECRET as string
+  );
+}
+
 const SHOP_CATEGORIES = ['pharmacy', 'food', 'fashion', 'groceries'] as const;
 
 const PRIMECARE_CANONICAL_EMAIL = 'vendor@bytzgo.net';
@@ -2080,7 +2106,7 @@ app.post('/api/auth/register', async (req, res) => {
       ]);
     }
     const user = result.rows[0];
-    const token = jwt.sign(user, process.env.JWT_SECRET as string);
+    const token = signAuthToken(user);
     res.json({ user, token });
   } catch (err) {
     console.error('Registration failed:', err);
@@ -2106,7 +2132,7 @@ app.post('/api/auth/login', async (req, res) => {
     }
     if (await bcrypt.compare(password, user.password)) {
       const { password: _pw, ...userWithoutPassword } = user;
-      const token = jwt.sign(userWithoutPassword, process.env.JWT_SECRET as string);
+      const token = signAuthToken(userWithoutPassword);
       res.json({ user: userWithoutPassword, token });
     } else {
       res.status(401).json({ message: 'Invalid phone/email or password' });
@@ -2184,7 +2210,7 @@ app.post('/api/auth/google', async (req, res) => {
       user = u;
     }
     
-    const token = jwt.sign({ id: user.id, name: user.name, email: user.email, role: user.role, balance: user.balance }, process.env.JWT_SECRET as string);
+    const token = signAuthToken(user);
     res.json({ user, token });
   } catch (err: any) {
     console.error('Google auth error:', err);
@@ -2237,7 +2263,7 @@ app.post('/api/auth/supabase', async (req, res) => {
       user = u;
     }
 
-    const token = jwt.sign({ id: user.id, name: user.name, email: user.email, role: user.role, balance: user.balance }, process.env.JWT_SECRET as string);
+    const token = signAuthToken(user);
     res.json({ user, token });
   } catch (err: any) {
     console.error('Supabase auth error:', err.response?.data || err.message);
@@ -2346,7 +2372,7 @@ app.patch('/api/auth/profile', authenticateToken, async (req: any, res) => {
       ]
     );
     const user = result.rows[0];
-    const token = jwt.sign({ id: user.id, name: user.name, email: user.email, role: user.role, balance: user.balance, status: user.status, is_online: user.is_online, region: user.region }, process.env.JWT_SECRET as string);
+    const token = signAuthToken(user);
     res.json({ user, token });
   } catch (err: any) {
     console.error('Profile update error:', err);
@@ -2389,10 +2415,7 @@ app.patch('/api/auth/status', authenticateToken, async (req: any, res) => {
       );
       const user = result.rows[0];
       if (isOnline) await seedRiderLocationFromProfile(user.id);
-      const token = jwt.sign(
-        { id: user.id, name: user.name, email: user.email, role: user.role, balance: user.balance, status: user.status, is_online: user.is_online, region: user.region },
-        process.env.JWT_SECRET as string
-      );
+      const token = signAuthToken(user);
       res.json({ user, token });
       io.to(String(user.id)).emit('status:updated', { status: user.status, is_online: user.is_online });
       return;
@@ -2403,10 +2426,7 @@ app.patch('/api/auth/status', authenticateToken, async (req: any, res) => {
       [status, req.user.id]
     );
     const user = result.rows[0];
-    const token = jwt.sign(
-      { id: user.id, name: user.name, email: user.email, role: user.role, balance: user.balance, status: user.status, is_online: user.is_online, region: user.region },
-      process.env.JWT_SECRET as string
-    );
+    const token = signAuthToken(user);
     res.json({ user, token });
     io.to(String(user.id)).emit('status:updated', { status });
   } catch (err: any) {
@@ -2517,10 +2537,7 @@ app.post(
       const documents = await fetchRiderDocuments(req.user.id);
       const userRes = await pool.query(`SELECT ${USER_PUBLIC_FIELDS} FROM users WHERE id = $1`, [req.user.id]);
       const user = userRes.rows[0];
-      const token = jwt.sign(
-        { id: user.id, name: user.name, email: user.email, role: user.role, balance: user.balance, status: user.status, is_online: user.is_online, region: user.region },
-        process.env.JWT_SECRET as string
-      );
+      const token = signAuthToken(user);
       res.json({ url: base64, documents, user, token });
     } catch (err) {
       console.error('Rider document upload error:', err);
@@ -2546,10 +2563,7 @@ app.post('/api/rider/documents/submit', authenticateToken, async (req: any, res)
     );
     const userRes = await pool.query(`SELECT ${USER_PUBLIC_FIELDS} FROM users WHERE id = $1`, [req.user.id]);
     const user = userRes.rows[0];
-    const token = jwt.sign(
-      { id: user.id, name: user.name, email: user.email, role: user.role, balance: user.balance, status: user.status, is_online: user.is_online, region: user.region },
-      process.env.JWT_SECRET as string
-    );
+    const token = signAuthToken(user);
     res.json({ message: 'Submitted for admin review', user, token, documents: await fetchRiderDocuments(req.user.id) });
     io.to(String(req.user.id)).emit('status:updated', { status: 'pending', is_online: false });
   } catch (err) {
@@ -4750,7 +4764,18 @@ io.on('connection', (socket) => {
         'INSERT INTO rider_locations (rider_id, lat, lng, updated_at) VALUES ($1, $2, $3, CURRENT_TIMESTAMP) ON CONFLICT (rider_id) DO UPDATE SET lat = $2, lng = $3, updated_at = CURRENT_TIMESTAMP',
         [riderId, lat, lng]
       );
-      io.emit('location:updated', { riderId, lat, lng });
+      const payload = { riderId, lat, lng };
+      io.to(riderId).emit('location:updated', payload);
+      const watching = await pool.query(
+        `SELECT DISTINCT customer_id FROM orders
+         WHERE rider_id = $1 AND status IN ('ready', 'picked_up', 'arrived')`,
+        [riderId]
+      );
+      for (const row of watching.rows) {
+        if (row.customer_id) {
+          io.to(String(row.customer_id)).emit('location:updated', payload);
+        }
+      }
     } catch (err) {
       console.error('Location update failed', err);
     }

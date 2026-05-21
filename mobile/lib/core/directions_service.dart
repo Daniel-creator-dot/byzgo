@@ -7,12 +7,14 @@ import 'api_client.dart';
 class RouteSummary {
   const RouteSummary({
     required this.etaMinutes,
+    required this.durationSeconds,
     required this.durationText,
     required this.distanceText,
     required this.points,
   });
 
   final int etaMinutes;
+  final int durationSeconds;
   final String durationText;
   final String distanceText;
   final List<LocationPoint> points;
@@ -21,6 +23,9 @@ class RouteSummary {
     if (etaMinutes <= 1) return 'Arriving in about 1 min';
     return 'Arriving in about $etaMinutes min';
   }
+
+  DateTime expiresAtFrom(DateTime base) =>
+      base.add(Duration(seconds: durationSeconds < 1 ? 60 : durationSeconds));
 }
 
 /// Driving ETA + route polyline via backend Google Directions proxy.
@@ -62,9 +67,13 @@ class DirectionsService {
           }
         }
       }
-      final etaMinutes = (data['eta_minutes'] as num?)?.toInt() ?? 1;
+      final durationSec = (data['duration_seconds'] as num?)?.toInt() ?? 0;
+      final etaMinutes = (data['eta_minutes'] as num?)?.toInt() ??
+          (durationSec > 0 ? (durationSec / 60).ceil() : 1);
+      final secs = durationSec > 0 ? durationSec : etaMinutes * 60;
       return RouteSummary(
         etaMinutes: etaMinutes < 1 ? 1 : etaMinutes,
+        durationSeconds: secs < 1 ? 60 : secs,
         durationText: data['duration_text']?.toString() ?? '',
         distanceText: data['distance_text']?.toString() ?? '',
         points: points,
@@ -82,8 +91,10 @@ class DirectionsService {
       destination.lng,
     );
     final minutes = (km / 0.45).ceil().clamp(1, 120);
+    final secs = minutes * 60;
     return RouteSummary(
       etaMinutes: minutes,
+      durationSeconds: secs,
       durationText: '$minutes min',
       distanceText: '${km.toStringAsFixed(1)} km',
       points: [origin, destination],

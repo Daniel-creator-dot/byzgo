@@ -21,7 +21,7 @@ class ApiClient {
       InterceptorsWrapper(
         onError: (err, handler) {
           final status = err.response?.statusCode;
-          if (status == 401 || status == 403) {
+          if (status == 401 || status == 403 || status == 431) {
             onUnauthorized?.call();
           }
           handler.next(err);
@@ -43,8 +43,17 @@ class ApiClient {
     }
   }
 
+  /// Auth tokens should be a few KB; larger ones break proxies (HTTP 431).
+  static const int maxAuthTokenLength = 4096;
+
+  static bool isOversizedAuthToken(String? token) =>
+      token != null && token.length > maxAuthTokenLength;
+
   static String messageFromDio(DioException err, [String fallback = 'Something went wrong']) {
     final status = err.response?.statusCode;
+    if (status == 431) {
+      return 'Session expired. Please sign in again.';
+    }
     if (status == 413) {
       return 'Photo or request is too large. Use a smaller image, or save without changing the photo.';
     }

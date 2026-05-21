@@ -19,6 +19,8 @@ class RiderDriveMapLayer extends StatefulWidget {
     this.incomingOrder,
     this.previewOrderId,
     this.showRoute = false,
+    this.routePoints = const [],
+    this.followRider = false,
   });
 
   final ValueNotifier<LocationPoint?> riderPosition;
@@ -29,6 +31,8 @@ class RiderDriveMapLayer extends StatefulWidget {
   final Order? incomingOrder;
   final String? previewOrderId;
   final bool showRoute;
+  final List<LocationPoint> routePoints;
+  final bool followRider;
 
   @override
   State<RiderDriveMapLayer> createState() => RiderDriveMapLayerState();
@@ -97,6 +101,20 @@ class RiderDriveMapLayerState extends State<RiderDriveMapLayer> {
                 .firstWhere((d) => d != null, orElse: () => null)
             : null);
 
+    LocationPoint? navTarget;
+    if (focus != null) {
+      final stop = navigationTarget(focus, widget.vendors);
+      if (stop != null && hasValidCoords(stop.lat, stop.lng)) {
+        navTarget = LocationPoint(
+          address: stop.label,
+          lat: stop.lat,
+          lng: stop.lng,
+        );
+      }
+    }
+
+    final hasDrivingRoute = widget.routePoints.length >= 2;
+
     return ValueListenableBuilder<LocationPoint?>(
       valueListenable: widget.riderPosition,
       builder: (context, pos, _) {
@@ -105,8 +123,14 @@ class RiderDriveMapLayerState extends State<RiderDriveMapLayer> {
           pickup: pickup,
           destination: destination,
           riderPosition: pos,
+          riderNavTarget: navTarget,
+          routePoints: widget.routePoints,
           showRoute: widget.showRoute,
-          showLiveRiderRoute: widget.showRoute && widget.activeOrder != null,
+          showLiveRiderRoute: widget.showRoute &&
+              widget.activeOrder != null &&
+              !hasDrivingRoute &&
+              pos != null &&
+              navTarget != null,
           showDriverIdleRadar: idleOnMap,
           jobOffers: idleOnMap || widget.incomingOrder == null
               ? offers
@@ -117,6 +141,7 @@ class RiderDriveMapLayerState extends State<RiderDriveMapLayer> {
                   widget.vendors,
                   selectedOrderId: selectedId,
                 ),
+          followRider: widget.followRider,
         );
       },
     );

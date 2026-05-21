@@ -10,6 +10,7 @@ import '../../shared/theme.dart';
 import '../../models/location_point.dart';
 import '../../shared/delivery_pricing.dart';
 import '../../shared/widgets/biker_search_radar.dart';
+import '../../shared/widgets/bolt_eta_pill.dart';
 import '../../shared/trip_contact.dart';
 import '../../shared/widgets/ride_ui.dart';
 import '../orders/orders_repository.dart';
@@ -22,6 +23,9 @@ class CustomerDeliveryTracker extends StatelessWidget {
     required this.order,
     required this.onOrderUpdated,
     this.etaPhrase,
+    this.etaMinutes,
+    this.etaDistanceText,
+    this.etaExpiresAt,
     this.pickupLabel,
     this.dropoffLabel,
     this.riderPosition,
@@ -33,6 +37,9 @@ class CustomerDeliveryTracker extends StatelessWidget {
   final Order order;
   final ValueChanged<Order> onOrderUpdated;
   final String? etaPhrase;
+  final int? etaMinutes;
+  final String? etaDistanceText;
+  final DateTime? etaExpiresAt;
   final String? pickupLabel;
   final String? dropoffLabel;
   final LocationPoint? riderPosition;
@@ -69,6 +76,9 @@ class CustomerDeliveryTracker extends StatelessWidget {
         _StatusHero(
           order: order,
           etaPhrase: etaPhrase,
+          etaMinutes: etaMinutes,
+          etaDistanceText: etaDistanceText,
+          etaExpiresAt: etaExpiresAt,
           distanceKm: dist,
           searching: searching,
         ),
@@ -85,6 +95,9 @@ class CustomerDeliveryTracker extends StatelessWidget {
             order: order,
             distanceKm: dist,
             etaPhrase: etaPhrase,
+            etaExpiresAt: etaExpiresAt,
+            etaMinutes: etaMinutes,
+            etaDistanceText: etaDistanceText,
           ),
         ],
         if (pickupLabel != null || dropoffLabel != null) ...[
@@ -286,11 +299,17 @@ class _RiderLiveCard extends StatelessWidget {
     required this.order,
     this.distanceKm,
     this.etaPhrase,
+    this.etaMinutes,
+    this.etaDistanceText,
+    this.etaExpiresAt,
   });
 
   final Order order;
   final double? distanceKm;
   final String? etaPhrase;
+  final int? etaMinutes;
+  final String? etaDistanceText;
+  final DateTime? etaExpiresAt;
 
   @override
   Widget build(BuildContext context) {
@@ -336,29 +355,38 @@ class _RiderLiveCard extends StatelessWidget {
               ],
             ),
           ),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              const Text(
-                'LIVE',
-                style: TextStyle(
-                  fontSize: 9,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: 1,
-                  color: Colors.orange,
+          if (etaExpiresAt != null || etaMinutes != null)
+            BoltEtaPill(
+              minutes: etaMinutes,
+              expiresAt: etaExpiresAt,
+              subtitle: etaDistanceText,
+              compact: true,
+              label: 'to arrival',
+            )
+          else
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                const Text(
+                  'LIVE',
+                  style: TextStyle(
+                    fontSize: 9,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 1,
+                    color: Colors.orange,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 4),
-              Container(
-                width: 10,
-                height: 10,
-                decoration: const BoxDecoration(
-                  color: Colors.orange,
-                  shape: BoxShape.circle,
+                const SizedBox(height: 4),
+                Container(
+                  width: 10,
+                  height: 10,
+                  decoration: const BoxDecoration(
+                    color: Colors.orange,
+                    shape: BoxShape.circle,
+                  ),
                 ),
-              ),
-            ],
-          ),
+              ],
+            ),
         ],
       ),
     );
@@ -425,12 +453,18 @@ class _StatusHero extends StatelessWidget {
   const _StatusHero({
     required this.order,
     this.etaPhrase,
+    this.etaMinutes,
+    this.etaDistanceText,
+    this.etaExpiresAt,
     this.distanceKm,
     this.searching = false,
   });
 
   final Order order;
   final String? etaPhrase;
+  final int? etaMinutes;
+  final String? etaDistanceText;
+  final DateTime? etaExpiresAt;
   final double? distanceKm;
   final bool searching;
 
@@ -441,6 +475,9 @@ class _StatusHero extends StatelessWidget {
     final isArrived = order.status == 'arrived';
     final isDelivered = order.status == 'delivered';
     final isSearching = searching || customerIsSearchingBiker(order);
+    final showEta = !isSearching &&
+        order.riderId != null &&
+        (etaExpiresAt != null || etaMinutes != null);
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -470,65 +507,81 @@ class _StatusHero extends StatelessWidget {
                   : BytzGoTheme.brandBlue.withValues(alpha: 0.25),
         ),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Container(
-            width: 48,
-            height: 48,
-            decoration: BoxDecoration(
-              color: BytzGoTheme.sheetBg,
-              borderRadius: BorderRadius.circular(14),
+          if (showEta) ...[
+            Center(
+              child: BoltEtaPill(
+                minutes: etaMinutes,
+                expiresAt: etaExpiresAt,
+                subtitle: etaDistanceText ?? etaPhrase,
+                label: 'until biker arrives',
+              ),
             ),
-            child: isSearching
-                ? const BikerSearchRadar(size: 44, color: BytzGoTheme.brandBlue)
-                : Icon(
-                    isDelivered
-                        ? Icons.check_circle
-                        : isArrived
-                            ? Icons.place
-                            : order.status == 'picked_up'
-                                ? Icons.two_wheeler
-                                : order.riderId != null
-                                    ? Icons.person_pin_circle
-                                    : Icons.radar,
-                    color: isDelivered
-                        ? BytzGoTheme.accentDark
-                        : isArrived
-                            ? BytzGoTheme.warning
-                            : BytzGoTheme.brandBlue,
-                    size: 28,
-                  ),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  headline,
-                  style: const TextStyle(
-                    fontSize: 17,
-                    fontWeight: FontWeight.w900,
-                    color: BytzGoTheme.sheetText,
-                  ),
+            const SizedBox(height: 14),
+          ],
+          Row(
+            children: [
+              Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  color: BytzGoTheme.sheetBg,
+                  borderRadius: BorderRadius.circular(14),
                 ),
-                if (sub.isNotEmpty) ...[
-                  const SizedBox(height: 4),
-                  Text(sub, style: BytzGoTheme.sheetBody(13)),
-                ],
-                if (distanceKm != null && order.riderId != null && !isSearching) ...[
-                  const SizedBox(height: 6),
-                  Text(
-                    'On radar · ${distanceKm!.toStringAsFixed(1)} km to ${order.status == 'picked_up' ? 'you' : (customerOrderHasShopPickup(order) ? 'shop' : 'pickup')}',
-                    style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w800,
-                      color: BytzGoTheme.brandBlue,
+                child: isSearching
+                    ? const BikerSearchRadar(size: 44, color: BytzGoTheme.brandBlue)
+                    : Icon(
+                        isDelivered
+                            ? Icons.check_circle
+                            : isArrived
+                                ? Icons.place
+                                : order.status == 'picked_up'
+                                    ? Icons.two_wheeler
+                                    : order.riderId != null
+                                        ? Icons.person_pin_circle
+                                        : Icons.radar,
+                        color: isDelivered
+                            ? BytzGoTheme.accentDark
+                            : isArrived
+                                ? BytzGoTheme.warning
+                                : BytzGoTheme.brandBlue,
+                        size: 28,
+                      ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      headline,
+                      style: const TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w900,
+                        color: BytzGoTheme.sheetText,
+                      ),
                     ),
-                  ),
-                ],
-              ],
-            ),
+                    if (sub.isNotEmpty && !showEta) ...[
+                      const SizedBox(height: 4),
+                      Text(sub, style: BytzGoTheme.sheetBody(13)),
+                    ],
+                    if (distanceKm != null && order.riderId != null && !isSearching) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        'On radar · ${distanceKm!.toStringAsFixed(1)} km to ${order.status == 'picked_up' ? 'you' : (customerOrderHasShopPickup(order) ? 'shop' : 'pickup')}',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800,
+                          color: BytzGoTheme.brandBlue,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
           ),
         ],
       ),

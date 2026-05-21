@@ -7,6 +7,7 @@ import '../../models/order.dart';
 import '../../shared/customer_trip.dart';
 import '../../shared/delivery_pricing.dart';
 import '../theme.dart';
+import 'bolt_eta_pill.dart';
 import 'biker_search_radar.dart';
 
 /// HUD on the map during active trip tracking (search + rider approaching).
@@ -17,6 +18,9 @@ class LiveTripMapHud extends StatelessWidget {
     required this.searching,
     this.nearbyCount,
     this.etaPhrase,
+    this.etaMinutes,
+    this.etaDistanceText,
+    this.etaExpiresAt,
     this.riderPosition,
     this.navTarget,
     this.onRecenter,
@@ -26,6 +30,9 @@ class LiveTripMapHud extends StatelessWidget {
   final bool searching;
   final int? nearbyCount;
   final String? etaPhrase;
+  final int? etaMinutes;
+  final String? etaDistanceText;
+  final DateTime? etaExpiresAt;
   final LocationPoint? riderPosition;
   final LocationPoint? navTarget;
   final VoidCallback? onRecenter;
@@ -58,10 +65,28 @@ class LiveTripMapHud extends StatelessWidget {
               searching: searching,
               nearbyCount: nearbyCount,
               etaPhrase: etaPhrase,
+              etaMinutes: etaMinutes,
+              etaDistanceText: etaDistanceText,
               distanceKm: dist,
               hasRider: hasRider,
             ),
           ),
+          if (hasRider && (etaExpiresAt != null || etaMinutes != null))
+            Positioned(
+              top: 130,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: BoltEtaPill(
+                  minutes: etaMinutes,
+                  expiresAt: etaExpiresAt,
+                  subtitle: etaDistanceText?.isNotEmpty == true
+                      ? etaDistanceText
+                      : etaPhrase,
+                  label: 'remaining',
+                ),
+              ),
+            ),
           if (hasRider && dist != null)
             Positioned(
               left: 12,
@@ -103,6 +128,8 @@ class _StatusBanner extends StatelessWidget {
     required this.searching,
     this.nearbyCount,
     this.etaPhrase,
+    this.etaMinutes,
+    this.etaDistanceText,
     this.distanceKm,
     required this.hasRider,
   });
@@ -111,6 +138,8 @@ class _StatusBanner extends StatelessWidget {
   final bool searching;
   final int? nearbyCount;
   final String? etaPhrase;
+  final int? etaMinutes;
+  final String? etaDistanceText;
   final double? distanceKm;
   final bool hasRider;
 

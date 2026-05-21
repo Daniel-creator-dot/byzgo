@@ -81,6 +81,9 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
   List<LocationPoint> _nearbyRiders = [];
   List<LocationPoint> _routePoints = [];
   String? _etaPhrase;
+  int? _etaMinutes;
+  String? _etaDistanceText;
+  DateTime? _etaExpiresAt;
   String? _trackingPickupLabel;
   String? _trackingDropoffLabel;
   Timer? _nearbyPoll;
@@ -462,7 +465,7 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
       if (_etaPoll == null) {
         unawaited(_refreshEta(order));
         _etaPoll = Timer.periodic(
-          const Duration(seconds: 25),
+          const Duration(seconds: 12),
           (_) {
             final active = _activeCourier;
             if (active != null) unawaited(_refreshEta(active));
@@ -472,10 +475,15 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
     } else {
       _etaPoll?.cancel();
       _etaPoll = null;
-      if (_etaPhrase != null || _routePoints.isNotEmpty) {
+      if (_etaPhrase != null ||
+          _routePoints.isNotEmpty ||
+          _etaMinutes != null) {
         setState(() {
           _etaPhrase = null;
           _routePoints = [];
+          _etaMinutes = null;
+          _etaDistanceText = null;
+          _etaExpiresAt = null;
         });
       }
     }
@@ -510,6 +518,9 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
     setState(() {
       _etaPhrase = summary.arrivalPhrase;
       _routePoints = summary.points;
+      _etaMinutes = summary.etaMinutes;
+      _etaDistanceText = summary.distanceText;
+      _etaExpiresAt = summary.expiresAtFrom(now);
     });
   }
 
@@ -855,6 +866,7 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
                     navTarget != null
                 ? [_riderPosition!, navTarget]
                 : const []),
+        followRider: showRiderOnMap,
         mapPickMode: _pickMode,
         onMapTap: tracking ? null : _onMapTap,
       ),
@@ -864,6 +876,9 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
               searching: searching,
               nearbyCount: searching ? _nearbyRiders.length : null,
               etaPhrase: _etaPhrase,
+              etaMinutes: _etaMinutes,
+              etaDistanceText: _etaDistanceText,
+              etaExpiresAt: _etaExpiresAt,
               riderPosition: _riderPosition,
               navTarget: navTarget,
               onRecenter: () => _mapKey.currentState?.fitAllMarkers(),
@@ -927,6 +942,9 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
                 order: active,
                 onOrderUpdated: _replaceOrder,
                 etaPhrase: _etaPhrase,
+                etaMinutes: _etaMinutes,
+                etaDistanceText: _etaDistanceText,
+                etaExpiresAt: _etaExpiresAt,
                 pickupLabel: _trackingPickupLabel,
                 dropoffLabel: _trackingDropoffLabel,
                 riderPosition: _riderPosition,

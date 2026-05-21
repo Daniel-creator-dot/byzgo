@@ -37,6 +37,11 @@ class Session extends ChangeNotifier {
       final token = await _storage.read(key: _kToken);
       final userJson = await _storage.read(key: _kUser);
       if (token != null && userJson != null) {
+        if (ApiClient.isOversizedAuthToken(token)) {
+          debugPrint('Session: clearing oversized auth token (${token.length} chars)');
+          await clear();
+          return;
+        }
         _token = token;
         _user = AuthUser.fromJson(
           jsonDecode(userJson) as Map<String, dynamic>,
@@ -62,6 +67,9 @@ class Session extends ChangeNotifier {
     required String token,
     required AuthUser user,
   }) async {
+    if (ApiClient.isOversizedAuthToken(token)) {
+      throw StateError('Auth token is too large — sign in again after updating the app.');
+    }
     _token = token;
     _user = user;
     _api.setToken(token);

@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/api_client.dart';
+import '../../core/directions_service.dart';
 import '../../core/location_service.dart';
 import '../../core/push_notification_service.dart';
 import '../../core/session.dart';
@@ -17,6 +18,7 @@ import '../../models/auth_user.dart';
 import '../../models/location_point.dart';
 import '../../models/order.dart';
 import '../../models/vendor.dart';
+import '../../shared/delivery_pricing.dart';
 import '../../shared/format.dart';
 import '../../shared/ghana_regions.dart';
 import '../../shared/rider_trip.dart';
@@ -28,6 +30,7 @@ import '../../shared/widgets/biker_search_radar.dart';
 import '../../shared/widgets/delete_account_button.dart';
 import '../../shared/widgets/profile_avatar_upload.dart';
 import '../../shared/widgets/legal_links.dart';
+import '../../shared/widgets/bolt_eta_pill.dart';
 import '../../shared/widgets/bytz_scaffold.dart';
 import '../../shared/widgets/ride_ui.dart';
 import 'delivery_pin_dialog.dart';
@@ -72,7 +75,15 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
   StreamSubscription<Position>? _posSub;
   Timer? _pollTimer;
   Timer? _offerTimer;
+  Timer? _navPollTimer;
   DateTime? _lastGpsUiUpdate;
+  DateTime? _lastNavFetch;
+  LocationPoint? _lastNavOrigin;
+  List<LocationPoint> _navRoutePoints = [];
+  String? _navEtaPhrase;
+  String? _navDistanceText;
+  int? _navEtaMinutes;
+  DateTime? _navEtaExpiresAt;
 
   final _withdrawAmount = TextEditingController();
   final _withdrawPhone = TextEditingController();
@@ -93,6 +104,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
   Session get _session => context.read<Session>();
   AuthRepository get _auth => context.read<AuthRepository>();
   OrdersRepository get _ordersRepo => context.read<OrdersRepository>();
+  DirectionsService get _directions => context.read<DirectionsService>();
   WalletRepository get _wallet => context.read<WalletRepository>();
   LocationService get _location => context.read<LocationService>();
 
@@ -195,6 +207,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
     _posSub?.cancel();
     _pollTimer?.cancel();
     _offerTimer?.cancel();
+    _navPollTimer?.cancel();
     _myPositionNotifier.dispose();
     _withdrawAmount.dispose();
     _withdrawPhone.dispose();
@@ -287,6 +300,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
           _tab = _RiderTab.drive;
         }
       });
+      _syncNavPoll();
     };
     _socket.onWalletUpdated = (balance) {
       if (!mounted) return;
@@ -307,6 +321,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
       _driveMapKey.currentState?.fitAllMarkers();
       _trackOffers(orders);
       _syncOfferTimer();
+      _syncNavPoll();
     } catch (e) {
       if (!silent) _snack(OrdersRepository.errorMessage(e));
     } finally {
@@ -365,6 +380,13 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
           now.difference(_lastGpsUiUpdate!) >= throttle) {
         _lastGpsUiUpdate = now;
         _myPositionNotifier.value = point;
+        if (_primaryActive != null) {
+          _driveMapKey.currentState?.fitAllMarkers();
+        }
+      }
+      final active = _primaryActive;
+      if (_isOnline && active != null) {
+        unawaited(_refreshNav(active));
       }
     });
   }
@@ -433,7 +455,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
         _tab = _RiderTab.drive;
       });
       _snack('Ride accepted', success: true);
-      if (navigate) await _openNavigation(updated);
+      if (navigate) await _startInAppNavigation(updated);
     } catch (e) {
       _snack(OrdersRepository.errorMessage(e));
     } finally {
@@ -462,8 +484,8 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
       );
       if (!mounted) return;
       _mergeOrder(updated);
-      _snack('Marked picked up', success: true);
-      await _openNavigation(updated);
+      _snack('Marked picked up — follow the route on the map', success: true);
+      await _startInAppNavigation(updated);
     } catch (e) {
       _snack(OrdersRepository.errorMessage(e));
     }
@@ -489,9 +511,95 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
       ];
       _focusedOrderId = order.id;
     });
+    _syncNavPoll();
+  }
+
+  void _syncNavPoll() {
+    final active = _primaryActive;
+    final navigating = active != null &&
+        !const {'delivered', 'cancelled'}.contains(active.status);
+    if (navigating) {
+      if (_navPollTimer == null) {
+        unawaited(_refreshNav(active));
+        _navPollTimer = Timer.periodic(const Duration(seconds: 12), (_) {
+          final trip = _primaryActive;
+          if (trip != null) unawaited(_refreshNav(trip));
+        });
+      }
+    } else {
+      _navPollTimer?.cancel();
+      _navPollTimer = null;
+      if (_navRoutePoints.isNotEmpty ||
+          _navEtaPhrase != null ||
+          _navDistanceText != null) {
+        setState(() {
+          _navRoutePoints = [];
+          _navEtaPhrase = null;
+          _navDistanceText = null;
+          _navEtaMinutes = null;
+          _navEtaExpiresAt = null;
+        });
+      }
+    }
+  }
+
+  Future<void> _refreshNav(Order order) async {
+    final pos = _myPositionNotifier.value;
+    if (pos == null || !pos.hasCoords) return;
+    final target = navigationTarget(order, _vendors);
+    if (target == null || !hasValidCoords(target.lat, target.lng)) return;
+
+    final dest = LocationPoint(
+      address: target.label,
+      lat: target.lat,
+      lng: target.lng,
+    );
+    final now = DateTime.now();
+    if (_lastNavFetch != null &&
+        _lastNavOrigin != null &&
+        now.difference(_lastNavFetch!) < const Duration(seconds: 12)) {
+      final moved = haversineDistanceKm(
+        _lastNavOrigin!.lat,
+        _lastNavOrigin!.lng,
+        pos.lat,
+        pos.lng,
+      );
+      if (moved < 0.03) return;
+    }
+
+    final summary = await _directions.fetchRoute(
+      origin: pos,
+      destination: dest,
+    );
+    if (!mounted || summary == null) return;
+    _lastNavFetch = now;
+    _lastNavOrigin = pos;
+    setState(() {
+      _navRoutePoints = summary.points;
+      _navEtaPhrase = summary.arrivalPhrase;
+      _navDistanceText = summary.distanceText;
+      _navEtaMinutes = summary.etaMinutes;
+      _navEtaExpiresAt = summary.expiresAtFrom(now);
+    });
+    _driveMapKey.currentState?.fitAllMarkers();
+  }
+
+  Future<void> _startInAppNavigation(Order order) async {
+    setState(() {
+      _tab = _RiderTab.drive;
+      _driveSheet = _DriveSheet.active;
+      _focusedOrderId = order.id;
+    });
+    await _refreshNav(order);
+    _syncNavPoll();
+    _driveMapKey.currentState?.fitAllMarkers();
   }
 
   Future<void> _openNavigation(Order order) async {
+    await _startInAppNavigation(order);
+  }
+
+  Future<void> _openExternalNavigation(Order order) async {
     final target = navigationTarget(order, _vendors);
     if (target == null) {
       _snack('No navigation target for this trip');
@@ -501,7 +609,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
       target,
       origin: _myPositionNotifier.value,
     );
-    if (!ok) _snack('Could not open maps');
+    if (!ok) _snack('Could not open Google Maps');
   }
 
   void _snack(String msg, {bool success = false}) {
@@ -798,6 +906,8 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
           incomingOrder: _incoming,
           previewOrderId: _previewOrderId,
           showRoute: showRoute,
+          routePoints: _navRoutePoints,
+          followRider: _primaryActive != null,
         ),
         if (!_isOnline)
           Container(
@@ -880,7 +990,18 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
             mainAxisSize: MainAxisSize.min,
             children: [
               Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  if (_navEtaExpiresAt != null || _navEtaMinutes != null)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 12),
+                      child: BoltEtaPill(
+                        minutes: _navEtaMinutes,
+                        expiresAt: _navEtaExpiresAt,
+                        compact: true,
+                        label: 'to destination',
+                      ),
+                    ),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -904,13 +1025,30 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
                               fontSize: 12,
                             ),
                           ),
+                        if (_navDistanceText != null && _navDistanceText!.isNotEmpty)
+                          Text(
+                            _navDistanceText!,
+                            style: TextStyle(
+                              color: Colors.white.withValues(alpha: 0.65),
+                              fontSize: 11,
+                            ),
+                          ),
                       ],
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Open in Google Maps',
+                    onPressed: nav == null ? null : () => _openExternalNavigation(order),
+                    icon: Icon(
+                      Icons.open_in_new,
+                      color: Colors.white.withValues(alpha: 0.85),
+                      size: 20,
                     ),
                   ),
                   FilledButton.icon(
                     onPressed: nav == null ? null : () => _openNavigation(order),
                     icon: const Icon(Icons.navigation, size: 16),
-                    label: const Text('Navigate'),
+                    label: const Text('Map'),
                     style: FilledButton.styleFrom(
                       backgroundColor: BytzGoTheme.accent,
                       foregroundColor: const Color(0xFF020617),
@@ -1100,9 +1238,9 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
           children: [
             if (nav != null) ...[
               OutlinedButton.icon(
-                onPressed: () => _openNavigation(order),
-                icon: const Icon(Icons.map, size: 18),
-                label: const Text('Maps'),
+                onPressed: () => _openExternalNavigation(order),
+                icon: const Icon(Icons.open_in_new, size: 18),
+                label: const Text('Google Maps'),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: BytzGoTheme.sheetText,
                   side: const BorderSide(color: BytzGoTheme.sheetDivider),
@@ -1309,7 +1447,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
           ],
           const SizedBox(height: 10),
           RideAccentButton(
-            label: 'Accept & navigate',
+            label: 'Accept trip',
             loading: _accepting,
             onPressed: () => _acceptOrder(order),
           ),
@@ -1419,8 +1557,8 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
                 Expanded(
                   child: OutlinedButton.icon(
                     onPressed: nav == null ? null : () => _openNavigation(order),
-                    icon: const Icon(Icons.map, size: 16),
-                    label: const Text('Maps'),
+                    icon: const Icon(Icons.route, size: 16),
+                    label: const Text('In-app route'),
                     style: OutlinedButton.styleFrom(
                       foregroundColor: BytzGoTheme.sheetText,
                       side: const BorderSide(color: BytzGoTheme.sheetDivider),
@@ -1428,6 +1566,24 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
                   ),
                 ),
                 const SizedBox(width: 8),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: nav == null
+                        ? null
+                        : () => _openExternalNavigation(order),
+                    icon: const Icon(Icons.open_in_new, size: 16),
+                    label: const Text('Google Maps'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: BytzGoTheme.sheetText,
+                      side: const BorderSide(color: BytzGoTheme.sheetDivider),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
                 Expanded(
                   child: _activeActionButton(order),
                 ),
