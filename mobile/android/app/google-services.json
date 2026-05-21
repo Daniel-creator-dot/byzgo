@@ -18,6 +18,14 @@
           "client_type": 1,
           "android_info": {
             "package_name": "net.bytzgo.app",
+            "certificate_hash": "b2a044c879a5975095ab9ac5b60a2ffd7cde3f2d"
+          }
+        },
+        {
+          "client_id": "645977332644-rv482i78e7hln0u3dh475dn4g0rgoa2l.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "net.bytzgo.app",
             "certificate_hash": "844c315c994787502e212ec2715df5ded74fcc50"
           }
         },

@@ -21,6 +21,7 @@
     "flutter:build:aab": "powershell -ExecutionPolicy Bypass -File mobile/scripts/build_aab.ps1",
     "play:setup": "powershell -ExecutionPolicy Bypass -File mobile/scripts/setup_play_store.ps1",
     "play:validate": "powershell -ExecutionPolicy Bypass -File mobile/scripts/validate_play_release.ps1",
+    "setup:firebase:android": "node backend/scripts/setup-firebase-android.mjs",
     "copy:legal": "node scripts/copy-legal-to-public.mjs",
     "build:render": "npm ci && npm run copy:legal && npm run build && npm install --prefix backend --omit=dev",
     "start:render": "npm --prefix backend run start",

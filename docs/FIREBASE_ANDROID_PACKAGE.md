@@ -2,6 +2,14 @@
 
 Google Play requires a real package name (not `com.example.*`). BytzGo uses **`net.bytzgo.app`**.
 
+## Automated setup (if service account has Firebase Management API)
+
+```powershell
+npm run setup:firebase:android
+```
+
+If that fails, use the manual steps below. SHA values: [GOOGLE_CLOUD_PLAY_SHA.md](./GOOGLE_CLOUD_PLAY_SHA.md).
+
 ## One-time setup (before Play upload)
 
 1. Open [Firebase Console](https://console.firebase.google.com/) → project **bytzgo-9bd89**.
