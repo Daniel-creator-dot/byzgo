@@ -38,7 +38,17 @@ Without this, **Continue with Google** works in local release builds but fails o
 
 2. [Google Cloud Credentials](https://console.cloud.google.com/apis/credentials?project=bytzgo-9bd89) → **Create credentials** → **OAuth client ID** → **Android** → package `net.bytzgo.app` + SHA-1 above (or edit existing Android client).
 
-3. **Maps API key** (same project) → Edit key → Application restrictions → Android apps → add `net.bytzgo.app` + SHA-1.
+3. **Maps API key** (same project) → Edit key → Application restrictions → **Android apps** → add **both** fingerprints for `net.bytzgo.app`:
+   - Debug SHA-1 (emulator / `flutter run`) — table above
+   - Release SHA-1 (release APK / Play upload key) — table above  
+   Enable APIs: **Maps SDK for Android**, Places, Geocoding, Directions.
+
+   Optional automation (needs API Keys API enabled in Cloud Console):
+
+   ```powershell
+   cd backend
+   node ../mobile/scripts/configure-maps-android-key.mjs
+   ```
 
 Re-run locally:
 
