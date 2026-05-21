@@ -5,6 +5,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 import '../firebase_options.dart';
 import 'incoming_ride_notifications.dart';
+import 'push_session_context.dart';
 
 /// FCM while app is backgrounded or screen is off — one alarm notification (no in-app ring).
 @pragma('vm:entry-point')
@@ -18,6 +19,9 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
   final type = message.data['type']?.toString() ?? '';
   final isRide = type == 'incoming-ride';
+  if (isRide && !await PushSessionContext.isRider()) {
+    return;
+  }
   final orderId = message.data['orderId']?.toString() ?? '';
   final title = message.notification?.title ??
       message.data['title']?.toString() ??

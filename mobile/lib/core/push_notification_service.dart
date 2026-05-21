@@ -10,6 +10,8 @@ import 'package:flutter_ringtone_player/flutter_ringtone_player.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../firebase_options.dart';
+import '../models/auth_user.dart';
+import '../models/role.dart';
 import 'api_client.dart';
 import 'fcm_background.dart';
 import 'incoming_ride_notifications.dart';
@@ -23,9 +25,31 @@ class PushNotificationService {
       FlutterLocalNotificationsPlugin();
   bool _initialized = false;
   String? _lastToken;
+  AppRole? _activeRole;
+
+  bool get acceptsIncomingRideJobs => _activeRole == AppRole.rider;
 
   /// Rider shell listens to refresh offers when FCM arrives in foreground.
   void Function(Map<String, String> data)? onIncomingRidePush;
+
+  /// Call after login, restore, or logout so incoming-job alerts respect account role.
+  Future<void> syncActiveRole({
+    required ApiClient api,
+    required AuthUser? user,
+    required Session session,
+  }) async {
+    _activeRole = user?.role;
+    if (!acceptsIncomingRideJobs) {
+      onIncomingRidePush = null;
+    }
+    if (!session.isAuthenticated) {
+      _activeRole = null;
+      _lastToken = null;
+      onIncomingRidePush = null;
+      return;
+    }
+    await ensureRegistered(api: api, session: session);
+  }
 
   Future<void> initialize() async {
     if (_initialized) return;
@@ -120,6 +144,7 @@ class PushNotificationService {
     required String body,
     bool playSound = false,
   }) async {
+    if (!acceptsIncomingRideJobs) return;
     await initialize();
     await _local.show(
       incomingRideNotificationId(orderId),
@@ -146,12 +171,14 @@ class PushNotificationService {
   }) async {
     await initialize();
     if (type == 'incoming-ride' && orderId != null) {
-      await showIncomingRide(
-        orderId: orderId,
-        title: title,
-        body: body,
-        playSound: false,
-      );
+      if (acceptsIncomingRideJobs) {
+        await showIncomingRide(
+          orderId: orderId,
+          title: title,
+          body: body,
+          playSound: false,
+        );
+      }
       return;
     }
     if (!kIsWeb) {
@@ -184,6 +211,7 @@ class PushNotificationService {
     final data = message.data;
     final type = data['type']?.toString() ?? '';
     if (type == 'incoming-ride') {
+      if (!acceptsIncomingRideJobs) return;
       onIncomingRidePush?.call({
         for (final e in data.entries) e.key: e.value?.toString() ?? '',
       });
@@ -200,6 +228,7 @@ class PushNotificationService {
   void _onOpenedFromNotification(RemoteMessage message) {
     final type = message.data['type']?.toString() ?? '';
     if (type == 'incoming-ride') {
+      if (!acceptsIncomingRideJobs) return;
       onIncomingRidePush?.call({
         for (final e in message.data.entries)
           e.key: e.value?.toString() ?? '',
@@ -213,7 +242,7 @@ class PushNotificationService {
     try {
       final data = jsonDecode(response.payload!) as Map<String, dynamic>;
       final type = data['type']?.toString() ?? '';
-      if (type == 'incoming-ride') {
+      if (type == 'incoming-ride' && acceptsIncomingRideJobs) {
         onIncomingRidePush?.call({
           for (final e in data.entries) e.key: e.value?.toString() ?? '',
         });
@@ -229,7 +258,9 @@ class PushNotificationService {
     final orderId = message.data['orderId']?.toString() ?? '';
 
     if (isRide && orderId.isNotEmpty) {
-      await showIncomingRide(orderId: orderId, title: title, body: body);
+      if (acceptsIncomingRideJobs) {
+        await showIncomingRide(orderId: orderId, title: title, body: body);
+      }
       return;
     }
 

@@ -21,6 +21,7 @@ import {
 import { needsDeviceSetup } from './lib/deviceSetup';
 import { InstallPermissionsOnboarding } from './components/InstallPermissionsOnboarding';
 import { RiderApp } from './components/rider/RiderApp';
+import { ProfileAvatarUpload } from './components/ProfileAvatarUpload';
 import { CustomerShell } from './components/customer/CustomerShell';
 import { CustomerDeliveryHome } from './components/customer/CustomerDeliveryHome';
 import { CustomerTripsView } from './components/customer/CustomerTripsView';
@@ -107,6 +108,7 @@ interface AuthUser {
   phone?: string;
   address?: string;
   cover_image?: string;
+  avatar_url?: string;
 }
 
 function PullToRefresh({ onRefresh, refreshing, children }: { onRefresh: () => Promise<void>, refreshing: boolean, children: React.ReactNode }) {
@@ -933,6 +935,12 @@ function MainApp() {
               deliveryFee={deliveryFee}
               total={total}
               refreshData={refreshData}
+              onUserUpdate={(updatedUser, newToken) => {
+                setUser(updatedUser);
+                setToken(newToken);
+                localStorage.setItem('user', JSON.stringify(updatedUser));
+                localStorage.setItem('token', newToken);
+              }}
             />
           </CustomerShell>
         </PullToRefresh>
@@ -1002,7 +1010,7 @@ function MainApp() {
             )}
             <AnimatePresence mode="wait">
               {user.role === 'vendor' && (
-                <VendorView user={user} orders={orders} products={products} riderLocations={riderLocations} onUpdateStatus={updateOrderStatus} addNotification={addNotification} onBalanceUpdate={(bal) => setUser((prev) => (prev ? { ...prev, balance: bal } : prev))} onAddProduct={(p) => setProducts((prev) => { const exists = prev.find((item) => item.id === p.id); if (exists) return prev.map((item) => (item.id === p.id ? p : item)); return [...prev, p]; })} onDeleteProduct={async (id) => { await axios.delete(`/api/products/${id}`); setProducts((prev) => prev.filter((p) => p.id !== id)); }} activeTab={activeTab} setActiveTab={setActiveTab} refreshData={refreshData} />
+                <VendorView user={user} orders={orders} products={products} riderLocations={riderLocations} onUpdateStatus={updateOrderStatus} addNotification={addNotification} onBalanceUpdate={(bal) => setUser((prev) => (prev ? { ...prev, balance: bal } : prev))} onAddProduct={(p) => setProducts((prev) => { const exists = prev.find((item) => item.id === p.id); if (exists) return prev.map((item) => (item.id === p.id ? p : item)); return [...prev, p]; })} onDeleteProduct={async (id) => { await axios.delete(`/api/products/${id}`); setProducts((prev) => prev.filter((p) => p.id !== id)); }} activeTab={activeTab} setActiveTab={setActiveTab} refreshData={refreshData} onUserUpdate={(updatedUser, newToken) => { setUser(updatedUser); setToken(newToken); localStorage.setItem('user', JSON.stringify(updatedUser)); localStorage.setItem('token', newToken); }} />
               )}
               {user.role === 'admin' && (
                 <AdminView user={user} orders={orders} addNotification={addNotification} activeTab={activeTab} setActiveTab={setActiveTab} onPendingCountChange={setAdminPendingCount} onPendingRiderCountChange={setAdminPendingRiderCount} />
@@ -1702,7 +1710,7 @@ function productFallbackImage(item: { image_url?: string; category?: string; nam
 // Location Autocomplete Component (Ghana-only Places search)
 // REST OF THE VIEW COMPONENTS (CustomerView, VendorView, etc.) 
 // UPDATED TO USE REAL DATA FROM PROPS AND API
-function CustomerView({ user, orders, products, vendors, riderLocations, paystackKey, setPaystackKey, onPlaceOrder, addNotification, cart, setCart, isCartOpen, setIsCartOpen, activeTab, setActiveTab, zones, deliveryPricePerKm, subtotal, deliveryFee, total, refreshData }: { user: AuthUser, orders: Order[], products: any[], vendors: any[], riderLocations: { [key: string]: { lat: number, lng: number } }, paystackKey: string, setPaystackKey: (k: string) => void, onPlaceOrder: (items: any[], total: number, vendorId?: string, extra?: any) => void, addNotification: (m: string, t?: 'info' | 'success' | 'warning') => void, cart: any[], setCart: React.Dispatch<React.SetStateAction<any[]>>, isCartOpen: boolean, setIsCartOpen: (v: boolean) => void, activeTab: string, setActiveTab: (v: any) => void, zones: any[], deliveryPricePerKm: number, subtotal: number, deliveryFee: number, total: number, refreshData: () => Promise<void> }) {
+function CustomerView({ user, orders, products, vendors, riderLocations, paystackKey, setPaystackKey, onPlaceOrder, addNotification, cart, setCart, isCartOpen, setIsCartOpen, activeTab, setActiveTab, zones, deliveryPricePerKm, subtotal, deliveryFee, total, refreshData, onUserUpdate }: { user: AuthUser, orders: Order[], products: any[], vendors: any[], riderLocations: { [key: string]: { lat: number, lng: number } }, paystackKey: string, setPaystackKey: (k: string) => void, onPlaceOrder: (items: any[], total: number, vendorId?: string, extra?: any) => void, addNotification: (m: string, t?: 'info' | 'success' | 'warning') => void, cart: any[], setCart: React.Dispatch<React.SetStateAction<any[]>>, isCartOpen: boolean, setIsCartOpen: (v: boolean) => void, activeTab: string, setActiveTab: (v: any) => void, zones: any[], deliveryPricePerKm: number, subtotal: number, deliveryFee: number, total: number, refreshData: () => Promise<void>, onUserUpdate: (user: AuthUser, token: string) => void }) {
   const [selectedVendor, setSelectedVendor] = useState<any | null>(null);
   const [isTopUpOpen, setIsTopUpOpen] = useState(false);
   const [topUpAmount, setTopUpAmount] = useState('50');
@@ -2287,9 +2295,15 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
       {activeTab === 'profile' && (
         <div className="bg-slate-900/90 rounded-[2rem] sm:rounded-[3rem] p-6 sm:p-12 shadow-xl border border-slate-800 max-w-2xl mx-auto">
           <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 sm:gap-6 mb-8 sm:mb-10">
-            <div className="w-16 h-16 sm:w-20 sm:h-20 bg-brand-blue rounded-2xl sm:rounded-3xl flex items-center justify-center text-white shadow-lg rotate-3 shrink-0 text-2xl sm:text-3xl font-black italic">
-              {user.name[0]}
-            </div>
+            <ProfileAvatarUpload
+              name={user.name}
+              avatarUrl={user.avatar_url}
+              onUpdated={(updatedUser, newToken) => {
+                onUserUpdate(updatedUser as AuthUser, newToken);
+                addNotification('Profile photo updated', 'success');
+              }}
+              onError={(m) => addNotification(m, 'warning')}
+            />
             <div>
               <h3 className="text-3xl font-black italic tracking-tighter text-white">{user.name}</h3>
               <p className="text-slate-400 font-bold uppercase tracking-widest text-[10px]">Account Settings</p>
@@ -2302,8 +2316,7 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
             setProfileMsg('');
             try {
               const res = await axios.patch('/api/auth/profile', profileForm);
-              localStorage.setItem('user', JSON.stringify(res.data.user));
-              localStorage.setItem('token', res.data.token);
+              onUserUpdate(res.data.user as AuthUser, res.data.token);
               setProfileMsg('Profile updated successfully!');
             } catch (err: any) {
               setProfileMsg(err.response?.data?.message || 'Failed to update profile');
@@ -2455,6 +2468,7 @@ function VendorView({
   activeTab,
   setActiveTab,
   refreshData,
+  onUserUpdate,
 }: {
   user: AuthUser;
   orders: Order[];
@@ -2468,6 +2482,7 @@ function VendorView({
   activeTab: any;
   setActiveTab: (v: any) => void;
   refreshData: () => Promise<void>;
+  onUserUpdate: (user: AuthUser, token: string) => void;
 }) {
   const vendorActive = user.status === 'active';
   const [isAddProductOpen, setIsAddProductOpen] = useState(false);
@@ -2776,11 +2791,20 @@ function VendorView({
         </div>
       ) : activeTab === 'store' ? (
         <DarkCard className="max-w-2xl mx-auto">
-          <div className="flex items-center gap-4 mb-10">
-            <div className="w-16 h-16 bg-brand-green rounded-2xl flex items-center justify-center text-white text-2xl font-black rotate-3 shadow-lg">{user.name[0]}</div>
+          <div className="flex items-center gap-4 mb-6">
+            <ProfileAvatarUpload
+              name={user.name}
+              avatarUrl={user.avatar_url}
+              size="md"
+              onUpdated={(updatedUser, newToken) => {
+                onUserUpdate(updatedUser as AuthUser, newToken);
+                addNotification('Profile photo updated', 'success');
+              }}
+              onError={(m) => addNotification(m, 'warning')}
+            />
             <div>
               <h3 className="text-3xl font-black italic tracking-tighter text-slate-800">Store Profile</h3>
-              <p className="text-slate-400 font-bold uppercase tracking-widest text-[10px]">How customers see your store</p>
+              <p className="text-slate-400 font-bold uppercase tracking-widest text-[10px]">Your photo & how customers see your store</p>
             </div>
           </div>
           
@@ -2790,7 +2814,7 @@ function VendorView({
             setStoreMsg('');
             try {
               const res = await axios.patch('/api/auth/profile', storeForm);
-              localStorage.setItem('user', JSON.stringify(res.data.user));
+              onUserUpdate(res.data.user as AuthUser, res.data.token);
               setStoreMsg('Store profile updated successfully!');
             } catch (err: any) {
               setStoreMsg('Failed to update store profile');

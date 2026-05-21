@@ -7,6 +7,7 @@ import '../../core/session.dart';
 import '../../shared/ghana_regions.dart';
 import '../../shared/theme.dart';
 import '../../shared/user_display.dart';
+import '../../shared/widgets/profile_avatar_upload.dart';
 import '../../shared/widgets/delete_account_button.dart';
 import '../../shared/widgets/legal_links.dart';
 import '../../shared/widgets/bytz_scaffold.dart';
@@ -79,17 +80,13 @@ class _CustomerProfileTabState extends State<CustomerProfileTab> {
       padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
       children: [
         Center(
-          child: CircleAvatar(
-            radius: 44,
-            backgroundColor: BytzGoTheme.brandBlue.withValues(alpha: 0.15),
-            child: Text(
-              userInitials(user),
-              style: const TextStyle(
-                fontSize: 28,
-                fontWeight: FontWeight.w900,
-                color: BytzGoTheme.brandBlue,
-              ),
-            ),
+          child: ProfileAvatarUpload(user: user, radius: 44),
+        ),
+        const SizedBox(height: 6),
+        Center(
+          child: Text(
+            'Tap photo to change',
+            style: BytzGoTheme.sheetBody(11),
           ),
         ),
         const SizedBox(height: 12),

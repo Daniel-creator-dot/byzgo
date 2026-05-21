@@ -9,6 +9,7 @@ import '../../shared/format.dart';
 import '../../shared/system_chrome.dart';
 import '../../shared/theme.dart';
 import '../../shared/user_display.dart';
+import '../../shared/widgets/user_avatar.dart';
 import '../../shared/widgets/bytz_brand.dart';
 import '../../shared/widgets/sheet_theme_scope.dart';
 import '../../shared/widgets/bytz_scaffold.dart';
@@ -237,18 +238,7 @@ class _CustomerHeader extends StatelessWidget {
             const SizedBox(width: 6),
             GestureDetector(
               onTap: onProfile,
-              child: CircleAvatar(
-                radius: 18,
-                backgroundColor: BytzGoTheme.brandBlue.withValues(alpha: 0.15),
-                child: Text(
-                  userInitials(user),
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w900,
-                    color: BytzGoTheme.brandBlue,
-                    fontSize: 12,
-                  ),
-                ),
-              ),
+              child: UserAvatar(user: user, radius: 18),
             ),
           ],
         ),
@@ -304,17 +294,10 @@ class _CustomerHeader extends StatelessWidget {
           const SizedBox(width: 6),
           GestureDetector(
             onTap: onProfile,
-            child: CircleAvatar(
+            child: UserAvatar(
+              user: user,
               radius: 22,
               backgroundColor: BytzGoTheme.brandBlue.withValues(alpha: 0.12),
-              child: Text(
-                userInitials(user),
-                style: const TextStyle(
-                  fontWeight: FontWeight.w900,
-                  color: BytzGoTheme.brandBlue,
-                  fontSize: 14,
-                ),
-              ),
             ),
           ),
         ],

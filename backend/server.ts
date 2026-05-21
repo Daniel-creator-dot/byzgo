@@ -177,7 +177,7 @@ function isRiderDocType(value: string): value is RiderDocType {
 }
 
 const USER_PUBLIC_FIELDS =
-  'id, name, email, role, balance, phone, cover_image, address, lat, lng, region, status, is_online, shop_category';
+  'id, name, email, role, balance, phone, cover_image, avatar_url, address, lat, lng, region, status, is_online, shop_category';
 
 const SHOP_CATEGORIES = ['pharmacy', 'food', 'fashion', 'groceries'] as const;
 
@@ -543,6 +543,7 @@ const initDb = async () => {
         ALTER TABLE users ADD COLUMN IF NOT EXISTS region TEXT;
         ALTER TABLE users ADD COLUMN IF NOT EXISTS is_online BOOLEAN DEFAULT false;
         ALTER TABLE users ADD COLUMN IF NOT EXISTS shop_category TEXT DEFAULT 'food';
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT;
         ALTER TABLE users ALTER COLUMN password DROP NOT NULL;
       EXCEPTION WHEN others THEN NULL;
       END $$;
@@ -1158,12 +1159,16 @@ async function getNearestActiveRiders(
 }
 
 async function emitOffersToRiders(order: any, riderIds: string[], wave: number) {
-  if (!riderIds.length) return 0;
+  const eligible = await filterIncomingRideRecipientIds(
+    riderIds,
+    order?.customer_id ?? null
+  );
+  if (!eligible.length) return 0;
 
   const expiresAt = new Date(Date.now() + OFFER_TTL_SEC * 1000);
   const orderPayload = { ...order };
 
-  for (const riderId of riderIds) {
+  for (const riderId of eligible) {
     await pool.query(
       `INSERT INTO order_dispatch_offers (order_id, rider_id, wave, status, offered_at, expires_at)
        VALUES ($1, $2, $3, 'offered', CURRENT_TIMESTAMP, $4)
@@ -1183,11 +1188,11 @@ async function emitOffersToRiders(order: any, riderIds: string[], wave: number) 
   }
 
   console.info(
-    `[dispatch] order ${order.id} wave ${wave}: notified ${riderIds.length} rider(s)`,
-    riderIds
+    `[dispatch] order ${order.id} wave ${wave}: notified ${eligible.length} rider(s)`,
+    eligible
   );
 
-  await sendPushToRiders(order, riderIds);
+  await sendPushToRiders(order, eligible);
   await pool.query(
     `UPDATE orders SET dispatch_wave = $1, offer_expires_at = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3`,
     [wave, expiresAt, order.id]
@@ -1317,9 +1322,32 @@ type PushAlert = {
   highPriority?: boolean;
 };
 
+/** Only active riders receive incoming-job pushes; never the ordering customer. */
+async function filterIncomingRideRecipientIds(
+  userIds: string[],
+  excludeCustomerId?: string | null
+): Promise<string[]> {
+  const unique = [...new Set(userIds.filter(Boolean))];
+  if (!unique.length) return [];
+  const res = await pool.query(
+    `SELECT id FROM users
+     WHERE id = ANY($1::uuid[]) AND role = 'rider' AND status = 'active'`,
+    [unique]
+  );
+  let ids = res.rows.map((r: { id: string }) => r.id);
+  if (excludeCustomerId) {
+    ids = ids.filter((id) => id !== excludeCustomerId);
+  }
+  return ids;
+}
+
 async function sendPushToUserIds(userIds: string[], alert: PushAlert) {
-  const ids = [...new Set(userIds.filter(Boolean))];
+  let ids = [...new Set(userIds.filter(Boolean))];
   if (!ids.length) return;
+  if (alert.type === 'incoming-ride') {
+    ids = await filterIncomingRideRecipientIds(ids);
+    if (!ids.length) return;
+  }
 
   const payload = JSON.stringify({
     type: alert.type,
@@ -1384,6 +1412,7 @@ async function sendPushToUserIds(userIds: string[], alert: PushAlert) {
         orderId: String(alert.orderId ?? ''),
         title: alert.title,
         body: alert.body,
+        ...(incomingRide ? { audience: 'rider' } : {}),
       },
       android: {
         priority: high ? 'high' : 'normal',
@@ -1421,10 +1450,14 @@ async function sendPushToUserIds(userIds: string[], alert: PushAlert) {
 }
 
 async function sendPushToRiders(order: any, riderIds: string[]) {
-  if (!riderIds.length) return;
+  const eligible = await filterIncomingRideRecipientIds(
+    riderIds,
+    order?.customer_id ?? null
+  );
+  if (!eligible.length) return;
   const pickup = order.pickup_address || order.pickup || 'Pickup';
   const dropoff = order.address || 'Drop-off';
-  await sendPushToUserIds(riderIds, {
+  await sendPushToUserIds(eligible, {
     title: 'New delivery job',
     body: `${pickup} → ${dropoff}`,
     type: 'incoming-ride',
@@ -2199,7 +2232,7 @@ app.delete('/api/auth/account', authenticateToken, async (req: any, res) => {
 
 // Profile Update
 app.patch('/api/auth/profile', authenticateToken, async (req: any, res) => {
-  const { email, phone, cover_image, address, lat, lng, region, shop_category } = req.body;
+  const { email, phone, cover_image, avatar_url, address, lat, lng, region, shop_category } = req.body;
   let normalizedCategory: string | null = null;
   if (shop_category != null && String(shop_category).trim()) {
     const c = String(shop_category).trim().toLowerCase();
@@ -2216,17 +2249,19 @@ app.patch('/api/auth/profile', authenticateToken, async (req: any, res) => {
         email = COALESCE($1, email), 
         phone = COALESCE($2, phone),
         cover_image = COALESCE($3, cover_image),
-        address = COALESCE($4, address),
-        lat = COALESCE($5, lat),
-        lng = COALESCE($6, lng),
-        region = COALESCE($7, region),
-        shop_category = COALESCE($8, shop_category)
-       WHERE id = $9 
+        avatar_url = COALESCE($4, avatar_url),
+        address = COALESCE($5, address),
+        lat = COALESCE($6, lat),
+        lng = COALESCE($7, lng),
+        region = COALESCE($8, region),
+        shop_category = COALESCE($9, shop_category)
+       WHERE id = $10 
        RETURNING ${USER_PUBLIC_FIELDS}`,
       [
         email,
         phone,
         cover_image,
+        avatar_url,
         address,
         lat,
         lng,
@@ -4528,7 +4563,10 @@ app.post('/api/push/fcm-token', authenticateToken, async (req: any, res) => {
     await pool.query(
       `INSERT INTO fcm_tokens (user_id, token, platform, updated_at)
        VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
-       ON CONFLICT (user_id, token) DO UPDATE SET platform = $3, updated_at = CURRENT_TIMESTAMP`,
+       ON CONFLICT (token) DO UPDATE SET
+         user_id = EXCLUDED.user_id,
+         platform = EXCLUDED.platform,
+         updated_at = CURRENT_TIMESTAMP`,
       [req.user.id, token.trim(), platform || 'android']
     );
     res.json({ ok: true });

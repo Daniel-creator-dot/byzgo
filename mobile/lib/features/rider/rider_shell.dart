@@ -26,6 +26,7 @@ import '../../shared/theme.dart';
 import '../../models/rider_map_offer.dart';
 import '../../shared/widgets/biker_search_radar.dart';
 import '../../shared/widgets/delete_account_button.dart';
+import '../../shared/widgets/profile_avatar_upload.dart';
 import '../../shared/widgets/legal_links.dart';
 import '../../shared/widgets/bytz_scaffold.dart';
 import '../../shared/widgets/ride_ui.dart';
@@ -1644,14 +1645,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
       children: [
         Row(
           children: [
-            CircleAvatar(
-              radius: 32,
-              backgroundColor: const Color(0xFF38BDF8),
-              child: Text(
-                user.name.isNotEmpty ? user.name[0].toUpperCase() : '?',
-                style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w900),
-              ),
-            ),
+            ProfileAvatarUpload(user: user, radius: 32, dark: true),
             const SizedBox(width: 14),
             Expanded(
               child: Column(

@@ -43,6 +43,11 @@ class _BytzGoAppState extends State<BytzGoApp> {
     _socket = SocketService();
     _api = ApiClient();
     _session = Session(_api, _socket);
+    _session.onAuthChanged = () => PushNotificationService.instance.syncActiveRole(
+          api: _api,
+          user: _session.user,
+          session: _session,
+        );
     _api.onUnauthorized = () => _session.clear();
     _router = createAppRouter(_session);
     _boot();
@@ -51,12 +56,11 @@ class _BytzGoAppState extends State<BytzGoApp> {
   Future<void> _boot() async {
     final started = DateTime.now();
     await _session.restore();
-    if (_session.isAuthenticated) {
-      await PushNotificationService.instance.ensureRegistered(
-        api: _api,
-        session: _session,
-      );
-    }
+    await PushNotificationService.instance.syncActiveRole(
+      api: _api,
+      user: _session.user,
+      session: _session,
+    );
     const minSplash = Duration(milliseconds: 900);
     final elapsed = DateTime.now().difference(started);
     if (elapsed < minSplash) {

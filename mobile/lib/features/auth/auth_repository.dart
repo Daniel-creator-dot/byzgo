@@ -174,6 +174,24 @@ class AuthRepository {
     await _api.dio.delete<Map<String, dynamic>>('/api/auth/account');
   }
 
+  Future<String> uploadProfileImage(String filePath) async {
+    final formData = FormData.fromMap({
+      'image': await MultipartFile.fromFile(
+        filePath,
+        filename: 'profile.jpg',
+      ),
+    });
+    final res = await _api.dio.post<Map<String, dynamic>>(
+      '/api/upload',
+      data: formData,
+    );
+    final url = res.data?['url']?.toString();
+    if (url == null || url.isEmpty) {
+      throw Exception('Upload failed — no image URL returned');
+    }
+    return url;
+  }
+
   Future<AuthResult> updateProfile({
     String? phone,
     String? region,
@@ -182,6 +200,8 @@ class AuthRepository {
     double? lng,
     String? email,
     String? shopCategory,
+    String? avatarUrl,
+    String? coverImage,
   }) async {
     final res = await _api.dio.patch<Map<String, dynamic>>(
       '/api/auth/profile',
@@ -193,6 +213,8 @@ class AuthRepository {
         if (lng != null) 'lng': lng,
         if (email != null) 'email': email,
         if (shopCategory != null) 'shop_category': shopCategory,
+        if (avatarUrl != null) 'avatar_url': avatarUrl,
+        if (coverImage != null) 'cover_image': coverImage,
       },
     );
     return _parseAuthResponse(res.data);

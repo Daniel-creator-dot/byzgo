@@ -23,6 +23,7 @@ import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { Order, OrderStatus } from '../../types';
 import { GHANA_REGIONS } from '../../lib/constants';
+import { ProfileAvatarUpload } from '../ProfileAvatarUpload';
 import { socket } from '../../lib/socket';
 import { subscribeRiderPush, unsubscribeRiderPush } from '../../lib/pushNotifications';
 import { unlockIncomingRideAudio } from '../../lib/incomingRideAudio';
@@ -60,6 +61,7 @@ interface AuthUser {
   lng?: number;
   phone?: string;
   address?: string;
+  avatar_url?: string;
 }
 
 function PaymentChip({ order }: { order: Order }) {
@@ -897,9 +899,18 @@ export function RiderApp({
               animate={{ opacity: 1, x: 0 }}
             >
               <div className="flex items-center gap-4 mb-8">
-                <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-brand-blue to-brand-green flex items-center justify-center text-2xl font-black">
-                  {user.name[0]}
-                </div>
+                <ProfileAvatarUpload
+                  name={user.name}
+                  avatarUrl={user.avatar_url}
+                  size="md"
+                  onUpdated={(updatedUser, newToken) => {
+                    setUser(updatedUser as typeof user);
+                    localStorage.setItem('user', JSON.stringify(updatedUser));
+                    localStorage.setItem('token', newToken);
+                    addNotification?.('Profile photo updated', 'success');
+                  }}
+                  onError={(m) => addNotification?.(m, 'warning')}
+                />
                 <div>
                   <h2 className="text-xl font-black">{user.name}</h2>
                   <p className="text-sm text-slate-500">{user.email}</p>

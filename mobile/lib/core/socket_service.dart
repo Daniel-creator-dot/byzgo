@@ -4,6 +4,7 @@ import 'package:socket_io_client/socket_io_client.dart' as io;
 import '../models/order.dart';
 import '../models/trip_message.dart';
 import 'env.dart';
+import 'push_notification_service.dart';
 import 'json_parse.dart';
 
 typedef OrderHandler = void Function(Order order);
@@ -77,6 +78,7 @@ class SocketService {
   }
 
   void _onRideIncoming(dynamic data) {
+    if (!PushNotificationService.instance.acceptsIncomingRideJobs) return;
     final order = _parseOrder(data);
     if (order == null) return;
     if (order.expiresAt != null) {

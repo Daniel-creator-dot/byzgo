@@ -39,7 +39,7 @@
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 	<string>BytzGo uses location while delivering orders.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>BytzGo needs access to your photos to upload driver verification documents.</string>
+	<string>BytzGo needs access to your photos for profile pictures and verification documents.</string>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>

@@ -29,6 +29,7 @@ class IncomingRideAlert {
     bool useNotificationSound = false,
   }) async {
     if (!isOfferableOrder(order)) return;
+    if (!PushNotificationService.instance.acceptsIncomingRideJobs) return;
 
     final pickup = order.pickupAddress?.trim().isNotEmpty == true
         ? order.pickupAddress!

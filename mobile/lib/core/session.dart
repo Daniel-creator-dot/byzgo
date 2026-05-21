@@ -22,6 +22,9 @@ class Session extends ChangeNotifier {
   AuthUser? _user;
   bool _restoring = true;
 
+  /// Set from [BytzGoApp] to refresh push routing when auth changes.
+  Future<void> Function()? onAuthChanged;
+
   String? get token => _token;
   AuthUser? get user => _user;
   bool get isAuthenticated => _token != null && _user != null;
@@ -40,6 +43,7 @@ class Session extends ChangeNotifier {
         );
         _api.setToken(token);
         await _connectSocket();
+        if (onAuthChanged != null) await onAuthChanged!();
       }
     } catch (e) {
       debugPrint('Session restore failed: $e');
@@ -64,6 +68,7 @@ class Session extends ChangeNotifier {
     await _storage.write(key: _kToken, value: token);
     await _storage.write(key: _kUser, value: jsonEncode(user.toJson()));
     await _connectSocket();
+    if (onAuthChanged != null) await onAuthChanged!();
     notifyListeners();
   }
 
@@ -74,6 +79,7 @@ class Session extends ChangeNotifier {
     _socket.disconnect();
     await _storage.delete(key: _kToken);
     await _storage.delete(key: _kUser);
+    if (onAuthChanged != null) await onAuthChanged!();
     notifyListeners();
   }
 

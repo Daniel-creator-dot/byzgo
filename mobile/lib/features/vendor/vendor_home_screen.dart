@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 
 import '../../core/session.dart';
 import '../../core/socket_service.dart';
+import '../../models/auth_user.dart';
 import '../../models/order.dart';
 import '../../models/product.dart';
 import '../../shared/format.dart';
@@ -13,6 +14,7 @@ import '../../shared/shop_categories.dart';
 import '../../shared/theme.dart';
 import '../../shared/widgets/bytz_hero_header.dart';
 import '../../shared/widgets/delete_account_button.dart';
+import '../../shared/widgets/profile_avatar_upload.dart';
 import '../../shared/widgets/legal_links.dart';
 import '../../shared/widgets/ops_stat_card.dart';
 import '../auth/auth_repository.dart';
@@ -558,9 +560,18 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
     ];
   }
 
-  List<Widget> _store(dynamic user) {
+  List<Widget> _store(AuthUser user) {
     final cat = ShopCategory.normalizeVendorCategory(user.shopCategory?.toString());
     return [
+      Center(child: ProfileAvatarUpload(user: user, radius: 40, dark: true)),
+      const SizedBox(height: 8),
+      Center(
+        child: Text(
+          'Your profile photo',
+          style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 11),
+        ),
+      ),
+      const SizedBox(height: 16),
       BytzHeroHeader(
         kicker: 'Your shop',
         title: 'Store settings',

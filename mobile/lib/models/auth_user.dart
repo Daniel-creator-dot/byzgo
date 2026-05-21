@@ -17,6 +17,7 @@ class AuthUser {
     this.phone,
     this.address,
     this.coverImage,
+    this.avatarUrl,
     this.shopCategory,
   });
 
@@ -33,6 +34,7 @@ class AuthUser {
   final String? phone;
   final String? address;
   final String? coverImage;
+  final String? avatarUrl;
   final String? shopCategory;
 
   factory AuthUser.fromJson(Map<String, dynamic> json) {
@@ -50,6 +52,7 @@ class AuthUser {
       phone: json['phone']?.toString(),
       address: json['address']?.toString(),
       coverImage: json['cover_image']?.toString(),
+      avatarUrl: json['avatar_url']?.toString(),
       shopCategory: json['shop_category']?.toString(),
     );
   }
@@ -68,6 +71,7 @@ class AuthUser {
         if (phone != null) 'phone': phone,
         if (address != null) 'address': address,
         if (coverImage != null) 'cover_image': coverImage,
+        if (avatarUrl != null) 'avatar_url': avatarUrl,
         if (shopCategory != null) 'shop_category': shopCategory,
       };
 
@@ -95,6 +99,8 @@ class AuthUser {
       phone: phone ?? this.phone,
       address: address ?? this.address,
       coverImage: coverImage,
+      avatarUrl: avatarUrl,
+      shopCategory: shopCategory,
     );
   }
 }
