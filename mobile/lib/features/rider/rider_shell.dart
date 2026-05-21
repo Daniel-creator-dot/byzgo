@@ -1361,18 +1361,22 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
         child: const Text('Arrived', style: TextStyle(fontSize: 12)),
       );
     }
-    return FilledButton(
-      onPressed: () => DeliveryPinDialog.show(
-        context,
-        order: order,
-        orders: _ordersRepo,
-        onCompleted: () {
-          _snack('Delivery completed', success: true);
-          _refreshAll();
-        },
-      ),
-      child: const Text('Complete', style: TextStyle(fontSize: 12)),
-    );
+    if (order.status == 'arrived') {
+      return FilledButton(
+        onPressed: () => DeliveryPinDialog.show(
+          context,
+          order: order,
+          orders: _ordersRepo,
+          onCompleted: () {
+            _snack('Delivery completed', success: true);
+            _refreshAll();
+          },
+        ),
+        style: FilledButton.styleFrom(backgroundColor: BytzGoTheme.accent),
+        child: const Text('Complete', style: TextStyle(fontSize: 12)),
+      );
+    }
+    return const SizedBox.shrink();
   }
 
   Widget _buildTripsTab() {

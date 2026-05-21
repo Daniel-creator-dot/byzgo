@@ -903,7 +903,8 @@ const ORDER_CONTACT_SELECT = `
 
 function isCustomerPaymentReady(order: any): boolean {
   if (order.payment_status === 'paid') return true;
-  return ['cash', 'wallet', 'paystack'].includes(order.customer_payment_ack);
+  const ack = String(order.customer_payment_ack || '').toLowerCase();
+  return ack === 'cash' || ack === 'wallet' || ack === 'paystack';
 }
 
 async function loadOrderWithContacts(orderId: string) {
@@ -3960,7 +3961,11 @@ app.post('/api/orders/:id/complete-delivery', authenticateToken, async (req: any
       [orderId]
     );
     const delivered = result.rows[0];
-    await settleOrderPayment(delivered);
+    try {
+      await settleOrderPayment(delivered);
+    } catch (settleErr) {
+      console.error('[complete-delivery] settlement failed (order still delivered):', settleErr);
+    }
     broadcastOrderUpdated(delivered);
     res.json(sanitizeOrderForRole(delivered, 'rider', req.user.id));
   } catch (err) {

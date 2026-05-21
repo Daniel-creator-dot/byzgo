@@ -44,12 +44,35 @@ class DeliveryPinDialog extends StatefulWidget {
 class _DeliveryPinDialogState extends State<DeliveryPinDialog> {
   final _controller = TextEditingController();
   bool _submitting = false;
+  bool _refreshing = true;
   String? _error;
+  late Order _order;
+
+  @override
+  void initState() {
+    super.initState();
+    _order = widget.order;
+    _refreshOrder();
+  }
 
   @override
   void dispose() {
     _controller.dispose();
     super.dispose();
+  }
+
+  Future<void> _refreshOrder() async {
+    try {
+      final orders = await widget.orders.fetchOrders();
+      final fresh = orders.where((o) => o.id == widget.order.id).firstOrNull;
+      if (fresh != null && mounted) {
+        setState(() => _order = fresh);
+      }
+    } catch (_) {
+      /* keep passed-in order */
+    } finally {
+      if (mounted) setState(() => _refreshing = false);
+    }
   }
 
   Future<void> _submit() async {
@@ -58,13 +81,22 @@ class _DeliveryPinDialogState extends State<DeliveryPinDialog> {
       setState(() => _error = 'Enter the 6-digit PIN from the customer.');
       return;
     }
+    if (_order.status != 'arrived') {
+      setState(() => _error = 'Tap "Arrived" on the trip before completing delivery.');
+      return;
+    }
+    if (!isPaymentReady(_order)) {
+      setState(() => _error =
+          'Customer must confirm payment in the app first (pay or tap "I\'ll pay cash"), then share their PIN.');
+      return;
+    }
     setState(() {
       _submitting = true;
       _error = null;
     });
     try {
       await widget.orders.completeDelivery(
-        orderId: widget.order.id,
+        orderId: _order.id,
         code: code,
       );
       if (!mounted) return;
@@ -81,7 +113,7 @@ class _DeliveryPinDialogState extends State<DeliveryPinDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final order = widget.order;
+    final order = _order;
     final paid = order.paymentStatus == 'paid';
     final paymentReady = isPaymentReady(order);
 
@@ -165,8 +197,8 @@ class _DeliveryPinDialogState extends State<DeliveryPinDialog> {
             const SizedBox(height: 16),
             RideAccentButton(
               label: 'Complete delivery',
-              loading: _submitting,
-              onPressed: paymentReady && !_submitting ? _submit : null,
+              loading: _submitting || _refreshing,
+              onPressed: _submitting || _refreshing ? null : _submit,
             ),
           ],
         ),

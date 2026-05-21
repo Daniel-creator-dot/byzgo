@@ -704,7 +704,7 @@ export function RiderApp({
                                 >
                                   I&apos;ve arrived
                                 </button>
-                              ) : (
+                              ) : order.status === 'arrived' ? (
                                 <button
                                   type="button"
                                   onClick={() => setPinModalOrder(order)}
@@ -712,7 +712,7 @@ export function RiderApp({
                                 >
                                   Complete
                                 </button>
-                              )}
+                              ) : null}
                             </div>
                           </div>
                         );
