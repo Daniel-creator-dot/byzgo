@@ -4,7 +4,9 @@ Riders get **incoming job alerts when the app is closed or the screen is off** a
 
 ## Mobile app (bytzgo-9bd89)
 
-Config files are wired for package **`com.example.bytzgo`**:
+Config files are wired for package **`net.bytzgo.app`** (Play Store). After changing package, add the Android app in Firebase and replace `google-services.json` — see [FIREBASE_ANDROID_PACKAGE.md](./FIREBASE_ANDROID_PACKAGE.md).
+
+Legacy reference — files must match your Firebase Android app package:
 
 | File | Location |
 |------|----------|

@@ -9,7 +9,7 @@
       "client_info": {
         "mobilesdk_app_id": "1:645977332644:android:c61f7624820fc1e2977f31",
         "android_client_info": {
-          "package_name": "com.example.bytzgo"
+          "package_name": "net.bytzgo.app"
         }
       },
       "oauth_client": [
@@ -17,7 +17,7 @@
           "client_id": "645977332644-rv482i78e7hln0u3dh475dn4g0rgoa2l.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {
-            "package_name": "com.example.bytzgo",
+            "package_name": "net.bytzgo.app",
             "certificate_hash": "844c315c994787502e212ec2715df5ded74fcc50"
           }
         },

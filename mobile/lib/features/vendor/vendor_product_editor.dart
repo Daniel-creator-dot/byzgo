@@ -88,6 +88,7 @@ class _VendorProductEditorSheetState extends State<_VendorProductEditorSheet> {
         maxWidth: 1200,
         maxHeight: 1200,
         imageQuality: 85,
+        requestFullMetadata: false,
       );
       if (file == null) return;
       setState(() {

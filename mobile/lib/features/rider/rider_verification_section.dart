@@ -76,6 +76,7 @@ class _RiderVerificationSectionState extends State<RiderVerificationSection> {
       source: ImageSource.gallery,
       imageQuality: 88,
       maxWidth: 1920,
+      requestFullMetadata: false,
     );
     if (picked == null || !mounted) return;
 

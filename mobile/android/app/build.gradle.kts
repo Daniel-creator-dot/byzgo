@@ -46,7 +46,7 @@ if (keystorePropertiesFile.exists()) {
 
 android {
     namespace = "com.bytzgo.bytzgo_mobile"
-    compileSdk = flutter.compileSdkVersion
+    compileSdk = maxOf(35, flutter.compileSdkVersion)
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
@@ -60,10 +60,11 @@ android {
     }
 
     defaultConfig {
-        // Must match package_name in android/app/google-services.json (Firebase bytzgo-9bd89).
-        applicationId = "com.example.bytzgo"
+        // Play Store: must not use com.example.* — match google-services.json (Firebase bytzgo-9bd89).
+        applicationId = "net.bytzgo.app"
         minSdk = flutter.minSdkVersion
-        targetSdk = flutter.targetSdkVersion
+        // Play requires recent target API (see docs/PLAY_STORE_REJECTION_AUDIT.md).
+        targetSdk = 35
         versionCode = flutter.versionCode
         versionName = flutter.versionName
         manifestPlaceholders["GOOGLE_MAPS_API_KEY"] = googleMapsApiKey

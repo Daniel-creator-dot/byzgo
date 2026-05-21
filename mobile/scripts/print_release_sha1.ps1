@@ -38,7 +38,7 @@ if (-not $storePass) {
   exit 1
 }
 
-$package = "com.example.bytzgo"
+$package = "net.bytzgo.app"
 Write-Host "Package (applicationId): $package" -ForegroundColor Cyan
 Write-Host "Keystore: $Keystore" -ForegroundColor Cyan
 Write-Host ""

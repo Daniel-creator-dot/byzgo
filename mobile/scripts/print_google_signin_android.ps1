@@ -2,7 +2,7 @@
 # Add these in Google Cloud / Firebase for project bytzgo-72f1c.
 
 $ErrorActionPreference = "Stop"
-$package = "com.example.bytzgo"
+$package = "net.bytzgo.app"
 $keystore = Join-Path $env:USERPROFILE ".android\debug.keystore"
 
 $keytool = @(

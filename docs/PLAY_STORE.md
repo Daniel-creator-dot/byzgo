@@ -37,8 +37,8 @@ Add the **SHA-1** (and SHA-256 if asked) to:
 | Where | What |
 |-------|------|
 | [Firebase](https://console.firebase.google.com/) → **bytzgo-9bd89** → Project settings → Your Android app | Add fingerprint |
-| [Google Cloud Credentials](https://console.cloud.google.com/apis/credentials?project=bytzgo-9bd89) | Android OAuth client: package **`com.example.bytzgo`** + SHA-1 |
-| Same project → **API key** used for Maps | Android restriction: package **`com.example.bytzgo`** + SHA-1 |
+| [Google Cloud Credentials](https://console.cloud.google.com/apis/credentials?project=bytzgo-9bd89) | Android OAuth client: package **`net.bytzgo.app`** + SHA-1 |
+| Same project → **API key** used for Maps | Android restriction: package **`net.bytzgo.app`** + SHA-1 |
 
 Without this step, **Google Sign-In** and **Maps** may work in debug but fail on the Play build.
 
@@ -58,15 +58,15 @@ Output:
 ## 4. Play Console checklist
 
 1. [Google Play Console](https://play.google.com/console) → **Create app** (if new).
-2. **App ID (package name)** must match the build: **`com.example.bytzgo`**  
-   - You cannot change package name after the first upload.  
-   - For a production brand ID (e.g. `net.bytzgo.app`), add a **new** Firebase Android app and new Play listing **before** first publish — see [FIREBASE_PUSH.md](./FIREBASE_PUSH.md).
+2. **App ID (package name)** must match the build: **`net.bytzgo.app`** (cannot change after first upload).  
+   - Add Firebase Android app + `google-services.json` — [FIREBASE_ANDROID_PACKAGE.md](./FIREBASE_ANDROID_PACKAGE.md).  
+   - Run **`npm run play:validate`** before upload.
 3. **Release** → **Production** (or **Internal testing** first) → **Create new release** → upload `app-release.aab`.
 4. **Store listing**: short/long description, screenshots (phone), feature graphic, app icon.
 5. **Privacy policy** URL (required) — e.g. `https://www.bytzgo.net/privacy` when hosted.
 6. **App content** questionnaires:
    - Location (delivery / rider tracking)
-   - Photos (vendor menu uploads) — `READ_MEDIA_IMAGES`
+   - Photos / camera (vendor menu, rider ID) — system picker / camera only
    - Notifications — ride alerts
    - Full-screen intent — incoming ride alerts when locked
 7. **Target audience** and **News app / COVID** declarations as applicable.
@@ -97,9 +97,9 @@ Production API must stay up with Firebase FCM configured (see [FIREBASE_PUSH.md]
 |-------|-----|
 | Play rejects upload (debug signing) | Create `key.properties` + upload keystore; rebuild AAB |
 | Google Sign-In error 10 on Play build | Add **release** SHA-1 to Firebase + OAuth Android client |
-| Gray map on Play build | Maps API key Android restriction: `com.example.bytzgo` + release SHA-1 |
+| Gray map on Play build | Maps API key Android restriction: `net.bytzgo.app` + release SHA-1 |
 | No ride push | Rider Online; Render `FIREBASE_SERVICE_ACCOUNT_JSON`; reinstall from Play |
-| `com.example` policy concern | Plan migration to `net.bytzgo.app` **before** first Play upload if possible |
+| Package / Firebase mismatch | Run `npm run play:validate` and [FIREBASE_ANDROID_PACKAGE.md](./FIREBASE_ANDROID_PACKAGE.md) |
 
 ## Scripts reference
 

@@ -149,7 +149,7 @@ class AuthRepository {
         throw Exception(
           'Google Sign-In is not registered for this Android app. '
           'In Google Cloud (project bytzgo-72f1c), create an Android OAuth client with '
-          'package com.example.bytzgo and your release SHA-1. '
+          'package net.bytzgo.app and your release SHA-1. '
           'On PC run: mobile/scripts/print_google_signin_android.ps1',
         );
       }

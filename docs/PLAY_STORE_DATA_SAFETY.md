@@ -1,6 +1,6 @@
 # Google Play — Data safety (copy into Play Console)
 
-Use when completing **App content → Data safety** for BytzGo (`com.example.bytzgo`).
+Use when completing **App content → Data safety** for BytzGo (`net.bytzgo.app`).
 
 ## Does your app collect or share user data?
 
