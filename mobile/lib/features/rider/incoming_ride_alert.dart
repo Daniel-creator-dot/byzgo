@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../../core/push_notification_service.dart';
@@ -56,7 +57,7 @@ class IncomingRideAlert {
     await WakelockPlus.enable();
 
     if (useNotificationSound) {
-      await IncomingRideRing.stop();
+      IncomingRideRing.stop();
       await PushNotificationService.instance.showIncomingRide(
         orderId: order.id,
         title: title,
