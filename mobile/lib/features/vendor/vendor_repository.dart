@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 
 import '../../core/api_client.dart';
+import '../../core/json_parse.dart';
 import '../../models/order.dart';
 import '../../models/product.dart';
 
@@ -21,11 +22,11 @@ class VendorDashboardStats {
 
   factory VendorDashboardStats.fromJson(Map<String, dynamic> json) {
     return VendorDashboardStats(
-      activeOrders: (json['active_orders'] as num?)?.toInt() ?? 0,
-      inStock: (json['in_stock'] as num?)?.toInt() ?? 0,
-      outOfStock: (json['out_of_stock'] as num?)?.toInt() ?? 0,
-      pendingApproval: (json['pending_approval'] as num?)?.toInt() ?? 0,
-      revenue7d: (json['revenue_7d'] as num?)?.toDouble() ?? 0,
+      activeOrders: parseJsonInt(json['active_orders']) ?? 0,
+      inStock: parseJsonInt(json['in_stock']) ?? 0,
+      outOfStock: parseJsonInt(json['out_of_stock']) ?? 0,
+      pendingApproval: parseJsonInt(json['pending_approval']) ?? 0,
+      revenue7d: parseJsonDouble(json['revenue_7d']) ?? 0,
     );
   }
 }
@@ -46,6 +47,26 @@ class VendorRepository {
   VendorRepository(this._api);
 
   final ApiClient _api;
+
+  Future<List<Product>> fetchProducts({
+    String search = '',
+    int limit = 200,
+    int offset = 0,
+  }) async {
+    final res = await _api.dio.get<List<dynamic>>(
+      '/api/vendor/products',
+      queryParameters: {
+        if (search.trim().isNotEmpty) 'q': search.trim(),
+        'limit': limit,
+        'offset': offset,
+      },
+    );
+    final list = res.data ?? [];
+    return list
+        .whereType<Map>()
+        .map((e) => Product.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
+  }
 
   Future<VendorDashboard> fetchDashboard() async {
     final res = await _api.dio.get<Map<String, dynamic>>('/api/vendor/dashboard');

@@ -149,7 +149,7 @@ class AuthRepository {
         throw Exception(
           'Google Sign-In is not registered for this Android app. '
           'In Google Cloud (project bytzgo-72f1c), create an Android OAuth client with '
-          'package com.bytzgo.bytzgo_mobile and your APK SHA-1. '
+          'package com.example.bytzgo and your release SHA-1. '
           'On PC run: mobile/scripts/print_google_signin_android.ps1',
         );
       }
@@ -169,6 +169,10 @@ class AuthRepository {
       data: {'credential': idToken, 'role': role.name},
     );
     return _parseAuthResponse(res.data);
+  }
+
+  Future<void> deleteAccount() async {
+    await _api.dio.delete<Map<String, dynamic>>('/api/auth/account');
   }
 
   Future<AuthResult> updateProfile({

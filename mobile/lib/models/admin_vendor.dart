@@ -10,6 +10,7 @@ class AdminVendor {
     this.region,
     this.productCount = 0,
     this.pendingProducts = 0,
+    this.activeOrders = 0,
     this.createdAt,
   });
 
@@ -23,10 +24,12 @@ class AdminVendor {
   final String? region;
   final int productCount;
   final int pendingProducts;
+  final int activeOrders;
   final String? createdAt;
 
   bool get isPending => status == 'pending';
   bool get isActive => status == 'active';
+  bool get isDisabled => status == 'disabled' || status == 'rejected';
 
   factory AdminVendor.fromJson(Map<String, dynamic> json) {
     return AdminVendor(
@@ -40,6 +43,7 @@ class AdminVendor {
       region: json['region']?.toString(),
       productCount: (json['product_count'] as num?)?.toInt() ?? 0,
       pendingProducts: (json['pending_products'] as num?)?.toInt() ?? 0,
+      activeOrders: (json['active_orders'] as num?)?.toInt() ?? 0,
       createdAt: json['created_at']?.toString(),
     );
   }

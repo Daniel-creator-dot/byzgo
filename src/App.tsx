@@ -3330,6 +3330,9 @@ function AdminView({
   onPendingRiderCountChange?: (count: number) => void;
 }) {
   const [allUsers, setAllUsers] = useState<any[]>([]);
+  const [adminVendors, setAdminVendors] = useState<any[]>([]);
+  const [vendorsLoading, setVendorsLoading] = useState(false);
+  const [vendorSearch, setVendorSearch] = useState('');
   const [pendingRiders, setPendingRiders] = useState<any[]>([]);
   const [ridersLoading, setRidersLoading] = useState(false);
   const [rejectRiderId, setRejectRiderId] = useState<string | null>(null);
@@ -3409,6 +3412,13 @@ function AdminView({
         sms_config_source: res.data.sms_config_source || '',
       })).catch(() => addNotification('Failed to load settings', 'warning'));
     }
+    if (activeTab === 'stores') {
+      setVendorsLoading(true);
+      axios.get('/api/admin/vendors')
+        .then((res) => setAdminVendors(res.data))
+        .catch(() => addNotification('Failed to load stores', 'warning'))
+        .finally(() => setVendorsLoading(false));
+    }
     if (activeTab === 'drivers') {
       setRidersLoading(true);
       axios.get('/api/admin/pending-riders')
@@ -3486,6 +3496,7 @@ function AdminView({
           <div className="flex flex-wrap gap-2">
              <button onClick={() => setActiveTab('orders')} className={cn("px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all", activeTab === 'orders' ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500")}>Orders</button>
              <button onClick={() => setActiveTab('users')} className={cn("px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all", activeTab === 'users' ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500")}>Users</button>
+             <button onClick={() => setActiveTab('stores')} className={cn("px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all", activeTab === 'stores' ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500")}>Stores</button>
              <button onClick={() => setActiveTab('drivers')} className={cn("px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all", activeTab === 'drivers' ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500")}>Drivers {pendingRiders.length > 0 && <span className="ml-1 bg-red-500 text-white px-1.5 py-0.5 rounded-full text-[8px]">{pendingRiders.length}</span>}</button>
              <button onClick={() => setActiveTab('products')} className={cn("px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all", activeTab === 'products' ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500")}>Approval {pendingProducts.length > 0 && <span className="ml-1 bg-red-500 text-white px-1.5 py-0.5 rounded-full text-[8px]">{pendingProducts.length}</span>}</button>
              <button onClick={() => setActiveTab('revenue')} className={cn("px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all", activeTab === 'revenue' ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500")}>Revenue</button>
@@ -3544,6 +3555,93 @@ function AdminView({
                  </div>
                ))}
             </div>
+         </div>
+       ) : activeTab === 'stores' ? (
+         <div className="space-y-4">
+            <input
+              type="search"
+              placeholder="Search stores by name, email, phone…"
+              value={vendorSearch}
+              onChange={(e) => setVendorSearch(e.target.value)}
+              className="w-full max-w-md px-4 py-3 rounded-2xl border border-slate-200 text-sm font-bold"
+            />
+            {vendorsLoading ? (
+              <p className="text-slate-400 text-sm">Loading stores…</p>
+            ) : (
+              <div className="space-y-4">
+                {adminVendors
+                  .filter((v: any) => {
+                    const q = vendorSearch.trim().toLowerCase();
+                    if (!q) return true;
+                    return (
+                      String(v.name || '').toLowerCase().includes(q) ||
+                      String(v.email || '').toLowerCase().includes(q) ||
+                      String(v.phone || '').toLowerCase().includes(q)
+                    );
+                  })
+                  .map((v: any) => (
+                  <div key={v.id} className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm">
+                    <div className="flex flex-wrap justify-between items-start gap-4">
+                      <div>
+                        <h4 className="font-black text-lg text-slate-800">{v.name}</h4>
+                        <p className="text-slate-500 text-xs">{v.email}{v.phone ? ` · ${v.phone}` : ''}</p>
+                        <p className="text-slate-400 text-[10px] font-bold uppercase mt-1">
+                          {v.status} · {v.product_count ?? 0} items
+                          {(v.pending_products ?? 0) > 0 ? ` · ${v.pending_products} pending menu` : ''}
+                          {(v.active_orders ?? 0) > 0 ? ` · ${v.active_orders} active orders` : ''}
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {v.status === 'pending' && (
+                          <button
+                            onClick={async () => {
+                              await axios.patch(`/api/admin/users/${v.id}/status`, { status: 'active' });
+                              setAdminVendors(adminVendors.map((x: any) => x.id === v.id ? { ...x, status: 'active' } : x));
+                              addNotification(`${v.name} approved`, 'success');
+                            }}
+                            className="px-3 py-1.5 bg-brand-green text-white rounded-lg text-[10px] font-black uppercase"
+                          >
+                            Approve
+                          </button>
+                        )}
+                        <button
+                          onClick={async () => {
+                            const newStatus = v.status === 'disabled' ? 'active' : 'disabled';
+                            await axios.patch(`/api/admin/users/${v.id}/status`, { status: newStatus });
+                            setAdminVendors(adminVendors.map((x: any) => x.id === v.id ? { ...x, status: newStatus } : x));
+                          }}
+                          className={cn("px-3 py-1.5 rounded-lg text-[10px] font-black uppercase", v.status === 'disabled' ? "bg-brand-blue text-white" : "bg-red-500 text-white")}
+                        >
+                          {v.status === 'disabled' ? 'Enable' : 'Disable'}
+                        </button>
+                        <button
+                          onClick={async () => {
+                            if ((v.active_orders ?? 0) > 0) {
+                              addNotification(`Cannot delete: ${v.active_orders} active order(s)`, 'warning');
+                              return;
+                            }
+                            if (!window.confirm(`Delete store "${v.name}"? All menu items will be removed.`)) return;
+                            try {
+                              await axios.delete(`/api/admin/vendors/${v.id}`);
+                              setAdminVendors(adminVendors.filter((x: any) => x.id !== v.id));
+                              addNotification(`${v.name} deleted`, 'success');
+                            } catch (err: any) {
+                              addNotification(getApiError(err, 'Delete failed'), 'warning');
+                            }
+                          }}
+                          className="px-3 py-1.5 bg-slate-900 text-white rounded-lg text-[10px] font-black uppercase"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                {adminVendors.length === 0 && !vendorsLoading && (
+                  <p className="text-slate-400 text-sm">No vendor accounts yet.</p>
+                )}
+              </div>
+            )}
          </div>
        ) : activeTab === 'users' ? (
          <div className="space-y-4">

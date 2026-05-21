@@ -8,6 +8,7 @@ import '../../models/role.dart';
 import '../../shared/theme.dart';
 import '../../shared/widgets/bytz_brand.dart';
 import '../../shared/widgets/bytz_preloader.dart';
+import '../../shared/widgets/legal_links.dart';
 import '../../shared/widgets/ride_ui.dart';
 import 'auth_repository.dart';
 import 'ghana_phone.dart';
@@ -480,7 +481,9 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                             loading: _googleLoading,
                           ),
                         ],
-                        const SizedBox(height: 18),
+                        const SizedBox(height: 14),
+                        const LegalLinksRow(),
+                        const SizedBox(height: 14),
                         const AuthPartnerFooter(),
                         const SizedBox(height: 4),
                       ],

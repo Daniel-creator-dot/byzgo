@@ -39,14 +39,24 @@ class _VendorProductEditorSheetState extends State<_VendorProductEditorSheet> {
   final _price = TextEditingController();
   final _picker = ImagePicker();
 
-  String _category = 'Food';
+  String _category = 'Pharmacy';
   String? _imageUrl;
   String? _localImagePath;
   bool _uploading = false;
   bool _saving = false;
   String? _error;
 
-  static const _categories = ['Food', 'Drinks', 'Grocery', 'Pharmacy', 'Other'];
+  static const _categories = [
+    'Pharmacy',
+    'Analgesics',
+    'Antibiotics',
+    'Antacids',
+    'Vitamins',
+    'Food',
+    'Drinks',
+    'Grocery',
+    'Other',
+  ];
 
   bool get _isEdit => widget.existing != null;
 
@@ -58,7 +68,7 @@ class _VendorProductEditorSheetState extends State<_VendorProductEditorSheet> {
       _name.text = p.name;
       _description.text = p.description ?? '';
       _price.text = p.price.toStringAsFixed(2);
-      _category = p.category ?? 'Food';
+      _category = p.category ?? 'Pharmacy';
       _imageUrl = p.imageUrl;
     }
   }
@@ -95,6 +105,46 @@ class _VendorProductEditorSheetState extends State<_VendorProductEditorSheet> {
       if (!mounted) return;
       setState(() {
         _uploading = false;
+        _error = VendorRepository.errorMessage(e);
+      });
+    }
+  }
+
+  Future<void> _delete() async {
+    final p = widget.existing;
+    if (p == null) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF0F172A),
+        title: const Text('Remove item?', style: TextStyle(color: Colors.white)),
+        content: Text(
+          'Delete "${p.name}" from your menu?',
+          style: const TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(backgroundColor: BytzGoTheme.danger),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      await context.read<VendorRepository>().deleteProduct(p.id);
+      if (!mounted) return;
+      Navigator.pop(context, true);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
         _error = VendorRepository.errorMessage(e);
       });
     }
@@ -259,14 +309,14 @@ class _VendorProductEditorSheetState extends State<_VendorProductEditorSheet> {
                     _field(_price, 'Price (₵)', keyboard: TextInputType.number),
                     const SizedBox(height: 8),
                     DropdownButtonFormField<String>(
-                      value: _categories.contains(_category) ? _category : 'Food',
+                      value: _categories.contains(_category) ? _category : 'Pharmacy',
                       dropdownColor: const Color(0xFF0F172A),
                       style: const TextStyle(color: Colors.white),
                       decoration: _inputDeco('Category'),
                       items: _categories
                           .map((c) => DropdownMenuItem(value: c, child: Text(c)))
                           .toList(),
-                      onChanged: (v) => setState(() => _category = v ?? 'Food'),
+                      onChanged: (v) => setState(() => _category = v ?? 'Pharmacy'),
                     ),
                     const SizedBox(height: 8),
                     Text(
@@ -281,6 +331,19 @@ class _VendorProductEditorSheetState extends State<_VendorProductEditorSheet> {
                       Text(_error!, style: const TextStyle(color: Colors.redAccent)),
                     ],
                     const SizedBox(height: 14),
+                    if (_isEdit) ...[
+                      OutlinedButton.icon(
+                        onPressed: _saving || _uploading ? null : _delete,
+                        icon: const Icon(Icons.delete_outline, size: 18),
+                        label: const Text('Remove from menu'),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.redAccent,
+                          side: const BorderSide(color: Colors.redAccent),
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                    ],
                     FilledButton(
                       onPressed: _saving || _uploading ? null : _save,
                       style: FilledButton.styleFrom(

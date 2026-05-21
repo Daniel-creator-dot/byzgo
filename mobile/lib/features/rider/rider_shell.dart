@@ -25,6 +25,8 @@ import '../../shared/trip_contact.dart';
 import '../../shared/theme.dart';
 import '../../models/rider_map_offer.dart';
 import '../../shared/widgets/biker_search_radar.dart';
+import '../../shared/widgets/delete_account_button.dart';
+import '../../shared/widgets/legal_links.dart';
 import '../../shared/widgets/ride_ui.dart';
 import 'delivery_pin_dialog.dart';
 import 'incoming_ride_overlay.dart';
@@ -1677,6 +1679,11 @@ class _RiderShellState extends State<RiderShell> {
           label: _profileSaving ? 'Saving…' : 'Save profile',
           onPressed: _profileSaving ? null : _saveProfile,
         ),
+        const SizedBox(height: 12),
+        const SizedBox(height: 20),
+        const ProfileLegalSection(),
+        const SizedBox(height: 12),
+        const Center(child: DeleteAccountButton(dark: true)),
         const SizedBox(height: 12),
         OutlinedButton.icon(
           onPressed: _confirmLogout,

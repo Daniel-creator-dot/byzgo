@@ -1,0 +1,8 @@
+# Copy to key.properties (gitignored) after creating an upload keystore.
+#   cd mobile
+#   .\scripts\create_upload_keystore.ps1
+#
+storePassword=YOUR_STORE_PASSWORD
+keyPassword=YOUR_KEY_PASSWORD
+keyAlias=upload
+storeFile=upload-keystore.jks

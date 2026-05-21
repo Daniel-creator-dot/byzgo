@@ -3,6 +3,7 @@ import 'package:dio/dio.dart';
 import '../../core/api_client.dart';
 import '../../models/admin_overview.dart';
 import '../../models/admin_pricing_settings.dart';
+import '../../models/admin_pending_product.dart';
 import '../../models/admin_vendor.dart';
 import '../../models/rider_document.dart';
 
@@ -86,6 +87,27 @@ class AdminRepository {
       },
     );
     return CreateVendorResult.fromJson(Map<String, dynamic>.from(res.data ?? {}));
+  }
+
+  Future<void> deleteVendor(String userId) async {
+    await _api.dio.delete<Map<String, dynamic>>('/api/admin/vendors/$userId');
+  }
+
+  Future<List<AdminPendingProduct>> fetchPendingProducts() async {
+    final res = await _api.dio.get<List<dynamic>>('/api/admin/pending-products');
+    final data = res.data ?? [];
+    return data
+        .whereType<Map>()
+        .map((e) => AdminPendingProduct.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
+  }
+
+  Future<void> approveProduct(String productId) async {
+    await _api.dio.patch<Map<String, dynamic>>('/api/admin/products/$productId/approve');
+  }
+
+  Future<void> rejectProduct(String productId) async {
+    await _api.dio.patch<Map<String, dynamic>>('/api/admin/products/$productId/reject');
   }
 
   Future<AdminVendor> setUserStatus({

@@ -1,9 +1,5 @@
-# Build a release APK with API URL + Maps key baked in (for physical devices).
-# Usage:
-#   .\scripts\build_apk.ps1
-#   .\scripts\build_apk.ps1 -ApiUrl "https://your-api.onrender.com"
-#
-# Reads MOBILE_API_URL (or VITE_API_URL) from repo .env.local when -ApiUrl is omitted.
+# Build a signed release App Bundle (.aab) for Google Play.
+# Requires android/key.properties + upload-keystore.jks (see create_upload_keystore.ps1).
 
 param(
   [string]$ApiUrl = ""
@@ -14,6 +10,7 @@ $mobileRoot = Split-Path $PSScriptRoot -Parent
 $repoRoot = Resolve-Path (Join-Path $mobileRoot "..")
 $envFile = Join-Path $repoRoot ".env.local"
 $definesFile = Join-Path $mobileRoot "dart_defines.json"
+$keyProps = Join-Path $mobileRoot "android\key.properties"
 
 function Read-EnvValue([string]$name) {
   if (-not (Test-Path $envFile)) { return $null }
@@ -26,19 +23,25 @@ function Read-EnvValue([string]$name) {
   return $null
 }
 
+if (-not (Test-Path $keyProps)) {
+  Write-Host "Missing android/key.properties - Play requires a release upload key." -ForegroundColor Red
+  Write-Host "  cd mobile"
+  Write-Host "  .\scripts\create_upload_keystore.ps1"
+  Write-Host "  Copy android\key.properties.example -> android\key.properties and set passwords."
+  exit 1
+}
+
 if (-not $ApiUrl) {
   $ApiUrl = Read-EnvValue "MOBILE_API_URL"
 }
 if (-not $ApiUrl) {
   $ApiUrl = Read-EnvValue "VITE_API_URL"
 }
-# Production default: www avoids Render 307 apex→www redirect on POST (Dio login).
 if (-not $ApiUrl) {
   $ApiUrl = "https://www.bytzgo.net"
 }
-
 $ApiUrl = $ApiUrl.TrimEnd("/")
-Write-Host "BytzGo APK - API_URL=$ApiUrl"
+Write-Host "BytzGo AAB - API_URL=$ApiUrl"
 
 & (Join-Path $PSScriptRoot "sync_maps_key.ps1")
 
@@ -60,26 +63,34 @@ if ($client) { $defines.GOOGLE_WEB_CLIENT_ID = $client }
 
 $json = ($defines | ConvertTo-Json -Depth 3)
 [System.IO.File]::WriteAllText($definesFile, $json)
-Write-Host "Wrote dart_defines.json (API_URL set for device install)"
 
 $flutter = Join-Path $repoRoot ".flutter-sdk\bin\flutter.bat"
-if (-not (Test-Path $flutter)) {
-  $flutter = "flutter"
+if (-not (Test-Path $flutter)) { $flutter = "flutter" }
+
+$localProps = Join-Path $mobileRoot "android\local.properties"
+if (Test-Path $localProps) {
+  Get-Content $localProps | ForEach-Object {
+    if ($_ -match '^\s*sdk\.dir\s*=\s*(.+)\s*$') {
+      $sdk = $Matches[1].Trim().Replace('\\', '\')
+      $env:ANDROID_HOME = $sdk
+      $env:ANDROID_SDK_ROOT = $sdk
+    }
+  }
 }
 
 Push-Location $mobileRoot
 try {
   & $flutter pub get
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-  & $flutter build apk --release --dart-define-from-file=dart_defines.json
+  & $flutter build appbundle --release --dart-define-from-file=dart_defines.json
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 } finally {
   Pop-Location
 }
 
-$apk = Join-Path $mobileRoot "build\app\outputs\flutter-apk\app-release.apk"
+$aab = Join-Path $mobileRoot "build\app\outputs\bundle\release\app-release.aab"
 Write-Host ""
-Write-Host "APK ready:" -ForegroundColor Green
-Write-Host "  $apk"
-Write-Host "Copy to your phone and install, or: adb install $apk"
-Write-Host "For Google Play use: npm run flutter:build:aab (see docs/PLAY_STORE.md)"
+Write-Host "App Bundle ready for Play Console:" -ForegroundColor Green
+Write-Host "  $aab"
+Write-Host ""
+Write-Host 'Upload in Play Console: Release - Production - Create release - Upload AAB'

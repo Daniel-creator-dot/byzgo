@@ -14,7 +14,7 @@ import '../../shared/format.dart';
 import '../../shared/theme.dart';
 import 'admin_drivers_tab.dart';
 import 'admin_live_map.dart';
-import 'admin_vendors_tab.dart';
+import 'admin_stores_hub.dart';
 import 'admin_pricing_tab.dart';
 import 'widgets/admin_hero_header.dart';
 import 'widgets/admin_order_detail_sheet.dart';
@@ -39,8 +39,9 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
   Timer? _pollTimer;
 
   final _driversTabKey = GlobalKey<AdminDriversTabState>();
-  final _vendorsTabKey = GlobalKey<AdminVendorsTabState>();
+  final _storesHubKey = GlobalKey<AdminStoresHubState>();
   int _pendingVendors = 0;
+  int _pendingMenu = 0;
 
   List<Order> _orders = [];
   bool _ordersLoading = false;
@@ -62,12 +63,19 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
 
   Future<void> _loadPendingVendorCount() async {
     try {
-      final list = await context.read<AdminRepository>().fetchVendors();
+      final repo = context.read<AdminRepository>();
+      final vendors = await repo.fetchVendors();
+      final menu = await repo.fetchPendingProducts();
       if (mounted) {
-        setState(() => _pendingVendors = list.where((v) => v.isPending).length);
+        setState(() {
+          _pendingVendors = vendors.where((v) => v.isPending).length;
+          _pendingMenu = menu.length;
+        });
       }
     } catch (_) {}
   }
+
+  int get _storesBadgeCount => _pendingVendors + _pendingMenu;
 
   Future<void> _loadPendingCount() async {
     try {
@@ -222,7 +230,8 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
               _refreshOverview();
               _loadOrders();
               _driversTabKey.currentState?.load();
-              _vendorsTabKey.currentState?.load();
+              _storesHubKey.currentState?.reload();
+              _loadPendingVendorCount();
             },
             icon: const Icon(Icons.sync, color: Colors.white70),
           ),
@@ -248,9 +257,10 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
           onPendingCount: (n) => setState(() => _pendingDrivers = n),
         );
       case _AdminTab.stores:
-        return AdminVendorsTab(
-          key: _vendorsTabKey,
-          onPendingCount: (n) => setState(() => _pendingVendors = n),
+        return AdminStoresHub(
+          key: _storesHubKey,
+          onVendorPendingCount: (n) => setState(() => _pendingVendors = n),
+          onMenuPendingCount: (n) => setState(() => _pendingMenu = n),
         );
       case _AdminTab.orders:
         return _buildOrdersTab();
@@ -802,7 +812,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
             children: [
               _navItem(_AdminTab.live, Icons.radar, 'Live'),
               _navItem(_AdminTab.drivers, Icons.verified_user, 'Drivers', badge: _pendingDrivers),
-              _navItem(_AdminTab.stores, Icons.storefront, 'Stores', badge: _pendingVendors),
+              _navItem(_AdminTab.stores, Icons.storefront, 'Stores', badge: _storesBadgeCount),
               _navItem(_AdminTab.orders, Icons.list_alt, 'Orders'),
               _navItem(_AdminTab.pricing, Icons.payments_outlined, 'Pricing'),
               _navItem(_AdminTab.insights, Icons.insights, 'Insights'),
@@ -820,7 +830,10 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
         setState(() => _tab = tab);
         if (tab == _AdminTab.live) _refreshOverview(silent: true);
         if (tab == _AdminTab.drivers) _driversTabKey.currentState?.load();
-        if (tab == _AdminTab.stores) _vendorsTabKey.currentState?.load();
+        if (tab == _AdminTab.stores) {
+          _storesHubKey.currentState?.reload();
+          _loadPendingVendorCount();
+        }
         if (tab == _AdminTab.orders) _loadOrders();
         if (tab == _AdminTab.insights) _loadRevenue();
       },

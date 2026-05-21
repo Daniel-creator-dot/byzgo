@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
@@ -8,6 +10,8 @@ import '../../shared/format.dart';
 import '../../shared/shop_categories.dart';
 import '../../shared/theme.dart';
 import '../../shared/widgets/bytz_hero_header.dart';
+import '../../shared/widgets/delete_account_button.dart';
+import '../../shared/widgets/legal_links.dart';
 import '../../shared/widgets/ops_stat_card.dart';
 import '../auth/auth_repository.dart';
 import 'vendor_product_editor.dart';
@@ -29,11 +33,53 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
   bool _loading = true;
   String? _error;
   String? _storeMsg;
+  final _menuSearch = TextEditingController();
+  List<Product> _menuProducts = [];
+  bool _menuLoading = false;
+  Timer? _menuSearchDebounce;
 
   @override
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void dispose() {
+    _menuSearchDebounce?.cancel();
+    _menuSearch.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadMenuProducts({String? query, bool append = false}) async {
+    setState(() => _menuLoading = true);
+    try {
+      final repo = context.read<VendorRepository>();
+      final q = query ?? _menuSearch.text;
+      final list = await repo.fetchProducts(
+        search: q,
+        limit: 200,
+        offset: append ? _menuProducts.length : 0,
+      );
+      if (!mounted) return;
+      setState(() {
+        _menuProducts = append ? [..._menuProducts, ...list] : list;
+        _menuLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _menuLoading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(VendorRepository.errorMessage(e))),
+      );
+    }
+  }
+
+  void _onMenuSearchChanged(String value) {
+    _menuSearchDebounce?.cancel();
+    _menuSearchDebounce = Timer(const Duration(milliseconds: 320), () {
+      _loadMenuProducts(query: value);
+    });
   }
 
   Future<void> _load() async {
@@ -48,6 +94,7 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
         _dash = dash;
         _loading = false;
       });
+      if (_tab == _VendorTab.stock) await _loadMenuProducts();
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -64,6 +111,7 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
             isAvailable: !p.isAvailable,
           );
       await _load();
+      if (_tab == _VendorTab.stock) await _loadMenuProducts();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -115,6 +163,7 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
     final saved = await showVendorProductEditor(context);
     if (saved == true) {
       await _load();
+      if (_tab == _VendorTab.stock) await _loadMenuProducts();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -127,7 +176,10 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
 
   Future<void> _openEditProduct(Product p) async {
     final saved = await showVendorProductEditor(context, existing: p);
-    if (saved == true) await _load();
+    if (saved == true) {
+      await _load();
+      if (_tab == _VendorTab.stock) await _loadMenuProducts();
+    }
   }
 
   @override
@@ -240,7 +292,12 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
                     : null;
             return Expanded(
               child: InkWell(
-                onTap: () => setState(() => _tab = t),
+                onTap: () {
+                  setState(() => _tab = t);
+                  if (t == _VendorTab.stock && _menuProducts.isEmpty) {
+                    _loadMenuProducts();
+                  }
+                },
                 borderRadius: BorderRadius.circular(12),
                 child: Padding(
                   padding: const EdgeInsets.symmetric(vertical: 8),
@@ -395,25 +452,67 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
       );
 
   List<Widget> _stock() {
-    final products = _dash?.products ?? [];
-    final inStock = products.where((p) => p.isAvailable).length;
-    final pending = _dash?.stats.pendingApproval ?? 0;
+    final stats = _dash?.stats;
+    final inStock = stats?.inStock ?? 0;
+    final total = inStock + (stats?.outOfStock ?? 0);
+    final pending = stats?.pendingApproval ?? 0;
     return [
       BytzHeroHeader(
         kicker: 'Your menu',
-        title: 'Items & photos',
+        title: 'Stock & prices',
         assetPath: 'assets/branding/hero_delivery.png',
         height: 110,
       ),
       const SizedBox(height: 12),
+      TextField(
+        controller: _menuSearch,
+        onChanged: _onMenuSearchChanged,
+        style: const TextStyle(color: Colors.white),
+        decoration: InputDecoration(
+          hintText: 'Search medicines (name, category…)',
+          hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.4)),
+          prefixIcon: const Icon(Icons.search, color: Colors.white54),
+          filled: true,
+          fillColor: const Color(0xFF0F172A),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: const BorderSide(color: Color(0xFF1E293B)),
+          ),
+        ),
+      ),
+      const SizedBox(height: 10),
       Text(
-        '$inStock of ${products.length} in stock · $pending awaiting approval',
+        '$inStock of $total in stock · $pending pending approval'
+        '${_menuSearch.text.trim().isNotEmpty ? ' · showing ${_menuProducts.length} matches' : ''}',
         style: TextStyle(color: Colors.white.withValues(alpha: 0.55), fontSize: 12),
       ),
       const SizedBox(height: 12),
-      ...products.map((p) => _productTile(p)),
-      if (products.isEmpty)
-        _emptyCard('Tap “Add item” to upload a photo, price, and description'),
+      if (_menuLoading)
+        const Padding(
+          padding: EdgeInsets.all(24),
+          child: Center(child: CircularProgressIndicator(color: BytzGoTheme.accent)),
+        )
+      else ...[
+        ..._menuProducts.map((p) => _productTile(p)),
+        if (_menuProducts.length >= 200)
+          Padding(
+            padding: const EdgeInsets.only(top: 4, bottom: 12),
+            child: OutlinedButton(
+              onPressed: _menuLoading ? null : () => _loadMenuProducts(append: true),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: BytzGoTheme.accent,
+                side: const BorderSide(color: Color(0xFF334155)),
+              ),
+              child: const Text('Load more items'),
+            ),
+          ),
+        if (_menuProducts.isEmpty)
+          _emptyCard(
+            _menuSearch.text.trim().isEmpty
+                ? 'Tap “Add item” to upload a photo, price, and description'
+                : 'No items match your search',
+          ),
+      ],
     ];
   }
 
@@ -470,6 +569,10 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
         'Use the Menu tab to add photos and prices. Toggle stock on/off anytime.',
         style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 11),
       ),
+      const SizedBox(height: 24),
+      const ProfileLegalSection(),
+      const SizedBox(height: 12),
+      const Center(child: DeleteAccountButton(dark: true)),
     ];
   }
 

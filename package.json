@@ -18,6 +18,8 @@
     "flutter:android": "cd mobile && ..\\.flutter-sdk\\bin\\flutter run -d emulator-5554 --dart-define-from-file=dart_defines.json --dart-define=API_URL=http://10.0.2.2:3000",
     "flutter:android:live": "cd mobile && ..\\.flutter-sdk\\bin\\flutter run -d emulator-5554 \"--dart-define=API_URL=https://www.bytzgo.net\" --dart-define-from-file=dart_defines.json",
     "flutter:build:apk": "powershell -ExecutionPolicy Bypass -File mobile/scripts/build_apk.ps1",
+    "flutter:build:aab": "powershell -ExecutionPolicy Bypass -File mobile/scripts/build_aab.ps1",
+    "play:setup": "powershell -ExecutionPolicy Bypass -File mobile/scripts/setup_play_store.ps1",
     "build:render": "npm ci && npm run build && npm install --prefix backend --omit=dev",
     "start:render": "npm --prefix backend run start",
     "start": "vite",

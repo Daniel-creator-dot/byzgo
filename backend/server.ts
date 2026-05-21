@@ -2056,6 +2056,66 @@ app.post('/api/auth/supabase', async (req, res) => {
   }
 });
 
+/** Google Play: account deletion (in-app + https://www.bytzgo.net/account-deletion). */
+app.delete('/api/auth/account', authenticateToken, async (req: any, res) => {
+  const userId = req.user.id as string;
+  const client = await pool.connect();
+  try {
+    const userRes = await client.query(
+      `SELECT id, name, email, role FROM users WHERE id = $1`,
+      [userId]
+    );
+    const row = userRes.rows[0];
+    if (!row) return res.status(404).json({ message: 'Account not found' });
+    if (row.role === 'admin') {
+      return res.status(403).json({ message: 'Admin accounts cannot be self-deleted. Contact support.' });
+    }
+
+    const activeRes = await client.query(
+      `SELECT COUNT(*)::int AS n FROM orders
+       WHERE status NOT IN ('delivered', 'cancelled')
+         AND (customer_id = $1 OR rider_id = $1 OR vendor_id = $1)`,
+      [userId]
+    );
+    const activeOrders = activeRes.rows[0]?.n ?? 0;
+    if (activeOrders > 0) {
+      return res.status(409).json({
+        message: `Cannot delete: ${activeOrders} active order(s). Finish or cancel them first.`,
+        active_orders: activeOrders,
+      });
+    }
+
+    await client.query('BEGIN');
+    if (row.role === 'vendor') {
+      await client.query('DELETE FROM products WHERE vendor_id = $1', [userId]);
+      await client.query('UPDATE orders SET vendor_id = NULL WHERE vendor_id = $1', [userId]);
+    }
+    if (row.role === 'rider') {
+      await client.query('DELETE FROM rider_locations WHERE rider_id = $1', [userId]);
+      await client.query('UPDATE orders SET rider_id = NULL WHERE rider_id = $1', [userId]);
+    }
+    if (row.role === 'customer') {
+      await client.query('UPDATE orders SET customer_id = NULL WHERE customer_id = $1', [userId]);
+    }
+    await client.query('DELETE FROM order_messages WHERE sender_id = $1', [userId]);
+    await client.query('DELETE FROM order_dispatch_offers WHERE rider_id = $1', [userId]);
+    await client.query('DELETE FROM wallet_transactions WHERE user_id = $1', [userId]);
+    await client.query('DELETE FROM fcm_tokens WHERE user_id = $1', [userId]);
+    await client.query('DELETE FROM push_subscriptions WHERE user_id = $1', [userId]);
+    await client.query('DELETE FROM users WHERE id = $1', [userId]);
+    await client.query('COMMIT');
+
+    io.to(String(userId)).emit('status:updated', { status: 'deleted' });
+    res.json({ success: true, message: 'Account deleted' });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('Account deletion error:', err);
+    res.status(500).json({ message: 'Failed to delete account' });
+  } finally {
+    client.release();
+  }
+});
+
 // Profile Update
 app.patch('/api/auth/profile', authenticateToken, async (req: any, res) => {
   const { email, phone, cover_image, address, lat, lng, region, shop_category } = req.body;
@@ -2856,6 +2916,31 @@ app.get('/api/vendor/dashboard', authenticateToken, async (req: any, res) => {
   }
 });
 
+/** Vendor menu — search & paginate (supports large pharmacies). */
+app.get('/api/vendor/products', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'vendor') return res.status(403).json({ message: 'Vendors only' });
+  try {
+    const vendorId = req.user.id;
+    const q = String(req.query.q || '').trim();
+    const limit = Math.min(Math.max(parseInt(String(req.query.limit || '200'), 10) || 200, 1), 500);
+    const offset = Math.max(parseInt(String(req.query.offset || '0'), 10) || 0, 0);
+    const params: any[] = [vendorId];
+    let sql = `SELECT id, vendor_id, name, description, price, category, image_url, is_available, is_approved, created_at
+               FROM products WHERE vendor_id = $1`;
+    if (q.length >= 2) {
+      params.push(`%${q}%`);
+      sql += ` AND (name ILIKE $${params.length} OR category ILIKE $${params.length} OR COALESCE(description,'') ILIKE $${params.length})`;
+    }
+    sql += ` ORDER BY is_available DESC, name ASC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+    params.push(limit, offset);
+    const result = await pool.query(sql, params);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Vendor products list error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 app.delete('/api/products/:id', authenticateToken, async (req: any, res) => {
   const { id } = req.params;
   if (req.user.role !== 'vendor' && req.user.role !== 'admin') return res.sendStatus(403);
@@ -2880,7 +2965,9 @@ app.get('/api/admin/vendors', authenticateToken, async (req: any, res) => {
       `SELECT u.id, u.name, u.email, u.phone, u.status, u.shop_category, u.address, u.region,
               u.created_at,
               (SELECT COUNT(*)::int FROM products p WHERE p.vendor_id = u.id) AS product_count,
-              (SELECT COUNT(*)::int FROM products p WHERE p.vendor_id = u.id AND p.is_approved = false) AS pending_products
+              (SELECT COUNT(*)::int FROM products p WHERE p.vendor_id = u.id AND p.is_approved = false) AS pending_products,
+              (SELECT COUNT(*)::int FROM orders o WHERE o.vendor_id = u.id
+                 AND o.status NOT IN ('delivered', 'cancelled')) AS active_orders
        FROM users u
        WHERE u.role = 'vendor'
        ORDER BY u.created_at DESC`
@@ -2963,6 +3050,57 @@ app.post('/api/admin/vendors', authenticateToken, async (req: any, res) => {
       return res.status(400).json({ message: 'Email or phone already registered' });
     }
     res.status(500).json({ message: 'Failed to create vendor account' });
+  }
+});
+
+/** Permanently remove a vendor account (products deleted; orders keep history with vendor cleared). */
+app.delete('/api/admin/vendors/:id', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'admin') return res.sendStatus(403);
+  const { id } = req.params;
+  const client = await pool.connect();
+  try {
+    const vendorRes = await client.query(
+      `SELECT id, name, email, role FROM users WHERE id = $1`,
+      [id]
+    );
+    const vendor = vendorRes.rows[0];
+    if (!vendor) {
+      return res.status(404).json({ message: 'Account not found' });
+    }
+    if (vendor.role !== 'vendor') {
+      return res.status(400).json({ message: 'Only vendor accounts can be deleted here' });
+    }
+    const activeRes = await client.query(
+      `SELECT COUNT(*)::int AS n FROM orders
+       WHERE vendor_id = $1 AND status NOT IN ('delivered', 'cancelled')`,
+      [id]
+    );
+    const activeOrders = activeRes.rows[0]?.n ?? 0;
+    if (activeOrders > 0) {
+      return res.status(409).json({
+        message: `Cannot delete: ${activeOrders} active order(s). Wait until delivered/cancelled or disable the account instead.`,
+        active_orders: activeOrders,
+      });
+    }
+
+    await client.query('BEGIN');
+    await client.query('DELETE FROM products WHERE vendor_id = $1', [id]);
+    await client.query('UPDATE orders SET vendor_id = NULL WHERE vendor_id = $1', [id]);
+    await client.query('DELETE FROM wallet_transactions WHERE user_id = $1', [id]);
+    await client.query('DELETE FROM users WHERE id = $1 AND role = $2', [id, 'vendor']);
+    await client.query('COMMIT');
+
+    io.to(id).emit('status:updated', { status: 'deleted' });
+    res.json({
+      success: true,
+      message: `Vendor "${vendor.name}" (${vendor.email}) deleted`,
+    });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('Admin delete vendor error:', err);
+    res.status(500).json({ message: 'Failed to delete vendor account' });
+  } finally {
+    client.release();
   }
 });
 
@@ -4379,6 +4517,21 @@ io.on('connection', (socket) => {
     console.log('User disconnected');
   });
 });
+
+/** Legal pages for Google Play (privacy policy URL, account deletion). */
+const legalDir = path.join(__dirname, 'legal');
+function serveLegalPage(slug: string) {
+  return (_req: express.Request, res: express.Response) => {
+    const file = path.join(legalDir, `${slug}.html`);
+    if (!fs.existsSync(file)) {
+      return res.status(404).type('text/plain').send('Page not found');
+    }
+    res.type('html').sendFile(file);
+  };
+}
+app.get('/privacy', serveLegalPage('privacy'));
+app.get('/terms', serveLegalPage('terms'));
+app.get('/account-deletion', serveLegalPage('account-deletion'));
 
 /** Production: serve Vite build so bytzgo.net serves web + /api (Flutter uses same host). */
 function attachWebApp() {

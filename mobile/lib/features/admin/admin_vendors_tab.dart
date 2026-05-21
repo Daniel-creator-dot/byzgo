@@ -21,11 +21,29 @@ class AdminVendorsTabState extends State<AdminVendorsTab> {
   List<AdminVendor> _vendors = [];
   bool _loading = true;
   String? _error;
+  final _search = TextEditingController();
 
   @override
   void initState() {
     super.initState();
     load();
+  }
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  List<AdminVendor> get _filtered {
+    final q = _search.text.trim().toLowerCase();
+    if (q.isEmpty) return _vendors;
+    return _vendors.where((v) {
+      return v.name.toLowerCase().contains(q) ||
+          v.email.toLowerCase().contains(q) ||
+          (v.phone ?? '').toLowerCase().contains(q) ||
+          (v.shopCategory ?? '').toLowerCase().contains(q);
+    }).toList();
   }
 
   Future<void> load() async {
@@ -51,17 +69,69 @@ class AdminVendorsTabState extends State<AdminVendorsTab> {
     }
   }
 
-  Future<void> _approve(AdminVendor v) async {
+  Future<void> _setStatus(AdminVendor v, String status, {String? successMsg}) async {
     try {
-      await context.read<AdminRepository>().setUserStatus(
-            userId: v.id,
-            status: 'active',
-          );
+      await context.read<AdminRepository>().setUserStatus(userId: v.id, status: status);
       await load();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('${v.name} can now log in and upload menu items'),
+          content: Text(successMsg ?? '${v.name} → $status'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(AdminRepository.errorMessage(e)),
+          backgroundColor: BytzGoTheme.danger,
+        ),
+      );
+    }
+  }
+
+  Future<void> _confirmDelete(AdminVendor v) async {
+    if (v.activeOrders > 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Cannot delete ${v.name}: ${v.activeOrders} active order(s). Disable the account or wait for orders to finish.',
+          ),
+          backgroundColor: BytzGoTheme.danger,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF0F172A),
+        title: const Text('Delete store account?', style: TextStyle(color: Colors.white)),
+        content: Text(
+          'Permanently remove "${v.name}" (${v.email})?\n\n'
+          'All ${v.productCount} menu items will be deleted. Past orders stay in the system without this store.',
+          style: const TextStyle(color: Colors.white70, height: 1.4),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(backgroundColor: BytzGoTheme.danger),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    try {
+      await context.read<AdminRepository>().deleteVendor(v.id);
+      await load();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('${v.name} removed'),
           behavior: SnackBarBehavior.floating,
         ),
       );
@@ -100,8 +170,13 @@ class AdminVendorsTabState extends State<AdminVendorsTab> {
 
   @override
   Widget build(BuildContext context) {
-    final pending = _vendors.where((v) => v.isPending).toList();
-    final active = _vendors.where((v) => v.isActive).toList();
+    final list = _filtered;
+    final pending = list.where((v) => v.isPending).toList();
+    final active = list.where((v) => v.isActive).toList();
+    final disabled = list.where((v) => v.isDisabled).toList();
+    final other = list
+        .where((v) => !v.isPending && !v.isActive && !v.isDisabled)
+        .toList();
 
     return RefreshIndicator(
       onRefresh: load,
@@ -110,8 +185,8 @@ class AdminVendorsTabState extends State<AdminVendorsTab> {
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
         children: [
           AdminHeroHeader(
-            title: 'Stores',
-            subtitle: '${_vendors.length} merchant accounts',
+            title: 'Store accounts',
+            subtitle: '${_vendors.length} vendors · search, approve, delete',
             assetPath: 'assets/branding/hero_delivery.png',
           ),
           const SizedBox(height: 12),
@@ -137,6 +212,23 @@ class AdminVendorsTabState extends State<AdminVendorsTab> {
               height: 1.35,
             ),
           ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _search,
+            onChanged: (_) => setState(() {}),
+            style: const TextStyle(color: Colors.white),
+            decoration: InputDecoration(
+              hintText: 'Search stores by name, email, phone…',
+              hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.4)),
+              prefixIcon: const Icon(Icons.search, color: Colors.white54),
+              filled: true,
+              fillColor: const Color(0xFF0F172A),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(14),
+                borderSide: const BorderSide(color: Color(0xFF1E293B)),
+              ),
+            ),
+          ),
           const SizedBox(height: 16),
           if (_loading)
             const Center(
@@ -154,10 +246,20 @@ class AdminVendorsTabState extends State<AdminVendorsTab> {
               const SizedBox(height: 12),
             ],
             _sectionLabel('Active stores (${active.length})'),
-            if (active.isEmpty && pending.isEmpty)
+            if (active.isEmpty && pending.isEmpty && disabled.isEmpty && other.isEmpty)
               _messageCard('No stores yet. Create the first merchant account above.')
             else
               ...active.map((v) => _vendorTile(v)),
+            if (disabled.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              _sectionLabel('Disabled / rejected (${disabled.length})'),
+              ...disabled.map((v) => _vendorTile(v)),
+            ],
+            if (other.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              _sectionLabel('Other (${other.length})'),
+              ...other.map((v) => _vendorTile(v)),
+            ],
           ],
         ],
       ),
@@ -195,6 +297,7 @@ class AdminVendorsTabState extends State<AdminVendorsTab> {
 
   Widget _vendorTile(AdminVendor v, {bool showApprove = false}) {
     final cat = ShopCategory.labelFor(v.shopCategory);
+    final showApproveBtn = showApprove || v.isPending;
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.all(14),
@@ -244,7 +347,9 @@ class AdminVendorsTabState extends State<AdminVendorsTab> {
                       ),
                     ),
                     Text(
-                      '$cat · ${v.productCount} items',
+                      '$cat · ${v.productCount} items'
+                      '${v.pendingProducts > 0 ? ' · ${v.pendingProducts} pending menu' : ''}'
+                      '${v.activeOrders > 0 ? ' · ${v.activeOrders} active orders' : ''}',
                       style: TextStyle(
                         color: Colors.white.withValues(alpha: 0.45),
                         fontSize: 11,
@@ -252,6 +357,54 @@ class AdminVendorsTabState extends State<AdminVendorsTab> {
                     ),
                   ],
                 ),
+              ),
+              PopupMenuButton<String>(
+                icon: const Icon(Icons.more_vert, color: Colors.white54),
+                color: const Color(0xFF0F172A),
+                onSelected: (action) async {
+                  switch (action) {
+                    case 'approve':
+                      await _setStatus(
+                        v,
+                        'active',
+                        successMsg: '${v.name} approved — can log in and upload menu',
+                      );
+                    case 'disable':
+                      await _setStatus(v, 'disabled', successMsg: '${v.name} disabled');
+                    case 'enable':
+                      await _setStatus(v, 'active', successMsg: '${v.name} re-enabled');
+                    case 'reject':
+                      await _setStatus(v, 'rejected', successMsg: '${v.name} rejected');
+                    case 'delete':
+                      await _confirmDelete(v);
+                  }
+                },
+                itemBuilder: (ctx) => [
+                  if (v.isPending)
+                    const PopupMenuItem(
+                      value: 'approve',
+                      child: Text('Approve account', style: TextStyle(color: Colors.white)),
+                    ),
+                  if (v.isActive || v.isPending)
+                    const PopupMenuItem(
+                      value: 'disable',
+                      child: Text('Disable login', style: TextStyle(color: Colors.white)),
+                    ),
+                  if (v.isDisabled)
+                    const PopupMenuItem(
+                      value: 'enable',
+                      child: Text('Re-enable account', style: TextStyle(color: Colors.white)),
+                    ),
+                  if (v.isPending)
+                    const PopupMenuItem(
+                      value: 'reject',
+                      child: Text('Reject application', style: TextStyle(color: Colors.white)),
+                    ),
+                  const PopupMenuItem(
+                    value: 'delete',
+                    child: Text('Delete account', style: TextStyle(color: Colors.redAccent)),
+                  ),
+                ],
               ),
             ],
           ),
@@ -265,10 +418,14 @@ class AdminVendorsTabState extends State<AdminVendorsTab> {
               v.phone!,
               style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 11),
             ),
-          if (showApprove) ...[
+          if (showApproveBtn) ...[
             const SizedBox(height: 12),
             FilledButton(
-              onPressed: () => _approve(v),
+              onPressed: () => _setStatus(
+                v,
+                'active',
+                successMsg: '${v.name} approved — can log in and upload menu',
+              ),
               style: FilledButton.styleFrom(
                 backgroundColor: BytzGoTheme.accent,
                 foregroundColor: const Color(0xFF022C22),

@@ -6,6 +6,8 @@ import '../../core/session.dart';
 import '../../shared/ghana_regions.dart';
 import '../../shared/theme.dart';
 import '../../shared/user_display.dart';
+import '../../shared/widgets/delete_account_button.dart';
+import '../../shared/widgets/legal_links.dart';
 import '../../shared/widgets/ride_ui.dart';
 import '../auth/auth_repository.dart';
 
@@ -183,6 +185,10 @@ class _CustomerProfileTabState extends State<CustomerProfileTab> {
           subtitle: 'Order & rider updates',
           onTap: () {},
         ),
+        const SizedBox(height: 20),
+        const ProfileLegalSection(),
+        const SizedBox(height: 16),
+        const Center(child: DeleteAccountButton()),
         const SizedBox(height: 12),
         OutlinedButton.icon(
           onPressed: _logout,

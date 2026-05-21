@@ -184,6 +184,17 @@ mobile/lib/
   shared/
 ```
 
+## Google Play Store
+
+See **[docs/PLAY_STORE.md](../docs/PLAY_STORE.md)** — upload keystore, release SHA-1, signed **App Bundle** (`.aab`).
+
+```powershell
+cd mobile
+.\scripts\create_upload_keystore.ps1   # once
+.\scripts\print_release_sha1.ps1       # add SHA-1 to Firebase + Google Cloud
+npm run flutter:build:aab              # from repo root
+```
+
 ## Build APK for your phone
 
 Physical devices cannot use `localhost` or `10.0.2.2`. Point the app at a **reachable** API:
