@@ -14,8 +14,6 @@ import 'api_client.dart';
 import 'fcm_background.dart';
 import 'incoming_ride_notifications.dart';
 import 'session.dart';
-import '../features/rider/incoming_ride_ring.dart';
-
 /// Registers FCM and shows high-priority alerts when the app is backgrounded.
 class PushNotificationService {
   PushNotificationService._();
@@ -86,10 +84,11 @@ class PushNotificationService {
 
     try {
       final messaging = FirebaseMessaging.instance;
+      // Rider app shows incoming jobs in-app; avoid FCM banner + sound duplicating local ring.
       await messaging.setForegroundNotificationPresentationOptions(
-        alert: true,
+        alert: false,
         badge: true,
-        sound: true,
+        sound: false,
       );
       await messaging.requestPermission(
         alert: true,
@@ -119,13 +118,16 @@ class PushNotificationService {
     required String orderId,
     required String title,
     required String body,
+    bool playSound = false,
   }) async {
     await initialize();
     await _local.show(
       incomingRideNotificationId(orderId),
       title,
       body,
-      NotificationDetails(android: incomingRideAndroidDetails()),
+      NotificationDetails(
+        android: incomingRideAndroidDetails(playSound: playSound),
+      ),
       payload: jsonEncode({'type': 'incoming-ride', 'orderId': orderId}),
     );
   }
@@ -144,8 +146,12 @@ class PushNotificationService {
   }) async {
     await initialize();
     if (type == 'incoming-ride' && orderId != null) {
-      await showIncomingRide(orderId: orderId, title: title, body: body);
-      await IncomingRideRing.start();
+      await showIncomingRide(
+        orderId: orderId,
+        title: title,
+        body: body,
+        playSound: false,
+      );
       return;
     }
     if (!kIsWeb) {
@@ -178,18 +184,6 @@ class PushNotificationService {
     final data = message.data;
     final type = data['type']?.toString() ?? '';
     if (type == 'incoming-ride') {
-      unawaited(IncomingRideRing.start());
-      final orderId = data['orderId']?.toString() ?? '';
-      final title =
-          message.notification?.title ?? data['title']?.toString() ?? 'Incoming delivery job';
-      final body = message.notification?.body ??
-          data['body']?.toString() ??
-          'Open BytzGo to accept';
-      if (orderId.isNotEmpty) {
-        unawaited(showIncomingRide(orderId: orderId, title: title, body: body));
-      } else {
-        unawaited(_showLocal(message, type: type));
-      }
       onIncomingRidePush?.call({
         for (final e in data.entries) e.key: e.value?.toString() ?? '',
       });

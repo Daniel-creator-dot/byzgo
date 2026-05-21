@@ -1367,12 +1367,18 @@ async function sendPushToUserIds(userIds: string[], alert: PushAlert) {
     const tokens = fcmRes.rows.map((r: { token: string }) => r.token).filter(Boolean);
     if (!tokens.length) return;
 
+    const incomingRide = high && alert.type === 'incoming-ride';
     await admin.messaging().sendEachForMulticast({
       tokens,
-      notification: {
-        title: alert.title,
-        body: alert.body,
-      },
+      // Incoming jobs: data-only on Android so Flutter shows one local alarm (no system + local duplicate).
+      ...(incomingRide
+        ? {}
+        : {
+            notification: {
+              title: alert.title,
+              body: alert.body,
+            },
+          }),
       data: {
         type: alert.type,
         orderId: String(alert.orderId ?? ''),
@@ -1382,14 +1388,18 @@ async function sendPushToUserIds(userIds: string[], alert: PushAlert) {
       android: {
         priority: high ? 'high' : 'normal',
         ttl: high ? 30 * 1000 : 3600 * 1000,
-        notification: {
-          channelId,
-          sound: 'default',
-          priority: high ? ('max' as const) : ('default' as const),
-          visibility: 'public',
-          defaultVibrateTimings: true,
-          ...(high && alert.orderId ? { tag: `ride-${alert.orderId}` } : {}),
-        },
+        ...(incomingRide
+          ? {}
+          : {
+              notification: {
+                channelId,
+                sound: 'default',
+                priority: high ? ('max' as const) : ('default' as const),
+                visibility: 'public',
+                defaultVibrateTimings: true,
+                ...(high && alert.orderId ? { tag: `ride-${alert.orderId}` } : {}),
+              },
+            }),
       },
       apns: {
         headers: {

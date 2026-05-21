@@ -183,10 +183,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
       unawaited(
         PushNotificationService.instance.cancelIncomingRide(order.id),
       );
-    } else if (state == AppLifecycleState.paused ||
-        state == AppLifecycleState.inactive ||
-        state == AppLifecycleState.hidden) {
-      unawaited(IncomingRideAlert.raise(order, showNotification: true));
+      unawaited(IncomingRideAlert.raise(order, useNotificationSound: false));
     }
   }
 
@@ -217,7 +214,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
       _driveSheet = _DriveSheet.requests;
     });
     final bg = _lifecycle != AppLifecycleState.resumed;
-    unawaited(IncomingRideAlert.raise(order, showNotification: bg));
+    unawaited(IncomingRideAlert.raise(order, useNotificationSound: bg));
   }
 
   void _trackOffers(List<Order> orders) {

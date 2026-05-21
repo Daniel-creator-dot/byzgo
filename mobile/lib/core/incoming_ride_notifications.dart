@@ -28,6 +28,8 @@ int incomingRideNotificationId(String orderId) =>
 AndroidNotificationDetails incomingRideAndroidDetails({
   bool fullScreen = true,
   bool ongoing = true,
+  /// When the in-app [IncomingRideRing] is playing, keep this false to avoid double audio.
+  bool playSound = false,
 }) {
   return AndroidNotificationDetails(
     incomingRideChannelId,
@@ -41,7 +43,7 @@ AndroidNotificationDetails incomingRideAndroidDetails({
     autoCancel: false,
     category: AndroidNotificationCategory.call,
     audioAttributesUsage: AudioAttributesUsage.alarm,
-    playSound: true,
+    playSound: playSound,
     enableVibration: true,
     ticker: 'Incoming delivery job',
   );

@@ -5,7 +5,7 @@ import '../../models/order.dart';
 import '../../shared/rider_trip.dart';
 import 'incoming_ride_ring.dart';
 
-/// Ring + wakelock + high-priority notification for an incoming delivery offer.
+/// Single entry for incoming-job audio: in-app ring OR notification sound, never both.
 class IncomingRideAlert {
   IncomingRideAlert._();
 
@@ -13,38 +13,47 @@ class IncomingRideAlert {
 
   static Future<void> raise(
     Order order, {
-    bool showNotification = true,
+    /// True when app is backgrounded / screen off — use notification alarm only.
+    bool useNotificationSound = false,
   }) async {
     if (!isOfferableOrder(order)) return;
+
+    final pickup = order.pickupAddress?.trim().isNotEmpty == true
+        ? order.pickupAddress!
+        : 'Pickup';
+    final drop =
+        order.address.trim().isNotEmpty ? order.address : 'Drop-off';
+    final title = 'Incoming delivery job';
+    final body = '$pickup → $drop';
+
     if (_activeOrderId == order.id) {
-      await IncomingRideRing.start();
-      if (showNotification) {
-        final pickup = order.pickupAddress?.trim().isNotEmpty == true
-            ? order.pickupAddress!
-            : 'Pickup';
-        final drop =
-            order.address.trim().isNotEmpty ? order.address : 'Drop-off';
+      if (useNotificationSound) {
         await PushNotificationService.instance.showIncomingRide(
           orderId: order.id,
-          title: 'Incoming delivery job',
-          body: '$pickup → $drop',
+          title: title,
+          body: body,
+          playSound: true,
         );
+      } else {
+        await IncomingRideRing.start();
       }
       return;
     }
+
     _activeOrderId = order.id;
     await WakelockPlus.enable();
-    await IncomingRideRing.start();
-    if (showNotification) {
-      final pickup = order.pickupAddress?.trim().isNotEmpty == true
-          ? order.pickupAddress!
-          : 'Pickup';
-      final drop = order.address.trim().isNotEmpty ? order.address : 'Drop-off';
+
+    if (useNotificationSound) {
+      await IncomingRideRing.stop();
       await PushNotificationService.instance.showIncomingRide(
         orderId: order.id,
-        title: 'Incoming delivery job',
-        body: '$pickup → $drop',
+        title: title,
+        body: body,
+        playSound: true,
       );
+    } else {
+      await PushNotificationService.instance.cancelIncomingRide(order.id);
+      await IncomingRideRing.start();
     }
   }
 

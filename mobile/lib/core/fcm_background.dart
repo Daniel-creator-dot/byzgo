@@ -2,12 +2,11 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:flutter_ringtone_player/flutter_ringtone_player.dart';
 
 import '../firebase_options.dart';
 import 'incoming_ride_notifications.dart';
 
-/// FCM while app is backgrounded or screen is off — alarm notification + ringtone.
+/// FCM while app is backgrounded or screen is off — one alarm notification (no in-app ring).
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -27,18 +26,6 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
       message.data['body']?.toString() ??
       'Open BytzGo to accept';
 
-  if (isRide) {
-    try {
-      await FlutterRingtonePlayer().play(
-        android: AndroidSounds.ringtone,
-        ios: IosSounds.bell,
-        looping: true,
-        volume: 1.0,
-        asAlarm: true,
-      );
-    } catch (_) {}
-  }
-
   final plugin = FlutterLocalNotificationsPlugin();
   const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
   await plugin.initialize(const InitializationSettings(android: androidInit));
@@ -48,7 +35,6 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await android?.createNotificationChannel(kIncomingRideChannel);
   await android?.createNotificationChannel(kTripChannel);
 
-  final channelId = isRide ? incomingRideChannelId : kTripChannel.id;
   final notifId = isRide && orderId.isNotEmpty
       ? incomingRideNotificationId(orderId)
       : message.hashCode;
@@ -59,7 +45,7 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     body,
     NotificationDetails(
       android: isRide
-          ? incomingRideAndroidDetails()
+          ? incomingRideAndroidDetails(playSound: true)
           : AndroidNotificationDetails(
               kTripChannel.id,
               kTripChannel.name,

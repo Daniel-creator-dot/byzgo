@@ -17,6 +17,9 @@ class IncomingRideRing {
 
     try {
       if (!kIsWeb) {
+        try {
+          await FlutterRingtonePlayer().stop();
+        } catch (_) {}
         await FlutterRingtonePlayer().play(
           android: AndroidSounds.ringtone,
           ios: IosSounds.bell,
