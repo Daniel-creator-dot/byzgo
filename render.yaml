@@ -1,4 +1,4 @@
-# BytzGo — single Web Service: API + web admin (Flutter APK + /admin).
+# BytzGo — single Web Service: API + admin web only (/admin). Mobile app for customers/riders/vendors.
 #
 # Domain must point to THIS Web Service only (not a separate Static Site).
 # Verify API:  curl https://bytzgo.net/api/health  → JSON
@@ -19,6 +19,8 @@ services:
       - key: NODE_ENV
         value: production
       - key: SERVE_WEB
+        value: "true"
+      - key: SERVE_ADMIN_WEB_ONLY
         value: "true"
       - key: DATABASE_URL
         sync: false

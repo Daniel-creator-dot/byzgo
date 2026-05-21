@@ -1,6 +1,14 @@
-# Admin portal (laptop)
+# Admin portal (laptop / browser)
 
-The admin dashboard is the **web app** at path `/admin` (not the Flutter mobile app).
+The **admin dashboard is a web app** at `/admin` — use this on your laptop in Chrome or Edge, or on production at **https://www.bytzgo.net/admin**. The Flutter mobile app is for riders/customers/vendors on phones; **admin control tower is web-only** (customer/vendor/rider web routes are disabled on Render).
+
+## Quick start (one command)
+
+```powershell
+npm run admin
+```
+
+Starts the API and opens http://localhost:5173/admin in your browser.
 
 ## Local URL
 

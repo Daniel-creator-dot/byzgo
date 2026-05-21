@@ -4536,7 +4536,7 @@ app.get('/privacy-policy', (_req, res) => res.redirect(301, '/privacy'));
 app.get('/terms', serveLegalPage('terms'));
 app.get('/account-deletion', serveLegalPage('account-deletion'));
 
-/** Production: serve Vite build so bytzgo.net serves web + /api (Flutter uses same host). */
+/** Production: serve Vite build — admin portal only on web (mobile app for everyone else). */
 function attachWebApp() {
   const shouldServe =
     process.env.SERVE_WEB === 'true' || process.env.NODE_ENV === 'production';
@@ -4544,13 +4544,33 @@ function attachWebApp() {
 
   const distDir = path.join(__dirname, '..', 'dist');
   const indexHtml = path.join(distDir, 'index.html');
+  const landingHtml = path.join(__dirname, 'public-admin-landing.html');
   if (!fs.existsSync(indexHtml)) {
     console.warn('BytzGo: dist/index.html missing — API-only mode');
     return;
   }
 
-  console.log(`BytzGo: serving web app from ${distDir}`);
+  const adminOnly = process.env.SERVE_ADMIN_WEB_ONLY !== 'false';
+  console.log(
+    `BytzGo: serving web from ${distDir} (${adminOnly ? 'admin /admin only' : 'full SPA'})`
+  );
+
   app.use(express.static(distDir, { maxAge: '1h', index: false }));
+
+  const isAdminPath = (p: string) => p === '/admin' || p.startsWith('/admin/');
+  const isAssetPath = (p: string) =>
+    p.startsWith('/assets/') ||
+    p.startsWith('/branding/') ||
+    /\.(js|css|png|jpg|jpeg|gif|webp|svg|ico|woff2?|ttf|map|webmanifest|json)$/i.test(p);
+
+  app.get('/', (_req, res) => {
+    if (fs.existsSync(landingHtml)) {
+      res.set('Cache-Control', 'no-store');
+      return res.type('html').sendFile(landingHtml);
+    }
+    res.redirect(302, '/admin');
+  });
+
   app.get('*', (req, res, next) => {
     if (
       req.path.startsWith('/api') ||
@@ -4558,6 +4578,18 @@ function attachWebApp() {
       LEGAL_PATHS.has(req.path)
     ) {
       return next();
+    }
+    if (isAssetPath(req.path)) {
+      return next();
+    }
+    if (adminOnly && !isAdminPath(req.path)) {
+      if (fs.existsSync(landingHtml)) {
+        res.set('Cache-Control', 'no-store');
+        return res.type('html').sendFile(landingHtml);
+      }
+      return res.status(403).type('text/html').send(
+        '<h1>BytzGo</h1><p>Web access is for administrators only. Use the mobile app, or go to <a href="/admin">/admin</a>.</p>'
+      );
     }
     res.sendFile(indexHtml);
   });

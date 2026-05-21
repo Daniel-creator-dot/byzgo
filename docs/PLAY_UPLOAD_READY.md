@@ -2,6 +2,10 @@
 
 Account: **jerryanthony61@gmail.com**
 
+## Admin on the web (Render)
+
+**https://www.bytzgo.net/admin** — administrators only. See [RENDER_ADMIN_WEB.md](./RENDER_ADMIN_WEB.md).
+
 ## 1. Upload this file
 
 ```
