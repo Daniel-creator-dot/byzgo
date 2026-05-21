@@ -44,28 +44,7 @@ $ApiUrl = $ApiUrl.TrimEnd("/")
 Write-Host "BytzGo AAB - API_URL=$ApiUrl"
 
 & (Join-Path $PSScriptRoot "sync_maps_key.ps1")
-
-$defines = @{
-  GOOGLE_MAPS_API_KEY = ""
-  API_URL = $ApiUrl
-  GOOGLE_WEB_CLIENT_ID = ""
-}
-if (Test-Path $definesFile) {
-  try {
-    $existing = Get-Content $definesFile -Raw | ConvertFrom-Json
-    if ($existing.GOOGLE_MAPS_API_KEY) { $defines.GOOGLE_MAPS_API_KEY = $existing.GOOGLE_MAPS_API_KEY }
-    if ($existing.GOOGLE_WEB_CLIENT_ID) { $defines.GOOGLE_WEB_CLIENT_ID = $existing.GOOGLE_WEB_CLIENT_ID }
-  } catch { }
-}
-$client = Read-EnvValue "GOOGLE_WEB_CLIENT_ID"
-if (-not $client) { $client = Read-EnvValue "VITE_GOOGLE_CLIENT_ID" }
-if (-not $client) {
-  $client = "645977332644-4gjjf08268b3irafs4bh8b7guct1i1jb.apps.googleusercontent.com"
-}
-$defines.GOOGLE_WEB_CLIENT_ID = $client
-
-$json = ($defines | ConvertTo-Json -Depth 3)
-[System.IO.File]::WriteAllText($definesFile, $json)
+& (Join-Path $PSScriptRoot "write_release_dart_defines.ps1") -ApiUrl $ApiUrl -MobileRoot $mobileRoot
 
 $flutter = Join-Path $repoRoot ".flutter-sdk\bin\flutter.bat"
 if (-not (Test-Path $flutter)) { $flutter = "flutter" }

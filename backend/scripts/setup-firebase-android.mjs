@@ -157,6 +157,11 @@ function filterGoogleServicesForPackage(jsonText, packageName) {
     throw new Error(`google-services.json has no client for ${packageName} / ${ANDROID_APP_ID}`);
   }
   client.client_info.android_client_info.package_name = packageName;
+  for (const oauth of client.oauth_client || []) {
+    if (oauth.android_info) {
+      oauth.android_info.package_name = packageName;
+    }
+  }
   data.client = [client];
   return `${JSON.stringify(data, null, 2)}\n`;
 }
@@ -284,9 +289,21 @@ async function main() {
   await patchShaHashes(token, app.name);
   const gsRaw = await downloadConfig(token, app.name);
   const gsFiltered = filterGoogleServicesForPackage(gsRaw, PACKAGE);
-  fs.writeFileSync(gsOut, gsFiltered);
-  console.log('Wrote', gsOut, `(package ${PACKAGE} only)`);
-  updateFirebaseOptionsDart(gsFiltered);
+  if (!gsFiltered.includes('b2a044c879a5975095ab9ac5b60a2ffd7cde3f2d')) {
+    console.warn(
+      'Downloaded config missing Play upload SHA-1 — keeping existing google-services.json oauth entries.',
+    );
+    if (fs.existsSync(gsOut)) {
+      updateFirebaseOptionsDart(fs.readFileSync(gsOut, 'utf8'));
+    } else {
+      fs.writeFileSync(gsOut, gsFiltered);
+      updateFirebaseOptionsDart(gsFiltered);
+    }
+  } else {
+    fs.writeFileSync(gsOut, gsFiltered);
+    console.log('Wrote', gsOut, `(package ${PACKAGE} only)`);
+    updateFirebaseOptionsDart(gsFiltered);
+  }
   console.log('\nDone. Rebuild AAB: npm run flutter:build:aab');
 }
 

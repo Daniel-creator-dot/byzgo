@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart' show kReleaseMode;
 
 import 'maps_key.dart';
+import 'oauth_config.dart';
 
 /// Runtime configuration via `--dart-define` or repo `.env.local` (see mobile/README.md).
 class Env {
@@ -13,8 +14,7 @@ class Env {
   /// OAuth web client ID for Google Sign-In (public; override via --dart-define).
   static const String googleWebClientId = String.fromEnvironment(
     'GOOGLE_WEB_CLIENT_ID',
-    defaultValue:
-        '645977332644-4gjjf08268b3irafs4bh8b7guct1i1jb.apps.googleusercontent.com',
+    defaultValue: kGoogleWebClientId,
   );
 
   /// Render redirects apex → www; Dio fails on 307 for POST unless we use www directly.

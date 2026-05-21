@@ -14,6 +14,8 @@ function Ok([string]$msg) {
 
 $gradle = Join-Path $mobileRoot "android\app\build.gradle.kts"
 $gs = Join-Path $mobileRoot "android\app\google-services.json"
+$releaseDefines = Join-Path $mobileRoot "release_defines.json"
+$expectedClient = "645977332644-4gjjf08268b3irafs4bh8b7guct1i1jb.apps.googleusercontent.com"
 $keyProps = Join-Path $mobileRoot "android\key.properties"
 $aab = Join-Path $mobileRoot "build\app\outputs\bundle\release\app-release.aab"
 
@@ -40,6 +42,27 @@ if (Test-Path $gs) {
   } elseif ($j -match '"package_name":\s*"net\.bytzgo\.app"') {
     Ok "google-services.json package net.bytzgo.app"
   }
+  if ($j -match 'b2a044c879a5975095ab9ac5b60a2ffd7cde3f2d') {
+    Ok "google-services.json includes Play upload SHA-1"
+  } else {
+    Fail "google-services.json missing release SHA-1 (run npm run setup:firebase:android)"
+  }
+  if ($j -match [regex]::Escape($expectedClient)) {
+    Ok "google-services.json includes Firebase web OAuth client"
+  } else {
+    Fail "google-services.json missing web OAuth client for Google Sign-In"
+  }
+}
+
+if (Test-Path $releaseDefines) {
+  $rd = Get-Content $releaseDefines -Raw | ConvertFrom-Json
+  if ($rd.GOOGLE_WEB_CLIENT_ID -eq $expectedClient -and $rd.API_URL -match 'bytzgo\.net') {
+    Ok "release_defines.json production API + Google client"
+  } else {
+    Fail "release_defines.json must set API_URL and GOOGLE_WEB_CLIENT_ID for live login"
+  }
+} else {
+  Fail "mobile/release_defines.json missing"
 }
 
 if (-not (Test-Path $keyProps)) {

@@ -15,7 +15,17 @@ cd mobile
 .\scripts\print_google_signin_android.ps1
 ```
 
-## Release keystore (Play AAB)
+## Play App Signing key (users who install from Play Store)
+
+If **Play App Signing** is enabled (default), devices use Google’s **app signing certificate**, not only your upload keystore.
+
+1. [Play Console](https://play.google.com/console) → your app → **Setup** → **App signing**
+2. Copy **SHA-1** under **App signing key certificate**
+3. Add that SHA-1 in [Firebase](https://console.firebase.google.com/project/bytzgo-9bd89/settings/general) for Android **net.bytzgo.app** (same as upload key step below)
+
+Without this, **Continue with Google** works in local release builds but fails on Play-installed apps.
+
+## Release keystore (Play AAB upload key)
 
 | Field | Value |
 |-------|--------|

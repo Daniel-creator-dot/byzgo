@@ -12,7 +12,7 @@ Account: **jerryanthony61@gmail.com**
 mobile\build\app\outputs\bundle\release\app-release.aab
 ```
 
-Package: **`net.bytzgo.app`** · Version: **1.0.0 (1)**
+Package: **`net.bytzgo.app`** · Version: **1.0.1 (2)** — rebuild AAB after pulling latest `main`
 
 ## 2. Play Console URLs
 
@@ -25,13 +25,20 @@ Package: **`net.bytzgo.app`** · Version: **1.0.0 (1)**
 | Listing text | [PLAY_STORE_LISTING.md](./PLAY_STORE_LISTING.md) |
 | Data safety | [PLAY_STORE_DATA_SAFETY.md](./PLAY_STORE_DATA_SAFETY.md) |
 
-## 3. One Firebase step (if push or Google Sign-In fails on Play build)
+## 3. Google Sign-In on Play builds (required once)
 
-Open [Firebase bytzgo-9bd89](https://console.firebase.google.com/project/bytzgo-9bd89/settings/general):
+Open [Firebase bytzgo-9bd89](https://console.firebase.google.com/project/bytzgo-9bd89/settings/general) → Android **`net.bytzgo.app`**:
 
-1. **Add app** → Android → package **`net.bytzgo.app`** (skip if already listed).
-2. **Add fingerprint** → SHA-1: `B2:A0:44:C8:79:A5:97:50:95:AB:9A:C5:B6:0A:2F:FD:7C:DE:3F:2D`
-3. Download **google-services.json** → replace `mobile/android/app/google-services.json` → run `npm run flutter:build:aab` again.
+1. **Upload key** SHA-1: `B2:A0:44:C8:79:A5:97:50:95:AB:9A:C5:B6:0A:2F:FD:7C:DE:3F:2D` (local release keystore)
+2. **Play App Signing key** SHA-1: Play Console → **Setup** → **App signing** → copy **App signing key certificate** SHA-1 → add the same fingerprint in Firebase.
+
+Or run: `npm run setup:firebase:android` (uses `backend/firebase-service-account.json`).
+
+Then build a new bundle (repo bakes production API + Google client):
+
+```powershell
+npm run flutter:build:aab
+```
 
 Details: [GOOGLE_CLOUD_PLAY_SHA.md](./GOOGLE_CLOUD_PLAY_SHA.md)
 

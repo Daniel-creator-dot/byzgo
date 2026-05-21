@@ -30,14 +30,6 @@
           }
         },
         {
-          "client_id": "645977332644-rv482i78e7hln0u3dh475dn4g0rgoa2l.apps.googleusercontent.com",
-          "client_type": 1,
-          "android_info": {
-            "package_name": "net.bytzgo.app",
-            "certificate_hash": "95f4d85777f2d006c131c4644d047627e2aa737"
-          }
-        },
-        {
           "client_id": "645977332644-4gjjf08268b3irafs4bh8b7guct1i1jb.apps.googleusercontent.com",
           "client_type": 3
         }
