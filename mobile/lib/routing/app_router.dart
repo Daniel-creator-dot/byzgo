@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import '../core/session.dart';
@@ -45,28 +46,48 @@ GoRouter createAppRouter(Session session) {
     routes: [
       GoRoute(
         path: '/login',
-        builder: (context, state) => const LoginScreen(),
+        pageBuilder: (context, state) => _fadePage(state, const LoginScreen()),
       ),
       GoRoute(
         path: '/customer',
-        builder: (context, state) => const CustomerShell(),
+        pageBuilder: (context, state) => _fadePage(state, const CustomerShell()),
       ),
       GoRoute(
         path: '/rider',
-        builder: (context, state) => const RiderHomeScreen(),
+        pageBuilder: (context, state) => _fadePage(state, const RiderHomeScreen()),
       ),
       GoRoute(
         path: '/vendor',
-        builder: (context, state) => const VendorHomeScreen(),
+        pageBuilder: (context, state) => _fadePage(state, const VendorHomeScreen()),
       ),
       GoRoute(
         path: '/admin',
-        builder: (context, state) => const AdminHomeScreen(),
+        pageBuilder: (context, state) => _fadePage(state, const AdminHomeScreen()),
       ),
     ],
     errorBuilder: (context, state) => BytzRouteErrorScreen(
       detail: state.error?.message,
     ),
+  );
+}
+
+CustomTransitionPage<void> _fadePage(GoRouterState state, Widget child) {
+  return CustomTransitionPage<void>(
+    key: state.pageKey,
+    child: child,
+    transitionDuration: const Duration(milliseconds: 280),
+    reverseTransitionDuration: const Duration(milliseconds: 220),
+    transitionsBuilder: (context, animation, secondaryAnimation, child) {
+      final curved = CurvedAnimation(
+        parent: animation,
+        curve: Curves.easeOutCubic,
+        reverseCurve: Curves.easeInCubic,
+      );
+      return FadeTransition(
+        opacity: Tween<double>(begin: 0.92, end: 1).animate(curved),
+        child: child,
+      );
+    },
   );
 }
 

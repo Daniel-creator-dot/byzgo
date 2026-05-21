@@ -126,12 +126,15 @@ class RideSheet extends StatelessWidget {
             mainAxisSize: MainAxisSize.max,
             children: [
               const SizedBox(height: 10),
-              Container(
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: BytzGoTheme.sheetDivider,
-                  borderRadius: BorderRadius.circular(2),
+              Semantics(
+                label: 'Ride options sheet',
+                child: Container(
+                  width: 44,
+                  height: 5,
+                  decoration: BoxDecoration(
+                    color: BytzGoTheme.sheetMuted.withValues(alpha: 0.35),
+                    borderRadius: BorderRadius.circular(3),
+                  ),
                 ),
               ),
               const SizedBox(height: 8),
@@ -329,7 +332,11 @@ class RidePrimaryButton extends StatelessWidget {
     final fg = (bg == BytzGoTheme.accent || bg == BytzGoTheme.accentDark)
         ? BytzGoTheme.accentOn
         : BytzGoTheme.sheetBg;
-    return PressableScale(
+    return Semantics(
+      button: true,
+      enabled: !loading && onPressed != null,
+      label: loading ? '$label, loading' : label,
+      child: PressableScale(
       enabled: !loading && onPressed != null,
       onTap: onPressed,
       child: Material(
@@ -368,6 +375,7 @@ class RidePrimaryButton extends StatelessWidget {
                   ],
                 ),
         ),
+      ),
       ),
     );
   }

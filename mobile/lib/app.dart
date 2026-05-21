@@ -18,6 +18,7 @@ import 'features/vendor/vendor_repository.dart';
 import 'features/riders/riders_repository.dart';
 import 'features/wallet/wallet_repository.dart';
 import 'routing/app_router.dart';
+import 'shared/system_chrome.dart';
 import 'shared/theme.dart';
 import 'shared/widgets/app_launch_carousel.dart';
 
@@ -38,6 +39,7 @@ class _BytzGoAppState extends State<BytzGoApp> {
   @override
   void initState() {
     super.initState();
+    BytzSystemChrome.applyDarkHero();
     _socket = SocketService();
     _api = ApiClient();
     _session = Session(_api, _socket);
@@ -55,7 +57,7 @@ class _BytzGoAppState extends State<BytzGoApp> {
         session: _session,
       );
     }
-    const minSplash = Duration(milliseconds: 1400);
+    const minSplash = Duration(milliseconds: 900);
     final elapsed = DateTime.now().difference(started);
     if (elapsed < minSplash) {
       await Future.delayed(minSplash - elapsed);

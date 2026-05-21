@@ -406,10 +406,27 @@ class _BytzGoLaunchLoader extends StatelessWidget {
         return Transform.scale(
           scale: scale,
           child: SizedBox(
-            width: 52,
-            height: 52,
-            child: CustomPaint(
-              painter: _RingLoaderPainter(rotation: spin.value),
+            width: 64,
+            height: 64,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                CustomPaint(
+                  size: const Size(64, 64),
+                  painter: _RingLoaderPainter(rotation: spin.value),
+                ),
+                Image.asset(
+                  'assets/branding/preloader.png',
+                  width: 40,
+                  height: 40,
+                  filterQuality: FilterQuality.high,
+                  errorBuilder: (_, __, ___) => Image.asset(
+                    'assets/branding/app_logo.png',
+                    width: 36,
+                    height: 36,
+                  ),
+                ),
+              ],
             ),
           ),
         );

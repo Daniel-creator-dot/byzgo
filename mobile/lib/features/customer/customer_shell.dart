@@ -6,6 +6,7 @@ import '../../core/session.dart';
 import '../../models/auth_user.dart';
 import '../../models/location_point.dart';
 import '../../shared/format.dart';
+import '../../shared/system_chrome.dart';
 import '../../shared/theme.dart';
 import '../../shared/user_display.dart';
 import '../../shared/widgets/bytz_brand.dart';
@@ -31,7 +32,20 @@ class _CustomerShellState extends State<CustomerShell> {
   CustomerTab _tab = CustomerTab.courier;
   LocationPoint? _shopPickup;
 
-  void _goTab(CustomerTab tab) => setState(() => _tab = tab);
+  @override
+  void initState() {
+    super.initState();
+    BytzSystemChrome.applyMap();
+  }
+
+  void _goTab(CustomerTab tab) {
+    setState(() => _tab = tab);
+    if (tab == CustomerTab.courier) {
+      BytzSystemChrome.applyMap();
+    } else {
+      BytzSystemChrome.applyLightSheet();
+    }
+  }
 
   void _onShopPickup(LocationPoint pickup) {
     setState(() {
@@ -72,7 +86,7 @@ class _CustomerShellState extends State<CustomerShell> {
             user: user,
             onWallet: () => showCustomerWalletSheet(context),
             onProfile: () => _goTab(CustomerTab.profile),
-            onLogout: _logout,
+            onNotifications: () => _goTab(CustomerTab.activity),
           ),
           if (_tab != CustomerTab.courier)
             _walletBanner(user.balance, onTap: () => showCustomerWalletSheet(context)),
@@ -173,7 +187,7 @@ class _CustomerHeader extends StatelessWidget {
     required this.user,
     required this.onWallet,
     required this.onProfile,
-    required this.onLogout,
+    required this.onNotifications,
   });
 
   final CustomerTab tab;
@@ -181,7 +195,7 @@ class _CustomerHeader extends StatelessWidget {
   final AuthUser user;
   final VoidCallback onWallet;
   final VoidCallback onProfile;
-  final VoidCallback onLogout;
+  final VoidCallback onNotifications;
 
   String get _title {
     switch (tab) {
@@ -236,8 +250,6 @@ class _CustomerHeader extends StatelessWidget {
                 ),
               ),
             ),
-            const SizedBox(width: 4),
-            _HeaderIcon(icon: Icons.logout, onTap: onLogout, danger: true),
           ],
         ),
       );
@@ -284,14 +296,8 @@ class _CustomerHeader extends StatelessWidget {
           ),
           _HeaderIcon(
             icon: Icons.notifications_outlined,
-            onTap: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('You\'ll see rider updates here'),
-                  behavior: SnackBarBehavior.floating,
-                ),
-              );
-            },
+            semanticLabel: 'Trip updates',
+            onTap: onNotifications,
           ),
           const SizedBox(width: 6),
           _walletChip(),
@@ -311,8 +317,6 @@ class _CustomerHeader extends StatelessWidget {
               ),
             ),
           ),
-          const SizedBox(width: 4),
-          _HeaderIcon(icon: Icons.logout, onTap: onLogout, danger: true),
         ],
       ),
     );
@@ -356,27 +360,32 @@ class _HeaderIcon extends StatelessWidget {
   const _HeaderIcon({
     required this.icon,
     required this.onTap,
-    this.danger = false,
+    this.semanticLabel,
   });
 
   final IconData icon;
   final VoidCallback onTap;
-  final bool danger;
+  final String? semanticLabel;
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: BytzGoTheme.sheetDivider.withValues(alpha: 0.4),
-      shape: const CircleBorder(),
-      child: InkWell(
-        onTap: onTap,
-        customBorder: const CircleBorder(),
-        child: Padding(
-          padding: const EdgeInsets.all(10),
-          child: Icon(
-            icon,
-            size: 20,
-            color: danger ? BytzGoTheme.danger : BytzGoTheme.sheetText,
+    return Semantics(
+      button: true,
+      label: semanticLabel,
+      child: Material(
+        color: BytzGoTheme.sheetDivider.withValues(alpha: 0.4),
+        shape: const CircleBorder(),
+        child: InkWell(
+          onTap: onTap,
+          customBorder: const CircleBorder(),
+          child: SizedBox(
+            width: 48,
+            height: 48,
+            child: Icon(
+              icon,
+              size: 22,
+              color: BytzGoTheme.sheetText,
+            ),
           ),
         ),
       ),
@@ -410,12 +419,17 @@ class _NavItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return PressableScale(
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: tab.label,
+      child: PressableScale(
       onTap: onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 220),
         curve: Curves.easeOutCubic,
-        padding: const EdgeInsets.symmetric(vertical: 8),
+        constraints: const BoxConstraints(minHeight: 56),
+        padding: const EdgeInsets.symmetric(vertical: 10),
         decoration: BoxDecoration(
           color: selected
               ? BytzGoTheme.accent.withValues(alpha: 0.22)
@@ -450,6 +464,7 @@ class _NavItem extends StatelessWidget {
             ),
           ],
         ),
+      ),
       ),
     );
   }

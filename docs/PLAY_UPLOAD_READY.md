@@ -12,7 +12,7 @@ Account: **jerryanthony61@gmail.com**
 mobile\build\app\outputs\bundle\release\app-release.aab
 ```
 
-Package: **`net.bytzgo.app`** · Version: **1.0.1 (2)** — rebuild AAB after pulling latest `main`
+Package: **`net.bytzgo.app`** · Version: **1.0.2 (3)** — rebuild AAB after pulling latest `main`
 
 ## 2. Play Console URLs
 

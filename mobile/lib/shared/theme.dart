@@ -37,12 +37,56 @@ class BytzGoTheme {
   static const double sheetRadius = 24;
   static const double buttonHeight = 56;
 
+  static TextTheme _textTheme(Brightness brightness) {
+    final onSurface = brightness == Brightness.dark ? textPrimary : sheetText;
+    final muted = brightness == Brightness.dark ? textMuted : sheetMuted;
+    return TextTheme(
+      displayLarge: TextStyle(
+        fontSize: 32,
+        fontWeight: FontWeight.w800,
+        letterSpacing: -0.8,
+        color: onSurface,
+      ),
+      headlineMedium: TextStyle(
+        fontSize: 22,
+        fontWeight: FontWeight.w800,
+        letterSpacing: -0.5,
+        color: onSurface,
+      ),
+      titleLarge: TextStyle(
+        fontSize: 18,
+        fontWeight: FontWeight.w700,
+        color: onSurface,
+      ),
+      titleMedium: TextStyle(
+        fontSize: 16,
+        fontWeight: FontWeight.w600,
+        color: onSurface,
+      ),
+      bodyLarge: TextStyle(fontSize: 16, height: 1.4, color: onSurface),
+      bodyMedium: TextStyle(fontSize: 15, height: 1.35, color: muted),
+      labelLarge: TextStyle(
+        fontSize: 17,
+        fontWeight: FontWeight.w700,
+        letterSpacing: 0.2,
+        color: onSurface,
+      ),
+      labelMedium: TextStyle(
+        fontSize: 12,
+        fontWeight: FontWeight.w700,
+        letterSpacing: 0.3,
+        color: muted,
+      ),
+    );
+  }
+
   static ThemeData dark() {
     return ThemeData(
       useMaterial3: true,
       brightness: Brightness.dark,
       scaffoldBackgroundColor: background,
       fontFamily: 'Roboto',
+      textTheme: _textTheme(Brightness.dark),
       colorScheme: const ColorScheme.dark(
         primary: brandBlue,
         secondary: accent,
@@ -138,10 +182,7 @@ class BytzGoTheme {
         elevation: 0,
         iconTheme: IconThemeData(color: sheetText),
       ),
-      textTheme: base.textTheme.apply(
-        bodyColor: sheetText,
-        displayColor: sheetText,
-      ),
+      textTheme: _textTheme(Brightness.light),
       iconTheme: const IconThemeData(color: sheetText),
       dividerTheme: const DividerThemeData(color: sheetDivider),
       textButtonTheme: TextButtonThemeData(

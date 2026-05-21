@@ -7,7 +7,6 @@ import '../../core/session.dart';
 import '../../models/role.dart';
 import '../../shared/theme.dart';
 import '../../shared/widgets/bytz_brand.dart';
-import '../../shared/widgets/bytz_preloader.dart';
 import '../../shared/widgets/ride_ui.dart';
 import 'auth_repository.dart';
 import 'ghana_phone.dart';
@@ -514,10 +513,6 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
               ),
             ),
           ),
-          if (_loading)
-            const Positioned.fill(
-              child: BytzPreloaderOverlay(message: 'Please wait…'),
-            ),
         ],
       ),
     );

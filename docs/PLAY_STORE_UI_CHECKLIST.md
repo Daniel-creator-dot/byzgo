@@ -4,7 +4,10 @@ Use before uploading `app-release.aab`.
 
 ## In-app polish (repo)
 
-- [x] Splash capped ~1.4s (not 4s+)
+- [x] Splash capped ~0.9s min + branded native splash logo
+- [x] System chrome (status/nav) for map vs light tabs
+- [x] 48dp header/nav touch targets + semantics on primary CTAs
+- [x] Route transitions (fade) between login and role homes
 - [x] Branded route error screen (`/admin` typos, deep links)
 - [x] Shared empty + error panels (retry, icons)
 - [x] Profile: legal links + account deletion URL
