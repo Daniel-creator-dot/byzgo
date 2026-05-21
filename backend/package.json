@@ -4,7 +4,8 @@
   "main": "server.ts",
   "scripts": {
     "start": "node --import tsx server.ts",
-    "dev": "tsx --watch server.ts"
+    "dev": "tsx --watch server.ts",
+    "setup:firebase:android": "node scripts/setup-firebase-android.mjs"
   },
   "engines": {
     "node": ">=20"

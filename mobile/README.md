@@ -152,12 +152,17 @@ Email login works **without** Firebase.
    .\mobile\scripts\print_google_signin_android.ps1
    ```
 
-   Then [Google Cloud Credentials](https://console.cloud.google.com/apis/credentials?project=bytzgo-72f1c) → **Create credentials** → **OAuth client ID** → **Android**:
+   Or register all fingerprints automatically:
 
-   - Package: `com.bytzgo.bytzgo_mobile`
-   - SHA-1: from the script (debug keystore if you install the release APK built on this PC)
+   ```powershell
+   npm run setup:firebase:android
+   ```
 
-   Keep your existing **Web** client for `GOOGLE_WEB_CLIENT_ID` / `serverClientId`.
+   Manual: [Firebase → bytzgo-9bd89](https://console.firebase.google.com/project/bytzgo-9bd89/settings/general) → Android **net.bytzgo.app** → **Add fingerprint** → paste SHA-1 from the script.
+
+   **Web** client for `GOOGLE_WEB_CLIENT_ID` / `serverClientId` (from `google-services.json` type 3):
+
+   `645977332644-4gjjf08268b3irafs4bh8b7guct1i1jb.apps.googleusercontent.com`
 
 4. Firebase FCM (ride alerts when screen is off): `google-services.json` and `GoogleService-Info.plist` are in `android/app/` and `ios/Runner/` for project **bytzgo-9bd89**. See [docs/FIREBASE_PUSH.md](../docs/FIREBASE_PUSH.md). Backend needs `backend/firebase-service-account.json` from Firebase Console.
 5. Run with web client ID:

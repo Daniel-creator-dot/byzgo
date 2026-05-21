@@ -56,7 +56,10 @@ if (Test-Path $definesFile) {
 }
 $client = Read-EnvValue "GOOGLE_WEB_CLIENT_ID"
 if (-not $client) { $client = Read-EnvValue "VITE_GOOGLE_CLIENT_ID" }
-if ($client) { $defines.GOOGLE_WEB_CLIENT_ID = $client }
+if (-not $client) {
+  $client = "645977332644-4gjjf08268b3irafs4bh8b7guct1i1jb.apps.googleusercontent.com"
+}
+$defines.GOOGLE_WEB_CLIENT_ID = $client
 
 $json = ($defines | ConvertTo-Json -Depth 3)
 [System.IO.File]::WriteAllText($definesFile, $json)

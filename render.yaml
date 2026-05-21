@@ -36,6 +36,10 @@ services:
         sync: false
       - key: FIREBASE_PROJECT_ID
         value: bytzgo-9bd89
+      - key: GOOGLE_WEB_CLIENT_ID
+        value: 645977332644-4gjjf08268b3irafs4bh8b7guct1i1jb.apps.googleusercontent.com
+      - key: VITE_GOOGLE_CLIENT_ID
+        value: 645977332644-4gjjf08268b3irafs4bh8b7guct1i1jb.apps.googleusercontent.com
       - key: APP_URL
         value: https://bytzgo.net
       - key: PAYSTACK_CALLBACK_URL

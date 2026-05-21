@@ -10,15 +10,26 @@ import { fileURLToPath } from 'url';
 import { GoogleAuth } from 'google-auth-library';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(__dirname, '../..');
+/** Repo root (byzgo/), not backend/. */
+const repoRoot = path.resolve(__dirname, '..', '..');
 const PROJECT_ID = 'bytzgo-9bd89';
 const PACKAGE = 'net.bytzgo.app';
+/** Production Android app in Firebase (package net.bytzgo.app). */
+/** Production Firebase Android app (release SHA-1 registered here). */
+const ANDROID_APP_RESOURCE =
+  'projects/bytzgo-9bd89/androidApps/1:645977332644:android:c61f7624820fc1e2977f31';
+const ANDROID_APP_ID = '1:645977332644:android:c61f7624820fc1e2977f31';
 const RELEASE_SHA1 = 'B2A044C879A5975095AB9AC5B60A2FFFD7CDE3F2D';
 const RELEASE_SHA256 =
   'E98F20D01DD45A6AE3D1380D7B3B016DE1783C903FF915834CBD329D9EFA009';
-const DEBUG_SHA1 = '844C315C994787502E212EC2715DF5DED74FCC50';
+/** Extra debug keystore (CI / other dev machines). */
+const DEBUG_SHA1_ALT = '844C315C994787502E212EC2715DF5DED74FCC50';
+/** Default Android Studio debug keystore on this PC (emulator / flutter run). */
+const DEBUG_SHA1_LOCAL = '95F4D85777F2D006C131C4644D047627E2AA737';
+const FIREBASE_WEB_CLIENT_ID =
+  '645977332644-4gjjf08268b3irafs4bh8b7guct1i1jb.apps.googleusercontent.com';
 
-const saPath = path.join(repoRoot, 'backend/firebase-service-account.json');
+const saPath = path.resolve(__dirname, '../firebase-service-account.json');
 const gsOut = path.join(repoRoot, 'mobile/android/app/google-services.json');
 const firebaseOptsOut = path.join(repoRoot, 'mobile/lib/firebase_options.dart');
 
@@ -95,20 +106,65 @@ async function createAndroidApp(token) {
 }
 
 async function patchShaHashes(token, appName) {
+  const hashes = [...new Set([RELEASE_SHA1, DEBUG_SHA1_ALT, DEBUG_SHA1_LOCAL])];
+  for (const sha1 of hashes) {
+    let added = false;
+    for (const fmt of shaFormats(sha1)) {
+      try {
+        await api(
+          token,
+          'POST',
+          `https://firebase.googleapis.com/v1beta1/${appName}/sha`,
+          { shaHash: fmt, certType: 'SHA_1' },
+        );
+        console.log('Added SHA-1:', fmt);
+        added = true;
+        break;
+      } catch (e) {
+        if (e.message.includes('409') || e.message.includes('ALREADY_EXISTS')) {
+          console.log('SHA-1 already registered:', fmt);
+          added = true;
+          break;
+        }
+      }
+    }
+    if (!added) console.warn('Could not add SHA-1', sha1);
+  }
   try {
     await api(
       token,
-      'PATCH',
-      `https://firebase.googleapis.com/v1beta1/${appName}?updateMask=sha1Hashes,sha256Hashes`,
-      {
-        sha1Hashes: [RELEASE_SHA1, DEBUG_SHA1],
-        sha256Hashes: [RELEASE_SHA256],
-      }
+      'POST',
+      `https://firebase.googleapis.com/v1beta1/${appName}/sha`,
+      { shaHash: RELEASE_SHA256, certType: 'SHA_256' },
     );
-    console.log('Updated SHA fingerprints on Firebase app.');
+    console.log('Added release SHA-256.');
   } catch (e) {
-    console.warn('SHA patch (may already exist):', e.message);
+    console.warn('SHA-256:', e.message.slice(0, 200));
   }
+}
+
+function filterGoogleServicesForPackage(jsonText, packageName) {
+  const data = JSON.parse(jsonText);
+  let client = (data.client || []).find(
+    (c) => c.client_info?.mobilesdk_app_id === ANDROID_APP_ID,
+  );
+  if (!client) {
+    client = (data.client || []).find(
+      (c) => c.client_info?.android_client_info?.package_name === packageName,
+    );
+  }
+  if (!client) {
+    throw new Error(`google-services.json has no client for ${packageName} / ${ANDROID_APP_ID}`);
+  }
+  client.client_info.android_client_info.package_name = packageName;
+  data.client = [client];
+  return `${JSON.stringify(data, null, 2)}\n`;
+}
+
+function shaFormats(hexUpper) {
+  const h = hexUpper.replace(/:/g, '').toUpperCase();
+  const colon = h.match(/.{1,2}/g)?.join(':') ?? h;
+  return [...new Set([h, colon, h.toLowerCase(), colon.toLowerCase()])];
 }
 
 async function downloadConfig(token, appName) {
@@ -184,35 +240,53 @@ class DefaultFirebaseOptions {
 }
 
 async function main() {
-  const auth = new GoogleAuth({
-    keyFile: findServiceAccount(),
-    scopes: [
-      'https://www.googleapis.com/auth.firebase',
-      'https://www.googleapis.com/auth/cloud-platform',
-    ],
-  });
-  const client = await auth.getClient();
-  const { token } = await client.getAccessToken();
+  const keyFile = findServiceAccount();
+  console.log('Using service account:', keyFile);
+  if (!fs.existsSync(keyFile)) {
+    throw new Error(`Service account not found: ${keyFile}`);
+  }
+  let token;
+  try {
+    const auth = new GoogleAuth({
+      keyFile,
+      scopes: [
+        'https://www.googleapis.com/auth/firebase',
+        'https://www.googleapis.com/auth/cloud-platform',
+      ],
+    });
+    const client = await auth.getClient();
+    const res = await client.getAccessToken();
+    token = res.token;
+  } catch (e) {
+    throw new Error(`Google auth failed (${keyFile}): ${e.message}`);
+  }
   if (!token) throw new Error('No access token');
 
   const apps = await listAndroidApps(token);
   console.log(
     'Existing Android apps:',
-    apps.map((a) => `${a.packageName || '?'} (${a.name})`).join(', ') || '(none)'
+    apps.map((a) => `${a.packageName || a.displayName || '?'} (${a.name})`).join(', ') || '(none)'
   );
 
-  let app = apps.find((a) => a.packageName === PACKAGE);
+  let app = apps.find((a) => a.name === ANDROID_APP_RESOURCE);
   if (!app) {
-    app = await createAndroidApp(token);
+    app = apps.find((a) => a.packageName === PACKAGE);
+  }
+  if (!app) {
+    console.warn(
+      `App ${ANDROID_APP_RESOURCE} not listed; using resource id directly (package ${PACKAGE}).`
+    );
+    app = { name: ANDROID_APP_RESOURCE };
   } else {
-    console.log('Using existing app:', app.name);
+    console.log('Using Firebase app:', app.name);
   }
 
   await patchShaHashes(token, app.name);
-  const gs = await downloadConfig(token, app.name);
-  fs.writeFileSync(gsOut, gs);
-  console.log('Wrote', gsOut);
-  updateFirebaseOptionsDart(gs);
+  const gsRaw = await downloadConfig(token, app.name);
+  const gsFiltered = filterGoogleServicesForPackage(gsRaw, PACKAGE);
+  fs.writeFileSync(gsOut, gsFiltered);
+  console.log('Wrote', gsOut, `(package ${PACKAGE} only)`);
+  updateFirebaseOptionsDart(gsFiltered);
   console.log('\nDone. Rebuild AAB: npm run flutter:build:aab');
 }
 

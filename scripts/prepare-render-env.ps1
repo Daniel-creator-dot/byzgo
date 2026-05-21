@@ -27,7 +27,13 @@ $merged["NODE_ENV"] = "production"
 $merged["SERVE_WEB"] = "false"
 $merged["APP_URL"] = "https://bytzgo.net"
 $merged["PAYSTACK_CALLBACK_URL"] = "https://bytzgo.net"
-if (-not $merged["FIREBASE_PROJECT_ID"]) { $merged["FIREBASE_PROJECT_ID"] = "bytzgo-72f1c" }
+if (-not $merged["FIREBASE_PROJECT_ID"]) { $merged["FIREBASE_PROJECT_ID"] = "bytzgo-9bd89" }
+if (-not $merged["GOOGLE_WEB_CLIENT_ID"]) {
+  $merged["GOOGLE_WEB_CLIENT_ID"] = "645977332644-4gjjf08268b3irafs4bh8b7guct1i1jb.apps.googleusercontent.com"
+}
+if (-not $merged["VITE_GOOGLE_CLIENT_ID"]) {
+  $merged["VITE_GOOGLE_CLIENT_ID"] = $merged["GOOGLE_WEB_CLIENT_ID"]
+}
 if ($merged["GOOGLE_MAPS_API_KEY"] -and -not $merged["VITE_GOOGLE_MAPS_API_KEY"]) {
   $merged["VITE_GOOGLE_MAPS_API_KEY"] = $merged["GOOGLE_MAPS_API_KEY"]
 }
