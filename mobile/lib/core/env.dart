@@ -1,12 +1,15 @@
+import 'package:flutter/foundation.dart' show kReleaseMode;
+
 import 'maps_key.dart';
 
 /// Runtime configuration via `--dart-define` or repo `.env.local` (see mobile/README.md).
 class Env {
   static const String apiUrl = String.fromEnvironment(
     'API_URL',
-    defaultValue: 'http://10.0.2.2:3000',
+    defaultValue: kReleaseMode
+        ? 'https://www.bytzgo.net'
+        : 'http://10.0.2.2:3000',
   );
-
   /// OAuth web client ID for Google Sign-In (public; override via --dart-define).
   static const String googleWebClientId = String.fromEnvironment(
     'GOOGLE_WEB_CLIENT_ID',

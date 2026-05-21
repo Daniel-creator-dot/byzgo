@@ -42,18 +42,41 @@ type GeocodeResult = { formatted_address: string; types?: string[] };
 
 function pickBestGeocodeResult(results: GeocodeResult[]): string | null {
   if (!results.length) return null;
+  const usable = results.filter(
+    (r) => r.formatted_address && !r.types?.includes('plus_code')
+  );
+  const pool = usable.length ? usable : results;
   for (const type of PREFERRED_GEOCODE_TYPES) {
-    const hit = results.find((r) => r.types?.includes(type));
+    const hit = pool.find((r) => r.types?.includes(type));
     if (hit?.formatted_address) return hit.formatted_address;
   }
-  const inGhana = results.find((r) => /ghana/i.test(r.formatted_address));
-  return (inGhana || results[0]).formatted_address || null;
+  const inGhana = pool.find((r) => /ghana/i.test(r.formatted_address));
+  return (inGhana || pool[0]).formatted_address || null;
 }
 
 /** True when the string is only lat,lng (what we want to replace in the UI). */
 export function looksLikeCoordinates(address: string): boolean {
-  if (!address?.trim()) return false;
-  return /^-?\d+(\.\d+)?\s*,\s*-?\d+(\.\d+)?$/.test(address.trim());
+  const a = address?.trim() ?? '';
+  if (!a) return false;
+  if (/^-?\d+(\.\d+)?\s*[, ]\s*-?\d+(\.\d+)?$/.test(a)) return true;
+  if (a.length <= 48 && /-?\d+\.\d+\s*[, ]\s*-?\d+\.\d+/.test(a)) return true;
+  return false;
+}
+
+export function needsAddressResolution(address?: string): boolean {
+  const a = address?.trim() ?? '';
+  if (!a) return true;
+  if (looksLikeCoordinates(a)) return true;
+  const lower = a.toLowerCase();
+  if (
+    lower === 'finding address…' ||
+    lower === 'pinned location, ghana' ||
+    lower === 'selected on map' ||
+    lower === 'current location'
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function reverseGeocodeWithMapsJs(lat: number, lng: number): Promise<string | null> {
@@ -100,9 +123,9 @@ export async function resolveAddressLabel(
   lng: number,
   existing?: string
 ): Promise<string> {
-  if (existing?.trim() && !looksLikeCoordinates(existing)) return existing.trim();
+  if (existing?.trim() && !needsAddressResolution(existing)) return existing.trim();
   const label = (await reverseGeocodeGhana(lat, lng)) || (await reverseGeocodeWithMapsJs(lat, lng));
-  if (label) return label;
+  if (label && !looksLikeCoordinates(label)) return label;
   return 'Current location';
 }
 

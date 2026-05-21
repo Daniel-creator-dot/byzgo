@@ -163,6 +163,25 @@ const USER_PUBLIC_FIELDS =
 
 const SHOP_CATEGORIES = ['pharmacy', 'food', 'fashion', 'groceries'] as const;
 
+const PRIMECARE_CANONICAL_EMAIL = 'vendor@bytzgo.net';
+
+function isPrimeCareVendorRow(row: { name?: string; email?: string }): boolean {
+  const n = String(row.name || '').toLowerCase().replace(/\s+/g, '');
+  if (n.includes('primecare')) return true;
+  return String(row.email || '').toLowerCase() === PRIMECARE_CANONICAL_EMAIL;
+}
+
+/** One Primecare Pharmacy in shop lists (DB may have duplicate vendor rows from re-seeding). */
+function dedupeVendorList<T extends { id: string; name?: string; email?: string }>(rows: T[]): T[] {
+  const primecare = rows.filter(isPrimeCareVendorRow);
+  const rest = rows.filter((r) => !isPrimeCareVendorRow(r));
+  if (primecare.length <= 1) return rows;
+  const keeper =
+    primecare.find((r) => String(r.email || '').toLowerCase() === PRIMECARE_CANONICAL_EMAIL) ||
+    primecare[0];
+  return [...rest, keeper];
+}
+
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.DATABASE_URL?.includes('supabase.com') ? { rejectUnauthorized: false } : false
@@ -2531,12 +2550,16 @@ const GEOCODE_PREFERRED_TYPES = [
 
 function pickBestGeocodeAddress(results: { formatted_address?: string; types?: string[] }[]): string | null {
   if (!results?.length) return null;
+  const usable = results.filter(
+    (r) => r.formatted_address && !r.types?.includes('plus_code')
+  );
+  const pool = usable.length ? usable : results;
   for (const type of GEOCODE_PREFERRED_TYPES) {
-    const hit = results.find((r) => r.types?.includes(type));
+    const hit = pool.find((r) => r.types?.includes(type));
     if (hit?.formatted_address) return hit.formatted_address;
   }
-  const inGhana = results.find((r) => /ghana/i.test(r.formatted_address || ''));
-  return (inGhana || results[0]).formatted_address || null;
+  const inGhana = pool.find((r) => /ghana/i.test(r.formatted_address || ''));
+  return (inGhana || pool[0]).formatted_address || null;
 }
 
 app.get('/api/maps/autocomplete', authenticateToken, async (req: any, res) => {
@@ -2771,7 +2794,7 @@ app.get('/api/vendors', async (req, res) => {
     }
     
     const result = await pool.query(query, params);
-    res.json(result.rows);
+    res.json(dedupeVendorList(result.rows));
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
   }

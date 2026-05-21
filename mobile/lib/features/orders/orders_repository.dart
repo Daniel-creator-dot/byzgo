@@ -12,6 +12,7 @@ import '../../models/order.dart';
 import '../../models/product.dart';
 import '../../models/trip_message.dart';
 import '../../models/vendor.dart';
+import '../../shared/vendor_dedupe.dart';
 
 
 
@@ -59,14 +60,11 @@ class OrdersRepository {
 
     if (data is! List) return [];
 
-    return data
-
+    final list = data
         .whereType<Map>()
-
         .map((e) => Vendor.fromJson(Map<String, dynamic>.from(e)))
-
         .toList();
-
+    return dedupeVendors(list);
   }
 
   Future<List<Product>> fetchProducts({required String vendorId}) async {

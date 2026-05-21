@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/location_service.dart';
+import '../../core/places_service.dart';
 import '../../core/session.dart';
 import '../../models/delivery_quote.dart';
 import '../../models/location_point.dart';
@@ -10,6 +11,8 @@ import '../../models/vendor.dart';
 import '../../shared/format.dart';
 import '../../shared/ghana_location.dart';
 import '../../shared/theme.dart';
+import '../../shared/widgets/bytz_scaffold.dart';
+import '../../shared/widgets/bytz_state_panels.dart';
 import '../../shared/widgets/location_autocomplete_field.dart';
 import '../../shared/widgets/ride_ui.dart';
 import '../../shared/widgets/sheet_theme_scope.dart';
@@ -92,11 +95,31 @@ class _CustomerShopCheckoutScreenState extends State<CustomerShopCheckoutScreen>
 
   Future<void> _useMyLocation() async {
     final loc = context.read<LocationService>();
+    final places = context.read<PlacesService>();
     final point = await loc.getCurrentLocation();
-    if (!mounted || point == null) return;
-    final label = displayLocationLabel(point.address, point.lat, point.lng);
+    if (!mounted) return;
+    if (point == null) {
+      _snack('Enable location in Ghana, or search your delivery address.');
+      return;
+    }
+    await _applyDropoffPoint(point, places);
+  }
+
+  Future<void> _applyDropoffPoint(LocationPoint point, PlacesService places) async {
+    if (!point.hasCoords) return;
+    if (!isUsableGhanaLocation(point.lat, point.lng)) {
+      _snack('Delivery must be within Ghana — choose another address.');
+      return;
+    }
+    setState(() => _dropoffCtrl.text = 'Finding address…');
+    final label = await places.resolveAddressLabel(
+      point.lat,
+      point.lng,
+      existing: point.address,
+    );
+    if (!mounted) return;
     setState(() {
-      _destination = point.copyWith(address: label);
+      _destination = LocationPoint(address: label, lat: point.lat, lng: point.lng);
       _dropoffCtrl.text = label;
     });
     await _refreshQuote();
@@ -192,8 +215,7 @@ class _CustomerShopCheckoutScreenState extends State<CustomerShopCheckoutScreen>
             showUseMyLocation: true,
             onUseMyLocation: _useMyLocation,
             onLocation: (point) async {
-              setState(() => _destination = point);
-              await _refreshQuote();
+              await _applyDropoffPoint(point, context.read<PlacesService>());
             },
           ),
           const SizedBox(height: 8),
@@ -219,7 +241,11 @@ class _CustomerShopCheckoutScreenState extends State<CustomerShopCheckoutScreen>
           ],
           if (_error != null) ...[
             const SizedBox(height: 8),
-            Text(_error!, style: const TextStyle(color: BytzGoTheme.danger)),
+            BytzErrorPanel(
+              message: _error!,
+              onRetry: _refreshQuote,
+              light: true,
+            ),
           ],
         ],
       ),
@@ -227,7 +253,7 @@ class _CustomerShopCheckoutScreenState extends State<CustomerShopCheckoutScreen>
         child: Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
           child: FilledButton(
-            onPressed: (_placing || _quote == null) ? null : _placeOrder,
+            onPressed: (_placing || _quoting || _quote == null) ? null : _placeOrder,
             style: FilledButton.styleFrom(
               backgroundColor: BytzGoTheme.brandBlue,
               foregroundColor: Colors.white,

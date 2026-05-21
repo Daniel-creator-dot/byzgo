@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/places_service.dart';
 import '../../models/location_point.dart';
 import '../../models/vendor.dart';
-import '../../shared/rider_trip.dart';
+import '../../shared/vendor_pickup.dart';
 import '../../shared/theme.dart';
 import '../../shared/widgets/sheet_theme_scope.dart';
 import '../orders/orders_repository.dart';
@@ -69,29 +70,22 @@ class _CustomerShopsSheetState extends State<_CustomerShopsSheet> {
     }
   }
 
-  void _selectVendor(Vendor vendor) {
-    if (vendor.lat == null ||
-        vendor.lng == null ||
-        !hasValidCoords(vendor.lat!, vendor.lng!)) {
+  Future<void> _selectVendor(Vendor vendor) async {
+    final point = await resolveVendorPickup(
+      vendor,
+      context.read<PlacesService>(),
+    );
+    if (!mounted) return;
+    if (point == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('This shop has no map location yet'),
+          content: Text('Could not find this shop on the map — try another store.'),
           behavior: SnackBarBehavior.floating,
         ),
       );
       return;
     }
-    final address = vendor.address?.trim().isNotEmpty == true
-        ? '${vendor.name}, ${vendor.address!.trim()}'
-        : vendor.name;
-    Navigator.pop(
-      context,
-      LocationPoint(
-        address: address,
-        lat: vendor.lat!,
-        lng: vendor.lng!,
-      ),
-    );
+    Navigator.pop(context, point);
   }
 
   @override

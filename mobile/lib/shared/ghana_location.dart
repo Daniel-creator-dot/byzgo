@@ -18,8 +18,33 @@ bool isInGhanaBounds(double lat, double lng) {
 }
 
 bool looksLikeCoordinates(String address) {
-  if (address.trim().isEmpty) return false;
-  return RegExp(r'^-?\d+(\.\d+)?\s*,\s*-?\d+(\.\d+)?$').hasMatch(address.trim());
+  final a = address.trim();
+  if (a.isEmpty) return false;
+  // 5.6037, -0.1870 or 5.6037 -0.1870
+  if (RegExp(r'^-?\d+(\.\d+)?\s*[, ]\s*-?\d+(\.\d+)?$').hasMatch(a)) {
+    return true;
+  }
+  // Short strings that are mostly a lat/lng pair (saved profile coords, etc.)
+  if (a.length <= 48 &&
+      RegExp(r'-?\d+\.\d+\s*[, ]\s*-?\d+\.\d+').hasMatch(a)) {
+    return true;
+  }
+  return false;
+}
+
+/// True when we should call reverse geocode instead of showing the stored string.
+bool needsAddressResolution(String? address) {
+  final a = address?.trim() ?? '';
+  if (a.isEmpty) return true;
+  if (looksLikeCoordinates(a)) return true;
+  final lower = a.toLowerCase();
+  if (lower == 'finding address…' ||
+      lower == 'pinned location, ghana' ||
+      lower == 'selected on map' ||
+      lower == 'current location') {
+    return true;
+  }
+  return false;
 }
 
 String formatCoordAddress(double lat, double lng) {
@@ -42,8 +67,10 @@ LocationPoint accraDefaultPoint({String address = 'Accra, Ghana'}) {
 /// Prefer a human label; never show raw coordinates in the UI.
 String displayLocationLabel(String? address, double lat, double lng) {
   final a = address?.trim() ?? '';
-  if (a.isNotEmpty && !looksLikeCoordinates(a)) return a;
-  if (isInGhanaBounds(lat, lng)) return 'Pinned location, Ghana';
+  if (a.isNotEmpty && !looksLikeCoordinates(a) && !needsAddressResolution(a)) {
+    return a;
+  }
+  if (isInGhanaBounds(lat, lng)) return 'Current location';
   return 'Selected on map';
 }
 

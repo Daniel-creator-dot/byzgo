@@ -171,10 +171,18 @@ class _LocationAutocompleteFieldState extends State<LocationAutocompleteField> {
       }
       if (!mounted) return;
       setState(() => _loading = true);
-      final list = await _places.autocomplete(q);
+      final result = await _places.search(q);
       if (!mounted) return;
+      if (result.errorMessage != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(result.errorMessage!),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
       setState(() {
-        _suggestions = list;
+        _suggestions = result.suggestions;
         _loading = false;
       });
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -192,7 +200,15 @@ class _LocationAutocompleteFieldState extends State<LocationAutocompleteField> {
     final loc = await _places.placeDetails(s.placeId);
     if (!mounted) return;
     setState(() => _loading = false);
-    if (loc == null) return;
+    if (loc == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not load that place — pick another address or tap the map.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
     _suppressSearch = true;
     widget.controller.text = loc.address;
     _suppressSearch = false;

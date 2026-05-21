@@ -32,10 +32,7 @@ class LocationService {
     );
 
     if (!isUsableGhanaLocation(pos.latitude, pos.longitude)) {
-      final fallback = accraDefaultPoint(
-        address: 'Accra, Ghana — set pickup on map',
-      );
-      return fallback;
+      return null;
     }
 
     return LocationPoint(

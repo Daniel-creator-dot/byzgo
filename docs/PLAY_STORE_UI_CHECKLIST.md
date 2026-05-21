@@ -11,6 +11,10 @@ Use before uploading `app-release.aab`.
 - [x] Profile rows explain PIN / notifications (no dead taps)
 - [x] Sign-out confirmation (customer + rider)
 - [x] Reduced-motion friendly launch carousel
+- [x] Maps/Places errors surfaced (search, GPS, checkout)
+- [x] Ghana-only GPS and delivery addresses (no silent Accra fallback abroad)
+- [x] Shops without lat/lng geocoded from name + address
+- [x] Release builds default API to `https://www.bytzgo.net`
 
 ## Play Console (you)
 
@@ -24,10 +28,12 @@ Use before uploading `app-release.aab`.
 ## Test on a real device
 
 1. Cold start → splash → login under 3s total feel
-2. Customer: book trip, track, activity tab empty + error (airplane mode → retry)
-3. Rider: go online, empty active/history states
-4. Profile: open Privacy, Terms, Account deletion
-5. Sign out → confirm dialog → login again
+2. Customer: book trip, track, shop checkout (GPS + address search in Ghana)
+3. Customer: pick shop without map pin — should still open menu/checkout
+4. Customer: activity tab empty + error (airplane mode → retry)
+5. Rider: go online, empty active/history states
+6. Profile: open Privacy, Terms, Account deletion
+7. Sign out → confirm dialog → login again
 
 ## Build
 

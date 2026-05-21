@@ -549,7 +549,15 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
           lng: user.lng!,
         );
       }
-      if (loc == null || !mounted) return;
+      if (loc == null) {
+        if (mounted) {
+          _snack(
+            'Turn on location for Ghana, search an address, or tap the map to set pickup.',
+          );
+        }
+        return;
+      }
+      if (!mounted) return;
 
       await _applyCoordsFromMap(
         isPickup: toPickup,
@@ -880,9 +888,36 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
               ),
               const SizedBox(height: 4),
               Text(
-                'Search below or tap the map to pin pickup & drop-off',
+                'Search and pick a suggestion, or tap the map to pin pickup & drop-off',
                 style: BytzGoTheme.sheetBody(13),
               ),
+              if ((_pickup != null && !_pickup!.hasCoords) ||
+                  (_destination != null && !_destination!.hasCoords)) ...[
+                const SizedBox(height: 8),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: BytzGoTheme.warning.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: BytzGoTheme.warning.withValues(alpha: 0.35),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.info_outline, size: 18, color: BytzGoTheme.warning),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'Select an address from the list or tap the map — typed text alone is not enough.',
+                          style: BytzGoTheme.sheetBody(12),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
               const SizedBox(height: 12),
               MapPickModeChips(
                 mode: _pickMode,

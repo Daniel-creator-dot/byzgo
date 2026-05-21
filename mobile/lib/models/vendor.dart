@@ -4,6 +4,7 @@ class Vendor {
   const Vendor({
     required this.id,
     required this.name,
+    this.email,
     this.lat,
     this.lng,
     this.address,
@@ -15,6 +16,7 @@ class Vendor {
 
   final String id;
   final String name;
+  final String? email;
   final double? lat;
   final double? lng;
   final String? address;
@@ -27,6 +29,7 @@ class Vendor {
     return Vendor(
       id: json['id']?.toString() ?? '',
       name: json['name']?.toString() ?? '',
+      email: json['email']?.toString(),
       lat: parseJsonDouble(json['lat']),
       lng: parseJsonDouble(json['lng']),
       address: json['address']?.toString(),

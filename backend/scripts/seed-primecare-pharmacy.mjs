@@ -61,7 +61,54 @@ function mapCategory(raw) {
   return c.slice(0, 80);
 }
 
+async function deleteVendorRow(client, vendorId) {
+  await client.query('DELETE FROM products WHERE vendor_id = $1', [vendorId]);
+  await client.query('UPDATE orders SET vendor_id = NULL WHERE vendor_id = $1', [vendorId]);
+  await client.query('DELETE FROM wallet_transactions WHERE user_id = $1', [vendorId]);
+  await client.query('DELETE FROM users WHERE id = $1 AND role = $2', [vendorId, 'vendor']);
+}
+
+/** Drop extra Primecare rows before upserting the canonical pharmacy. */
+async function dedupePrimecareVendors() {
+  const res = await pool.query(
+    `SELECT u.id, u.name, u.email,
+            (SELECT COUNT(*)::int FROM products p WHERE p.vendor_id = u.id) AS product_count
+     FROM users u
+     WHERE u.role = 'vendor'
+       AND (
+         LOWER(u.name) LIKE '%primecare%'
+         OR LOWER(u.name) LIKE '%prime care%'
+         OR LOWER(u.email) = LOWER($1)
+       )
+     ORDER BY
+       (LOWER(u.email) = LOWER($1)) DESC,
+       product_count DESC,
+       u.created_at ASC`,
+    [VENDOR.email],
+  );
+  const rows = res.rows;
+  if (rows.length <= 1) return;
+  const keeper = rows[0];
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (let i = 1; i < rows.length; i++) {
+      const dup = rows[i];
+      await deleteVendorRow(client, dup.id);
+      console.log(`Removed duplicate pharmacy: ${dup.name} (${dup.email})`);
+    }
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 async function main() {
+  await dedupePrimecareVendors();
+
   if (!fs.existsSync(FORMULARY_PATH)) {
     console.error(`Missing ${FORMULARY_PATH}`);
     console.error('Run: python scripts/parse_drug_formulary.py');

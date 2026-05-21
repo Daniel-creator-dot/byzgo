@@ -1,13 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/places_service.dart';
 import '../../models/location_point.dart';
 import '../../models/product.dart';
 import '../../models/vendor.dart';
 import '../../shared/format.dart';
 import '../../shared/pharmacy_display.dart';
-import '../../shared/rider_trip.dart';
 import '../../shared/theme.dart';
+import '../../shared/vendor_pickup.dart';
 import '../../shared/widgets/product_tile_image.dart';
 import '../../shared/widgets/sheet_theme_scope.dart';
 import '../orders/orders_repository.dart';
@@ -39,18 +40,6 @@ class _CustomerVendorMenuScreenState extends State<CustomerVendorMenuScreen> {
   void initState() {
     super.initState();
     _load();
-  }
-
-  LocationPoint? get _shopPickup {
-    final v = widget.vendor;
-    if (v.lat == null || v.lng == null || !hasValidCoords(v.lat!, v.lng!)) {
-      return null;
-    }
-    return LocationPoint(
-      address: v.address?.trim().isNotEmpty == true ? v.address!.trim() : v.name,
-      lat: v.lat!,
-      lng: v.lng!,
-    );
   }
 
   int get _cartCount => _cart.values.fold(0, (a, b) => a + b);
@@ -107,12 +96,17 @@ class _CustomerVendorMenuScreenState extends State<CustomerVendorMenuScreen> {
     });
   }
 
-  void _bookPickupFromShop() {
-    final point = _shopPickup;
+  Future<LocationPoint?> _resolveShopPickup() async {
+    return resolveVendorPickup(widget.vendor, context.read<PlacesService>());
+  }
+
+  Future<void> _bookPickupFromShop() async {
+    final point = await _resolveShopPickup();
+    if (!mounted) return;
     if (point == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('This shop has no map location yet'),
+          content: Text('Could not find this shop on the map — try another store.'),
           behavior: SnackBarBehavior.floating,
         ),
       );
@@ -122,9 +116,19 @@ class _CustomerVendorMenuScreenState extends State<CustomerVendorMenuScreen> {
     widget.onBookPickup?.call(point);
   }
 
-  void _openCheckout() {
-    final pickup = _shopPickup;
-    if (pickup == null || _cartCount == 0) return;
+  Future<void> _openCheckout() async {
+    if (_cartCount == 0) return;
+    final pickup = await _resolveShopPickup();
+    if (!mounted) return;
+    if (pickup == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not find this shop on the map — try another store.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => CustomerShopCheckoutScreen(
