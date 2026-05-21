@@ -1025,13 +1025,21 @@ async function settleOrderPayment(order: any) {
   }
 }
 
-const OFFER_TTL_SEC = 30;
-const RIDERS_PER_WAVE = 5;
-const MAX_DISPATCH_WAVES = 3;
+const OFFER_TTL_SEC = 25;
+/** Bolt-style: ping one nearest rider at a time. */
+const RIDERS_PER_WAVE = 1;
+/** Max sequential offers before giving up (each step = next nearest rider). */
+const MAX_DISPATCH_WAVES = 15;
 const LOCATION_MAX_AGE_MIN = 15;
-/** Pickup radius (km) per wave — nearest online riders first, then widen like Bolt. */
-const DISPATCH_RADIUS_KM_BY_WAVE = [6, 12, 25] as const;
-const NEARBY_RIDERS_MAX_KM = 8;
+/** Expanding pickup radius (km) as dispatch steps progress. */
+const DISPATCH_RADIUS_KM_TIERS = [4, 8, 15] as const;
+const NEARBY_RIDERS_MAX_KM = 6;
+
+function dispatchRadiusKm(wave: number): number {
+  if (wave <= 5) return DISPATCH_RADIUS_KM_TIERS[0];
+  if (wave <= 10) return DISPATCH_RADIUS_KM_TIERS[1];
+  return DISPATCH_RADIUS_KM_TIERS[2];
+}
 
 type NearbyRider = { id: string; distanceKm: number };
 
@@ -1169,7 +1177,7 @@ async function getNearestActiveRiders(
   region: string | null,
   excludeRiderIds: string[],
   limit: number,
-  maxRadiusKm: number = DISPATCH_RADIUS_KM_BY_WAVE[0]
+  maxRadiusKm: number = DISPATCH_RADIUS_KM_TIERS[0]
 ): Promise<NearbyRider[]> {
   let riders = await queryNearestActiveRiders(
     pickup,
@@ -1228,9 +1236,9 @@ async function emitOffersToRiders(order: any, candidates: NearbyRider[], wave: n
     io.to(String(riderId)).emit('ride:incoming', payload);
   }
 
+  const next = eligible[0];
   console.info(
-    `[dispatch] order ${order.id} wave ${wave}: notified ${eligible.length} nearby rider(s)`,
-    eligible.map((r) => `${r.id.slice(0, 8)}…${r.distanceKm.toFixed(1)}km`)
+    `[dispatch] order ${order.id} step ${wave}: offered to ${next.id.slice(0, 8)}… (${next.distanceKm.toFixed(1)} km)`,
   );
 
   await sendPushToRiders(order, eligible);
@@ -1275,10 +1283,7 @@ async function advanceDispatchWave(order: any, wave: number) {
 
   const exclude = await getOfferedRiderIds(order.id);
   const pickup = await getPickupPoint(order);
-  const radiusKm =
-    DISPATCH_RADIUS_KM_BY_WAVE[
-      Math.min(wave - 1, DISPATCH_RADIUS_KM_BY_WAVE.length - 1)
-    ];
+  const radiusKm = dispatchRadiusKm(wave);
 
   let candidates: NearbyRider[] = [];
 
@@ -1300,9 +1305,16 @@ async function advanceDispatchWave(order: any, wave: number) {
   }
 
   if (candidates.length === 0) {
-    console.warn(
-      `[dispatch] order ${order.id} wave ${wave}: no riders within ${radiusKm}km of pickup`
-    );
+    if (wave < MAX_DISPATCH_WAVES) {
+      console.warn(
+        `[dispatch] order ${order.id} step ${wave}: no riders within ${radiusKm}km — widening search`
+      );
+      await advanceDispatchWave(order, wave + 1);
+    } else {
+      console.warn(
+        `[dispatch] order ${order.id}: no nearby riders accepted after ${MAX_DISPATCH_WAVES} attempts`
+      );
+    }
     return;
   }
 
@@ -1340,6 +1352,7 @@ async function recordRiderDecline(orderId: string, riderId: string) {
 
   if (open.rows[0].c === 0) {
     clearDispatchTimer(orderId);
+    // Sequential Bolt flow: try next nearest rider after decline.
     await advanceDispatchWave(order, wave + 1);
   }
 }

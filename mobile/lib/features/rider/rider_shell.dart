@@ -358,8 +358,8 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
         );
       }
       final now = DateTime.now();
-      final throttle = _tab == _RiderTab.drive
-          ? const Duration(seconds: 2)
+      final throttle = _isOnline
+          ? const Duration(seconds: 1)
           : const Duration(seconds: 8);
       if (_lastGpsUiUpdate == null ||
           now.difference(_lastGpsUiUpdate!) >= throttle) {
@@ -1299,7 +1299,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
           if (secs != null) ...[
             const SizedBox(height: 6),
             Text(
-              'Expires in ${secs}s${order.dispatchWave != null ? ' · wave ${order.dispatchWave}' : ''}',
+              'Expires in ${secs}s — respond to keep your spot',
               style: const TextStyle(
                 fontSize: 11,
                 fontWeight: FontWeight.w800,

@@ -591,7 +591,6 @@ export function RiderApp({
                                     )
                                   )}
                                   s
-                                  {order.dispatchWave != null ? ` · wave ${order.dispatchWave}` : ''}
                                 </p>
                               )}
                               <div className="flex gap-2">
