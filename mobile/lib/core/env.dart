@@ -14,7 +14,7 @@ class Env {
   static const String googleWebClientId = String.fromEnvironment(
     'GOOGLE_WEB_CLIENT_ID',
     defaultValue:
-        '568487483843-99c0bucqujokf2h1vtmno1ku0jea7b4f.apps.googleusercontent.com',
+        '645977332644-4gjjf08268b3irafs4bh8b7guct1i1jb.apps.googleusercontent.com',
   );
 
   /// Render redirects apex → www; Dio fails on 307 for POST unless we use www directly.

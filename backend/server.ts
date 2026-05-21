@@ -21,15 +21,25 @@ dotenv.config({ path: path.join(__dirname, '.env') });
 dotenv.config({ path: path.join(__dirname, '..', '.env.local') });
 
 const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || 'bytzgo-9bd89';
+/** Web OAuth client from Firebase `google-services.json` (type 3). */
+const FIREBASE_WEB_CLIENT_ID =
+  '645977332644-4gjjf08268b3irafs4bh8b7guct1i1jb.apps.googleusercontent.com';
 const GOOGLE_WEB_CLIENT_ID =
   process.env.GOOGLE_WEB_CLIENT_ID?.trim() ||
   process.env.VITE_GOOGLE_CLIENT_ID?.trim() ||
+  FIREBASE_WEB_CLIENT_ID;
+/** Legacy web client (old Cloud project); keep during env migration. */
+const LEGACY_GOOGLE_WEB_CLIENT_ID =
   '568487483843-99c0bucqujokf2h1vtmno1ku0jea7b4f.apps.googleusercontent.com';
 const googleOAuthClient = new OAuth2Client();
 let firebaseAdminHasCredentials = false;
 
 function googleTokenAudiences(): string[] {
-  return [...new Set([FIREBASE_PROJECT_ID, GOOGLE_WEB_CLIENT_ID].filter(Boolean))];
+  return [
+    ...new Set(
+      [GOOGLE_WEB_CLIENT_ID, FIREBASE_WEB_CLIENT_ID, LEGACY_GOOGLE_WEB_CLIENT_ID].filter(Boolean),
+    ),
+  ];
 }
 
 async function verifyGoogleIdToken(idToken: string) {

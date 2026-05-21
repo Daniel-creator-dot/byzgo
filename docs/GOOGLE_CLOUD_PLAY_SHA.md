@@ -2,6 +2,19 @@
 
 Package: **`net.bytzgo.app`**
 
+## Debug keystore (emulator / `flutter run`)
+
+| Field | Value |
+|-------|--------|
+| SHA-1 | `95:F4:D8:57:77:F2:D0:06:C1:31:1C:46:44:D0:47:62:7E:2A:A7:37` |
+
+Add this fingerprint in Firebase too, or **Continue with Google** fails on the emulator with error code **10**.
+
+```powershell
+cd mobile
+.\scripts\print_google_signin_android.ps1
+```
+
 ## Release keystore (Play AAB)
 
 | Field | Value |

@@ -110,7 +110,7 @@ foreach ($line in (Get-Content $envFile -ErrorAction SilentlyContinue)) {
 $defines = @{
     GOOGLE_MAPS_API_KEY = $key
     API_URL = $defaultApiUrl
-    GOOGLE_WEB_CLIENT_ID = "568487483843-99c0bucqujokf2h1vtmno1ku0jea7b4f.apps.googleusercontent.com"
+    GOOGLE_WEB_CLIENT_ID = "645977332644-4gjjf08268b3irafs4bh8b7guct1i1jb.apps.googleusercontent.com"
 }
 if (Test-Path $definesFile) {
     try {

@@ -1,8 +1,7 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 
 import '../../../shared/theme.dart';
+import '../../../shared/widgets/legal_links.dart';
 import '../../../shared/widgets/ride_ui.dart';
 
 /// Drag handle + optional title row for auth bottom sheet.
@@ -37,6 +36,17 @@ class AuthSheetHeader extends StatelessWidget {
           const SizedBox(height: 6),
           Text(subtitle!, style: BytzGoTheme.sheetBody(14)),
         ],
+        const SizedBox(height: 4),
+        Container(
+          height: 3,
+          width: 48,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(99),
+            gradient: const LinearGradient(
+              colors: [BytzGoTheme.brandBlue, BytzGoTheme.accent],
+            ),
+          ),
+        ),
       ],
     );
   }
@@ -61,8 +71,9 @@ class AuthModeSegment extends StatelessWidget {
       height: 48,
       padding: const EdgeInsets.all(4),
       decoration: BoxDecoration(
-        color: BytzGoTheme.sheetDivider.withValues(alpha: 0.55),
+        color: const Color(0xFFF1F5F9),
         borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: BytzGoTheme.sheetDivider.withValues(alpha: 0.6)),
       ),
       child: LayoutBuilder(
         builder: (context, constraints) {
@@ -82,8 +93,9 @@ class AuthModeSegment extends StatelessWidget {
                     borderRadius: BorderRadius.circular(11),
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.08),
-                        blurRadius: 8,
+                        color: (signInSelected ? BytzGoTheme.accent : BytzGoTheme.sheetText)
+                            .withValues(alpha: 0.25),
+                        blurRadius: 10,
                         offset: const Offset(0, 2),
                       ),
                     ],
@@ -199,7 +211,7 @@ class AuthTextField extends StatelessWidget {
             : null,
         suffixIcon: suffix,
         filled: true,
-        fillColor: const Color(0xFFF3F4F6),
+        fillColor: const Color(0xFFF8FAFC),
         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(14),
@@ -279,15 +291,42 @@ class AuthOrDivider extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        Expanded(child: Divider(color: BytzGoTheme.sheetDivider.withValues(alpha: 0.9))),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          child: Text(
-            'or',
-            style: BytzGoTheme.sheetBody(13).copyWith(fontWeight: FontWeight.w600),
+        Expanded(
+          child: Container(
+            height: 1,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  BytzGoTheme.sheetDivider.withValues(alpha: 0),
+                  BytzGoTheme.sheetDivider,
+                ],
+              ),
+            ),
           ),
         ),
-        Expanded(child: Divider(color: BytzGoTheme.sheetDivider.withValues(alpha: 0.9))),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14),
+          child: Text(
+            'or continue with',
+            style: BytzGoTheme.sheetBody(12).copyWith(
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.3,
+            ),
+          ),
+        ),
+        Expanded(
+          child: Container(
+            height: 1,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  BytzGoTheme.sheetDivider,
+                  BytzGoTheme.sheetDivider.withValues(alpha: 0),
+                ],
+              ),
+            ),
+          ),
+        ),
       ],
     );
   }
@@ -308,57 +347,168 @@ class AuthGoogleButton extends StatelessWidget {
     return PressableScale(
       enabled: onPressed != null && !loading,
       onTap: onPressed,
-      child: OutlinedButton(
-        onPressed: loading ? null : onPressed,
-        style: OutlinedButton.styleFrom(
-          minimumSize: const Size.fromHeight(52),
-          backgroundColor: Colors.white,
-          side: BorderSide(color: BytzGoTheme.sheetDivider.withValues(alpha: 0.95)),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-          foregroundColor: BytzGoTheme.sheetText,
-        ),
-        child: loading
-            ? const SizedBox(
-                height: 22,
-                width: 22,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              )
-            : Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  _GoogleMark(),
-                  const SizedBox(width: 12),
-                  const Text(
-                    'Continue with Google',
-                    style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
-                  ),
-                ],
+      child: Material(
+        color: Colors.white,
+        elevation: 0,
+        shadowColor: Colors.transparent,
+        borderRadius: BorderRadius.circular(14),
+        child: InkWell(
+          onTap: loading ? null : onPressed,
+          borderRadius: BorderRadius.circular(14),
+          child: Ink(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(
+                color: const Color(0xFFE2E8F0),
               ),
+              boxShadow: [
+                BoxShadow(
+                  color: BytzGoTheme.brandBlue.withValues(alpha: 0.06),
+                  blurRadius: 12,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            child: SizedBox(
+              height: 52,
+              child: loading
+                  ? const Center(
+                      child: SizedBox(
+                        height: 22,
+                        width: 22,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    )
+                  : Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const _GoogleMark(size: 20),
+                        const SizedBox(width: 12),
+                        Text(
+                          'Continue with Google',
+                          style: BytzGoTheme.sheetBody(15).copyWith(
+                            fontWeight: FontWeight.w700,
+                            color: BytzGoTheme.sheetText,
+                          ),
+                        ),
+                      ],
+                    ),
+            ),
+          ),
+        ),
       ),
     );
   }
 }
 
 class _GoogleMark extends StatelessWidget {
+  const _GoogleMark({this.size = 20});
+
+  final double size;
+
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: 22,
-      height: 22,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(4),
-        border: Border.all(color: BytzGoTheme.sheetDivider),
-      ),
-      child: const Center(
-        child: Text(
-          'G',
-          style: TextStyle(
-            fontWeight: FontWeight.w800,
-            fontSize: 14,
-            color: Color(0xFF4285F4),
+    return SizedBox(
+      width: size,
+      height: size,
+      child: CustomPaint(painter: _GoogleLogoPainter()),
+    );
+  }
+}
+
+class _GoogleLogoPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final r = size.width / 2;
+    final c = Offset(r, r);
+    const stroke = 2.2;
+    final arcPaint = (Color color) => Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = stroke
+      ..strokeCap = StrokeCap.round;
+
+    canvas.drawArc(
+      Rect.fromCircle(center: c, radius: r - 1),
+      -0.4,
+      1.2,
+      false,
+      arcPaint(const Color(0xFF4285F4)),
+    );
+    canvas.drawArc(
+      Rect.fromCircle(center: c, radius: r - 1),
+      0.85,
+      1.1,
+      false,
+      arcPaint(const Color(0xFF34A853)),
+    );
+    canvas.drawArc(
+      Rect.fromCircle(center: c, radius: r - 1),
+      2.0,
+      1.0,
+      false,
+      arcPaint(const Color(0xFFFBBC05)),
+    );
+    canvas.drawArc(
+      Rect.fromCircle(center: c, radius: r - 1),
+      3.15,
+      1.15,
+      false,
+      arcPaint(const Color(0xFFEA4335)),
+    );
+    canvas.drawLine(
+      Offset(r, r * 0.45),
+      Offset(r * 1.55, r * 0.45),
+      Paint()
+        ..color = const Color(0xFF4285F4)
+        ..strokeWidth = stroke
+        ..strokeCap = StrokeCap.round,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+/// Google sign-in, legal copy, and partner strip — one coordinated block.
+class AuthLoginExtras extends StatelessWidget {
+  const AuthLoginExtras({
+    super.key,
+    required this.showGoogle,
+    required this.onGoogle,
+    this.googleLoading = false,
+  });
+
+  final bool showGoogle;
+  final VoidCallback? onGoogle;
+  final bool googleLoading;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (showGoogle) ...[
+          const AuthOrDivider(),
+          const SizedBox(height: 14),
+          AuthGoogleButton(
+            onPressed: onGoogle,
+            loading: googleLoading,
           ),
+        ],
+        const SizedBox(height: 16),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: const Color(0xFFF8FAFC),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: const LegalLinksRow(),
         ),
-      ),
+        const SizedBox(height: 14),
+        const AuthPartnerFooter(),
+      ],
     );
   }
 }
@@ -381,100 +531,101 @@ class AuthHeroFeatures extends StatelessWidget {
   }
 }
 
-/// Rotating circular image bubble (login footer gallery).
-class AuthRoundGalleryBubble extends StatefulWidget {
-  const AuthRoundGalleryBubble({
-    super.key,
-    required this.assets,
-    this.size = 78,
-    this.startIndex = 0,
-    this.interval = const Duration(milliseconds: 2600),
-  });
+/// Kesbridge partnership — clean trust strip aligned with BytzGo blue + lime.
+class AuthPartnerFooter extends StatelessWidget {
+  const AuthPartnerFooter({super.key});
 
-  final List<String> assets;
-  final double size;
-  final int startIndex;
-  final Duration interval;
+  static const Color kesbridgeGold = Color(0xFFD4AF37);
 
-  @override
-  State<AuthRoundGalleryBubble> createState() => _AuthRoundGalleryBubbleState();
-}
-
-class _AuthRoundGalleryBubbleState extends State<AuthRoundGalleryBubble>
-    with SingleTickerProviderStateMixin {
-  late int _index;
-  late final AnimationController _pulse;
-  Timer? _timer;
-
-  @override
-  void initState() {
-    super.initState();
-    _index = widget.startIndex % widget.assets.length;
-    _pulse = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1400),
-    )..repeat(reverse: true);
-    _timer = Timer.periodic(widget.interval, (_) {
-      if (!mounted) return;
-      setState(() => _index = (_index + 1) % widget.assets.length);
-    });
-  }
-
-  @override
-  void dispose() {
-    _timer?.cancel();
-    _pulse.dispose();
-    super.dispose();
-  }
+  static const _thumbAssets = [
+    'assets/branding/onboarding_delivery.png',
+    'assets/branding/onboarding_rider.png',
+  ];
 
   @override
   Widget build(BuildContext context) {
-    final asset = widget.assets[_index];
-    return ScaleTransition(
-      scale: Tween<double>(begin: 0.94, end: 1.06).animate(
-        CurvedAnimation(parent: _pulse, curve: Curves.easeInOut),
-      ),
-      child: Container(
-        width: widget.size,
-        height: widget.size,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              AuthPartnerFooter.kesbridgeGold.withValues(alpha: 0.85),
-              BytzGoTheme.accent.withValues(alpha: 0.75),
-            ],
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: AuthPartnerFooter.kesbridgeGold.withValues(alpha: 0.35),
-              blurRadius: 14,
-              offset: const Offset(0, 4),
-            ),
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(16),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            BytzGoTheme.brandBlue.withValues(alpha: 0.06),
+            BytzGoTheme.accent.withValues(alpha: 0.08),
           ],
         ),
-        padding: const EdgeInsets.all(3),
-        child: DecoratedBox(
-          decoration: const BoxDecoration(
-            shape: BoxShape.circle,
-            color: Colors.white,
-          ),
-          child: ClipOval(
-            child: AnimatedSwitcher(
-              duration: const Duration(milliseconds: 550),
-              switchInCurve: Curves.easeOut,
-              switchOutCurve: Curves.easeIn,
-              child: Image.asset(
-                asset,
-                key: ValueKey(asset),
-                width: widget.size,
-                height: widget.size,
-                fit: BoxFit.cover,
-                filterQuality: FilterQuality.medium,
+        border: Border.all(
+          color: BytzGoTheme.brandBlue.withValues(alpha: 0.12),
+        ),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(15),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
+          child: Row(
+            children: [
+              _DeliveryThumbs(assets: _thumbAssets),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.verified_user_outlined,
+                          size: 14,
+                          color: BytzGoTheme.brandBlue.withValues(alpha: 0.85),
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          'In partnership with',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 0.8,
+                            color: BytzGoTheme.brandBlue.withValues(alpha: 0.9),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF0C1222),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: kesbridgeGold.withValues(alpha: 0.35),
+                        ),
+                      ),
+                      child: Image.asset(
+                        'assets/branding/kesbridge_logo.png',
+                        height: 26,
+                        fit: BoxFit.contain,
+                        filterQuality: FilterQuality.high,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Kesbridge Insurance Brokers',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: BytzGoTheme.sheetMuted,
+                        letterSpacing: 0.15,
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ),
+            ],
           ),
         ),
       ),
@@ -482,88 +633,64 @@ class _AuthRoundGalleryBubbleState extends State<AuthRoundGalleryBubble>
   }
 }
 
-/// Kesbridge partnership + animated round galleries on each side.
-class AuthPartnerFooter extends StatelessWidget {
-  const AuthPartnerFooter({super.key});
+class _DeliveryThumbs extends StatelessWidget {
+  const _DeliveryThumbs({required this.assets});
 
-  static const Color kesbridgeGold = Color(0xFFC9A227);
-  static const Color kesbridgeGoldDark = Color(0xFF9A7B1A);
-
-  static const _galleryAssets = [
-    'assets/branding/onboarding_delivery.png',
-    'assets/branding/onboarding_rider.png',
-    'assets/branding/hero_delivery.png',
-    'assets/branding/onboarding_team.png',
-    'assets/branding/hero_rider.png',
-  ];
+  final List<String> assets;
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            AuthRoundGalleryBubble(
-              assets: _galleryAssets,
-              startIndex: 0,
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    'Partnered by',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 0.6,
-                      color: kesbridgeGoldDark.withValues(alpha: 0.9),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF0A0A0A),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: kesbridgeGold.withValues(alpha: 0.45)),
-                    ),
-                    child: Image.asset(
-                      'assets/branding/kesbridge_logo.png',
-                      height: 28,
-                      fit: BoxFit.contain,
-                      filterQuality: FilterQuality.high,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 10),
-            AuthRoundGalleryBubble(
-              assets: _galleryAssets,
-              startIndex: 2,
-              interval: const Duration(milliseconds: 3100),
-            ),
-          ],
-        ),
-        const SizedBox(height: 8),
-        const Text(
-          'Kesbridge Insurance Brokers',
-          textAlign: TextAlign.center,
-          style: TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.w700,
-            fontStyle: FontStyle.italic,
-            color: kesbridgeGold,
-            letterSpacing: 0.2,
+    return SizedBox(
+      width: 52,
+      height: 72,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Positioned(
+            top: 0,
+            left: 0,
+            child: _ThumbCircle(asset: assets[0], size: 40),
           ),
+          Positioned(
+            bottom: 0,
+            right: 0,
+            child: _ThumbCircle(asset: assets[1], size: 36),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ThumbCircle extends StatelessWidget {
+  const _ThumbCircle({required this.asset, required this.size});
+
+  final String asset;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        border: Border.all(color: Colors.white, width: 2),
+        boxShadow: [
+          BoxShadow(
+            color: BytzGoTheme.brandBlue.withValues(alpha: 0.2),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: ClipOval(
+        child: Image.asset(
+          asset,
+          fit: BoxFit.cover,
+          filterQuality: FilterQuality.medium,
         ),
-      ],
+      ),
     );
   }
 }

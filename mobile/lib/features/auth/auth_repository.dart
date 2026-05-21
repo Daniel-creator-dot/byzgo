@@ -148,8 +148,7 @@ class AuthRepository {
       if (e.code == 'sign_in_failed' && (e.message?.contains(': 10') ?? false)) {
         throw Exception(
           'Google Sign-In is not registered for this Android app. '
-          'In Google Cloud (project bytzgo-72f1c), create an Android OAuth client with '
-          'package net.bytzgo.app and your release SHA-1. '
+          'In Firebase (project bytzgo-9bd89), add your debug SHA-1 for package net.bytzgo.app. '
           'On PC run: mobile/scripts/print_google_signin_android.ps1',
         );
       }

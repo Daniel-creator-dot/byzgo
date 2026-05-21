@@ -1,5 +1,5 @@
 # Print Android package + SHA-1 for Google Sign-In (fixes PlatformException code 10).
-# Add these in Google Cloud / Firebase for project bytzgo-72f1c.
+# Add debug SHA-1 in Firebase for project bytzgo-9bd89 (matches google-services.json).
 
 $ErrorActionPreference = "Stop"
 $package = "net.bytzgo.app"
@@ -29,12 +29,11 @@ Write-Host "SHA-1 fingerprints (debug keystore, used by current release APK):" -
   Select-String "SHA1:|SHA256:"
 
 Write-Host ""
-Write-Host "Google Cloud Console:" -ForegroundColor Green
-Write-Host "  https://console.cloud.google.com/apis/credentials?project=bytzgo-72f1c"
+Write-Host "Firebase (recommended):" -ForegroundColor Green
+Write-Host "  https://console.firebase.google.com/project/bytzgo-9bd89/settings/general"
+Write-Host "  -> Your apps -> Android net.bytzgo.app -> Add fingerprint -> paste SHA-1 above"
 Write-Host ""
-Write-Host "1. Create credentials -> OAuth client ID -> Android"
-Write-Host "2. Package: $package"
-Write-Host "3. Paste SHA-1 from above"
-Write-Host "4. Keep existing Web client for serverClientId (GOOGLE_WEB_CLIENT_ID)"
+Write-Host "serverClientId must be the Web client from google-services.json (type 3):"
+Write-Host "  645977332644-4gjjf08268b3irafs4bh8b7guct1i1jb.apps.googleusercontent.com"
 Write-Host ""
 Write-Host "Wait 5-10 minutes, then reinstall the APK and try Continue with Google."

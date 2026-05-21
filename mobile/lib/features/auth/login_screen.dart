@@ -8,7 +8,6 @@ import '../../models/role.dart';
 import '../../shared/theme.dart';
 import '../../shared/widgets/bytz_brand.dart';
 import '../../shared/widgets/bytz_preloader.dart';
-import '../../shared/widgets/legal_links.dart';
 import '../../shared/widgets/ride_ui.dart';
 import 'auth_repository.dart';
 import 'ghana_phone.dart';
@@ -278,9 +277,22 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
             alignment: Alignment.bottomCenter,
             child: Theme(
               data: BytzGoTheme.sheetTheme(),
-              child: RideSheet(
-                maxHeightFraction: 0.78,
-                padding: EdgeInsets.fromLTRB(20, 4, 20, 8 + bottomPad),
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  borderRadius: const BorderRadius.vertical(
+                    top: Radius.circular(BytzGoTheme.sheetRadius),
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: BytzGoTheme.brandBlue.withValues(alpha: 0.12),
+                      blurRadius: 28,
+                      offset: const Offset(0, -8),
+                    ),
+                  ],
+                ),
+                child: RideSheet(
+                maxHeightFraction: 0.82,
+                padding: EdgeInsets.fromLTRB(20, 4, 20, 10 + bottomPad),
                 child: Form(
                   key: _formKey,
                   child: AnimatedSwitcher(
@@ -472,25 +484,21 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                             onPressed: () => _setMode(_AuthMode.signIn),
                             child: const Text('Back to sign in'),
                           ),
-                        if (!isForgot && Env.isGoogleSignInEnabled) ...[
-                          const SizedBox(height: 8),
-                          const AuthOrDivider(),
-                          const SizedBox(height: 14),
-                          AuthGoogleButton(
-                            onPressed: _loading ? null : _submitGoogle,
-                            loading: _googleLoading,
+                        if (!isForgot) ...[
+                          const SizedBox(height: 6),
+                          AuthLoginExtras(
+                            showGoogle: Env.isGoogleSignInEnabled,
+                            onGoogle: _loading ? null : _submitGoogle,
+                            googleLoading: _googleLoading,
                           ),
                         ],
-                        const SizedBox(height: 14),
-                        const LegalLinksRow(),
-                        const SizedBox(height: 14),
-                        const AuthPartnerFooter(),
-                        const SizedBox(height: 4),
+                        const SizedBox(height: 8),
                       ],
                     ),
                   ),
                 ),
               ),
+            ),
             ),
           ),
           if (_loading)
