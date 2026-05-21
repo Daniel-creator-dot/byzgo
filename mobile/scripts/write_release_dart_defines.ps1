@@ -50,7 +50,7 @@ if (-not $client) { $client = Read-EnvValue "VITE_GOOGLE_CLIENT_ID" }
 if ($client) { $defines.GOOGLE_WEB_CLIENT_ID = $client }
 
 if (-not $defines.GOOGLE_WEB_CLIENT_ID) {
-  throw "GOOGLE_WEB_CLIENT_ID missing — check release_defines.json"
+  throw "GOOGLE_WEB_CLIENT_ID missing - check release_defines.json"
 }
 
 $json = ($defines | ConvertTo-Json -Depth 3)
