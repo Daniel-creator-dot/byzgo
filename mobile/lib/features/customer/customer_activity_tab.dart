@@ -6,6 +6,7 @@ import '../../models/order.dart';
 import '../../shared/customer_trip.dart';
 import '../../shared/format.dart';
 import '../../shared/theme.dart';
+import '../../shared/widgets/bytz_scaffold.dart';
 import '../../shared/widgets/ride_ui.dart';
 import '../orders/orders_repository.dart';
 class CustomerActivityTab extends StatefulWidget {
@@ -63,7 +64,29 @@ class _CustomerActivityTabState extends State<CustomerActivityTab> {
     final past = _orders.where((o) => o.status == 'delivered').toList();
 
     if (_loading) {
-      return const Center(child: CircularProgressIndicator());
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(32),
+          child: CircularProgressIndicator(color: BytzGoTheme.brandBlue),
+        ),
+      );
+    }
+
+    if (_error != null) {
+      return RefreshIndicator(
+        onRefresh: _load,
+        color: BytzGoTheme.brandBlue,
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          children: [
+            BytzErrorPanel(
+              message: _error!,
+              onRetry: _load,
+              light: true,
+            ),
+          ],
+        ),
+      );
     }
 
     return RefreshIndicator(
@@ -90,26 +113,12 @@ class _CustomerActivityTabState extends State<CustomerActivityTab> {
           ],
           Text('History', style: BytzGoTheme.sheetTitle(16)),
           const SizedBox(height: 10),
-          if (_error != null)
-            Text(_error!, style: const TextStyle(color: BytzGoTheme.danger)),
           if (past.isEmpty && active.isEmpty)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 48),
-              child: Column(
-                children: [
-                  Icon(
-                    Icons.two_wheeler_outlined,
-                    size: 48,
-                    color: BytzGoTheme.sheetMuted.withValues(alpha: 0.5),
-                  ),
-                  const SizedBox(height: 12),
-                  Text(
-                    'No trips yet',
-                    style: BytzGoTheme.sheetBody(14),
-                    textAlign: TextAlign.center,
-                  ),
-                ],
-              ),
+            const BytzEmptyState(
+              light: true,
+              icon: Icons.two_wheeler_outlined,
+              title: 'No trips yet',
+              subtitle: 'Book a bike delivery from the Courier tab — your trips will show here.',
             )
           else
             ...past.map((o) => _historyTile(o)),

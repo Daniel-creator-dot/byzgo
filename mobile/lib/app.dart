@@ -55,7 +55,7 @@ class _BytzGoAppState extends State<BytzGoApp> {
         session: _session,
       );
     }
-    const minSplash = Duration(milliseconds: 4200);
+    const minSplash = Duration(milliseconds: 1400);
     final elapsed = DateTime.now().difference(started);
     if (elapsed < minSplash) {
       await Future.delayed(minSplash - elapsed);

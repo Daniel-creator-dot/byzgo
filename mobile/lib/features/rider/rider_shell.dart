@@ -27,6 +27,7 @@ import '../../models/rider_map_offer.dart';
 import '../../shared/widgets/biker_search_radar.dart';
 import '../../shared/widgets/delete_account_button.dart';
 import '../../shared/widgets/legal_links.dart';
+import '../../shared/widgets/bytz_scaffold.dart';
 import '../../shared/widgets/ride_ui.dart';
 import 'delivery_pin_dialog.dart';
 import 'incoming_ride_overlay.dart';
@@ -1209,9 +1210,11 @@ class _RiderShellState extends State<RiderShell> {
 
   Widget _activeList() {
     if (_activeOrders.isEmpty) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 24),
-        child: Text('No active trips', style: BytzGoTheme.sheetBody(), textAlign: TextAlign.center),
+      return const BytzEmptyState(
+        light: true,
+        icon: Icons.delivery_dining_outlined,
+        title: 'No active trips',
+        subtitle: 'Go online on the Drive tab to receive delivery offers.',
       );
     }
     return Column(children: _activeOrders.map(_activeCard).toList());
@@ -1363,17 +1366,10 @@ class _RiderShellState extends State<RiderShell> {
           ),
           const SizedBox(height: 16),
           if (trips.isEmpty)
-            Container(
-              padding: const EdgeInsets.all(32),
-              decoration: BoxDecoration(
-                border: Border.all(color: const Color(0xFF334155)),
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Text(
-                'No trips yet',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.white.withValues(alpha: 0.5)),
-              ),
+            const BytzEmptyState(
+              icon: Icons.history,
+              title: 'No completed trips yet',
+              subtitle: 'Finished deliveries will appear here.',
             )
           else
             ...trips.map((o) {

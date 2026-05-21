@@ -23,6 +23,7 @@ import '../../shared/customer_trip.dart';
 import '../../shared/theme.dart';
 import '../../shared/widgets/live_trip_map_overlay.dart';
 import '../../shared/widgets/ride_google_map.dart';
+import '../../shared/widgets/bytz_scaffold.dart';
 import '../../shared/widgets/ride_ui.dart';
 import '../orders/orders_repository.dart';
 import '../riders/riders_repository.dart';
@@ -635,22 +636,62 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
     _applyCoordsFromMap(isPickup: isPickup, lat: lat, lng: lng);
   }
 
-  void _onPickupLocation(LocationPoint point) {
-    final label = displayLocationLabel(point.address, point.lat, point.lng);
+  Future<void> _onPickupLocation(LocationPoint point) async {
+    if (!point.hasCoords) {
+      setState(() {
+        _pickup = point;
+        _pickupCtrl.text = point.address;
+        _pickMode = MapPickMode.pickup;
+      });
+      _scheduleDeliveryQuote();
+      return;
+    }
     setState(() {
-      _pickup = point.copyWith(address: label);
-      _pickupCtrl.text = label;
+      _resolvingPickup = true;
+      _pickupCtrl.text = 'Finding address…';
       _pickMode = MapPickMode.pickup;
+    });
+    final label = await _places.resolveAddressLabel(
+      point.lat,
+      point.lng,
+      existing: point.address,
+    );
+    if (!mounted) return;
+    final resolved = LocationPoint(address: label, lat: point.lat, lng: point.lng);
+    setState(() {
+      _pickup = resolved;
+      _pickupCtrl.text = label;
+      _resolvingPickup = false;
     });
     _scheduleDeliveryQuote();
   }
 
-  void _onDropoffLocation(LocationPoint point) {
-    final label = displayLocationLabel(point.address, point.lat, point.lng);
+  Future<void> _onDropoffLocation(LocationPoint point) async {
+    if (!point.hasCoords) {
+      setState(() {
+        _destination = point;
+        _dropoffCtrl.text = point.address;
+        _pickMode = MapPickMode.destination;
+      });
+      _scheduleDeliveryQuote();
+      return;
+    }
     setState(() {
-      _destination = point.copyWith(address: label);
-      _dropoffCtrl.text = label;
+      _resolvingDropoff = true;
+      _dropoffCtrl.text = 'Finding address…';
       _pickMode = MapPickMode.destination;
+    });
+    final label = await _places.resolveAddressLabel(
+      point.lat,
+      point.lng,
+      existing: point.address,
+    );
+    if (!mounted) return;
+    final resolved = LocationPoint(address: label, lat: point.lat, lng: point.lng);
+    setState(() {
+      _destination = resolved;
+      _dropoffCtrl.text = label;
+      _resolvingDropoff = false;
     });
     _scheduleDeliveryQuote();
   }
@@ -904,7 +945,12 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
             if (_error != null)
               Padding(
                 padding: const EdgeInsets.only(top: 8),
-                child: Text(_error!, style: const TextStyle(color: BytzGoTheme.danger)),
+                child: BytzErrorPanel(
+                  title: 'Could not load trip',
+                  message: _error!,
+                  onRetry: _loadOrders,
+                  light: true,
+                ),
               ),
           ],
         ),

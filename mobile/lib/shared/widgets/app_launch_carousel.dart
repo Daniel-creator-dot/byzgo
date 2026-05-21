@@ -67,12 +67,27 @@ class _AppLaunchCarouselState extends State<AppLaunchCarousel>
     _loaderSpin = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1400),
-    )..repeat();
+    );
     _loaderPulse = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 900),
-    )..repeat(reverse: true);
-    _autoTimer = Timer.periodic(const Duration(milliseconds: 3400), (_) {
+    );
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final reduce = MediaQuery.disableAnimationsOf(context);
+    if (reduce) {
+      _autoTimer?.cancel();
+      _autoTimer = null;
+      if (_loaderSpin.isAnimating) _loaderSpin.stop();
+      if (_loaderPulse.isAnimating) _loaderPulse.stop();
+      return;
+    }
+    if (!_loaderSpin.isAnimating) _loaderSpin.repeat();
+    if (!_loaderPulse.isAnimating) _loaderPulse.repeat(reverse: true);
+    _autoTimer ??= Timer.periodic(const Duration(milliseconds: 3400), (_) {
       if (!_pageController.hasClients) return;
       final next = (_page + 1) % AppLaunchCarousel._slides.length;
       _pageController.animateToPage(

@@ -1,4 +1,3 @@
-import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import '../core/session.dart';
@@ -8,6 +7,7 @@ import '../features/customer/customer_shell.dart';
 import '../features/rider/rider_home_screen.dart';
 import '../features/vendor/vendor_home_screen.dart';
 import '../models/role.dart';
+import '../shared/widgets/bytz_state_panels.dart';
 
 GoRouter createAppRouter(Session session) {
   return GoRouter(
@@ -64,8 +64,8 @@ GoRouter createAppRouter(Session session) {
         builder: (context, state) => const AdminHomeScreen(),
       ),
     ],
-    errorBuilder: (context, state) => Scaffold(
-      body: Center(child: Text(state.error.toString())),
+    errorBuilder: (context, state) => BytzRouteErrorScreen(
+      detail: state.error?.message,
     ),
   );
 }

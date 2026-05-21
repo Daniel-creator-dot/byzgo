@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/session.dart';
 import '../../shared/ghana_regions.dart';
@@ -8,6 +9,7 @@ import '../../shared/theme.dart';
 import '../../shared/user_display.dart';
 import '../../shared/widgets/delete_account_button.dart';
 import '../../shared/widgets/legal_links.dart';
+import '../../shared/widgets/bytz_scaffold.dart';
 import '../../shared/widgets/ride_ui.dart';
 import '../auth/auth_repository.dart';
 
@@ -63,6 +65,7 @@ class _CustomerProfileTabState extends State<CustomerProfileTab> {
   }
 
   Future<void> _logout() async {
+    if (!await confirmSignOut(context)) return;
     await context.read<Session>().clear();
     if (mounted) context.go('/login');
   }
@@ -163,27 +166,50 @@ class _CustomerProfileTabState extends State<CustomerProfileTab> {
         _actionRow(
           icon: Icons.help_outline,
           label: 'Help & support',
-          subtitle: 'Chat or call support',
+          subtitle: 'Email support@bytzgo.com',
+          onTap: () async {
+            final uri = Uri.parse('mailto:support@bytzgo.com?subject=BytzGo%20support');
+            if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Email support@bytzgo.com'),
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                );
+              }
+            }
+          },
+        ),
+        _actionRow(
+          icon: Icons.shield_outlined,
+          label: 'Delivery PIN',
+          subtitle: 'Riders confirm handoff with your 6-digit PIN',
           onTap: () {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
-                content: Text('Support: support@bytzgo.com'),
+                content: Text(
+                  'When your order arrives, share the PIN shown in trip tracking with your rider.',
+                ),
                 behavior: SnackBarBehavior.floating,
               ),
             );
           },
         ),
         _actionRow(
-          icon: Icons.shield_outlined,
-          label: 'Safety',
-          subtitle: 'Trip PIN & secure delivery',
-          onTap: () {},
-        ),
-        _actionRow(
           icon: Icons.notifications_outlined,
-          label: 'Notifications',
-          subtitle: 'Order & rider updates',
-          onTap: () {},
+          label: 'Push notifications',
+          subtitle: 'Enabled for live trip & order updates',
+          onTap: () {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'Allow notifications when prompted so you get rider arrival alerts.',
+                ),
+                behavior: SnackBarBehavior.floating,
+              ),
+            );
+          },
         ),
         const SizedBox(height: 20),
         const ProfileLegalSection(),

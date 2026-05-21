@@ -4,6 +4,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../legal_urls.dart';
 import '../theme.dart';
+import 'bytz_state_panels.dart';
 
 Future<void> openLegalUrl(String url) async {
   final uri = Uri.parse(url);
@@ -73,6 +74,13 @@ class ProfileLegalSection extends StatelessWidget {
           'Terms of Service',
           LegalUrls.terms,
         ),
+        const SizedBox(height: 8),
+        _linkTile(
+          context,
+          Icons.person_remove_outlined,
+          'Account deletion',
+          LegalUrls.accountDeletion,
+        ),
       ],
     );
   }
@@ -90,12 +98,8 @@ class ProfileLegalSection extends StatelessWidget {
         onTap: () async {
           try {
             await openLegalUrl(url);
-          } catch (e) {
-            if (context.mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text(e.toString())),
-              );
-            }
+          } catch (_) {
+            if (context.mounted) showLegalLinkError(context);
           }
         },
         borderRadius: BorderRadius.circular(14),
