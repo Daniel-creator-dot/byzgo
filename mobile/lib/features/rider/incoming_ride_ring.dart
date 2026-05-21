@@ -10,8 +10,12 @@ class IncomingRideRing {
 
   static bool _active = false;
   static Timer? _pulseTimer;
+  static Timer? _maxDurationTimer;
 
-  static Future<void> start() async {
+  /// [maxDuration] caps ring length (Bolt-style ~15s). Null = ring until [stop].
+  static Future<void> start({
+    Duration maxDuration = const Duration(seconds: 15),
+  }) async {
     if (_active) return;
     _active = true;
 
@@ -37,6 +41,11 @@ class IncomingRideRing {
     _pulseTimer = Timer.periodic(const Duration(milliseconds: 1400), (_) {
       if (_active) _hapticPulse();
     });
+
+    _maxDurationTimer?.cancel();
+    if (maxDuration > Duration.zero) {
+      _maxDurationTimer = Timer(maxDuration, stop);
+    }
   }
 
   static Future<void> _hapticPulse() async {
@@ -47,6 +56,8 @@ class IncomingRideRing {
 
   static void stop() {
     _active = false;
+    _maxDurationTimer?.cancel();
+    _maxDurationTimer = null;
     _pulseTimer?.cancel();
     _pulseTimer = null;
     try {

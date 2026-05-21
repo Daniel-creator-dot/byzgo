@@ -7,6 +7,8 @@ import '../../shared/format.dart';
 import '../../shared/rider_trip.dart';
 import '../../shared/theme.dart';
 import '../../shared/widgets/ride_ui.dart';
+import 'incoming_ride_alert.dart';
+
 /// Full-screen incoming call UI (parity with web `IncomingRideCallModal`).
 class IncomingRideOverlay extends StatefulWidget {
   const IncomingRideOverlay({
@@ -97,10 +99,18 @@ class _IncomingRideOverlayState extends State<IncomingRideOverlay>
   Widget build(BuildContext context) {
     final order = widget.order;
     final fee = order.deliveryFee ?? order.total;
-    final ttl = _secs ?? 30;
-    final progress = ttl > 0 ? (ttl / 30.0).clamp(0.0, 1.0) : 0.0;
+    final offerTtl = _secs ?? 30;
+    final ringMax = IncomingRideAlert.callRingDuration.inSeconds;
 
-    return Material(
+    return ValueListenableBuilder<int>(
+      valueListenable: IncomingRideAlert.ringSecondsLeft,
+      builder: (context, ringLeft, _) {
+        final ringing = ringLeft > 0;
+        final progress = ringing
+            ? (ringLeft / ringMax).clamp(0.0, 1.0)
+            : (offerTtl > 0 ? (offerTtl / 30.0).clamp(0.0, 1.0) : 0.0);
+
+        return Material(
       color: const Color(0xFF020617).withValues(alpha: 0.96),
       child: SafeArea(
         child: Stack(
@@ -186,7 +196,9 @@ class _IncomingRideOverlayState extends State<IncomingRideOverlay>
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  '#${order.id.length > 6 ? order.id.substring(order.id.length - 6).toUpperCase() : order.id.toUpperCase()} · ${_secs ?? '—'}s to answer',
+                  ringing
+                      ? '#${order.id.length > 6 ? order.id.substring(order.id.length - 6).toUpperCase() : order.id.toUpperCase()} · $ringLeft s ringing'
+                      : '#${order.id.length > 6 ? order.id.substring(order.id.length - 6).toUpperCase() : order.id.toUpperCase()} · ${offerTtl}s to answer',
                   style: TextStyle(
                     color: Colors.white.withValues(alpha: 0.55),
                     fontWeight: FontWeight.w700,
@@ -268,6 +280,8 @@ class _IncomingRideOverlayState extends State<IncomingRideOverlay>
           ],
         ),
       ),
+        );
+      },
     );
   }
 
