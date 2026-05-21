@@ -30,8 +30,8 @@ import '../../shared/widgets/legal_links.dart';
 import '../../shared/widgets/bytz_scaffold.dart';
 import '../../shared/widgets/ride_ui.dart';
 import 'delivery_pin_dialog.dart';
+import 'incoming_ride_alert.dart';
 import 'incoming_ride_overlay.dart';
-import 'incoming_ride_ring.dart';
 import 'rider_drive_hud.dart';
 import 'rider_drive_map_layer.dart';
 import 'rider_verification_section.dart';
@@ -48,7 +48,8 @@ class RiderShell extends StatefulWidget {
   State<RiderShell> createState() => _RiderShellState();
 }
 
-class _RiderShellState extends State<RiderShell> {
+class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
+  AppLifecycleState _lifecycle = AppLifecycleState.resumed;
   _RiderTab _tab = _RiderTab.drive;
   _DriveSheet _driveSheet = _DriveSheet.requests;
 
@@ -151,6 +152,10 @@ class _RiderShellState extends State<RiderShell> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    PushNotificationService.instance.onIncomingRidePush = (_) {
+      if (_isOnline && mounted) _refreshAll(silent: true);
+    };
     _isOnline = _user.isOnline == true;
     _profilePhone.text = _user.phone ?? '';
     _profileRegion = _user.region;
@@ -159,12 +164,36 @@ class _RiderShellState extends State<RiderShell> {
       _wireSocket();
       _refreshAll();
       _startLocationStream();
-      if (_isOnline) _startPolling();
+      if (_isOnline) {
+        _startPolling();
+        unawaited(PushNotificationService.instance.ensureRegistered(
+          api: context.read<ApiClient>(),
+          session: context.read<Session>(),
+        ));
+      }
     });
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _lifecycle = state;
+    final order = _incoming;
+    if (order == null) return;
+    if (state == AppLifecycleState.resumed) {
+      unawaited(
+        PushNotificationService.instance.cancelIncomingRide(order.id),
+      );
+    } else if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.hidden) {
+      unawaited(IncomingRideAlert.raise(order, showNotification: true));
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    PushNotificationService.instance.onIncomingRidePush = null;
     _posSub?.cancel();
     _pollTimer?.cancel();
     _offerTimer?.cancel();
@@ -175,7 +204,7 @@ class _RiderShellState extends State<RiderShell> {
     _withdrawAccName.dispose();
     _withdrawAccNum.dispose();
     _profilePhone.dispose();
-    IncomingRideRing.stop();
+    unawaited(IncomingRideAlert.dismiss());
     _socket.clearHandlers();
     super.dispose();
   }
@@ -187,6 +216,8 @@ class _RiderShellState extends State<RiderShell> {
       _tab = _RiderTab.drive;
       _driveSheet = _DriveSheet.requests;
     });
+    final bg = _lifecycle != AppLifecycleState.resumed;
+    unawaited(IncomingRideAlert.raise(order, showNotification: bg));
   }
 
   void _trackOffers(List<Order> orders) {
@@ -216,6 +247,7 @@ class _RiderShellState extends State<RiderShell> {
           _incoming = null;
           _alertedOfferIds.clear();
           _stopPolling();
+          unawaited(IncomingRideAlert.dismiss());
         }
       });
       if (reason != null && reason.isNotEmpty && status == 'rejected') {
@@ -230,7 +262,7 @@ class _RiderShellState extends State<RiderShell> {
     _socket.onRideTaken = (orderId) {
       if (!mounted) return;
       final wasIncoming = _incoming?.id == orderId;
-      if (wasIncoming) IncomingRideRing.stop();
+      if (wasIncoming) unawaited(IncomingRideAlert.dismiss(orderId: orderId));
       setState(() {
         if (wasIncoming) _incoming = null;
         _orders = _orders
@@ -248,7 +280,7 @@ class _RiderShellState extends State<RiderShell> {
           order,
         ];
         if (_incoming?.id == order.id && !isOfferableOrder(order)) {
-          IncomingRideRing.stop();
+          unawaited(IncomingRideAlert.dismiss(orderId: order.id));
           _incoming = null;
         }
         if (order.riderId == _user.id && order.status != 'delivered') {
@@ -356,6 +388,7 @@ class _RiderShellState extends State<RiderShell> {
         if (!_isOnline) {
           _incoming = null;
           _alertedOfferIds.clear();
+          unawaited(IncomingRideAlert.dismiss());
         }
       });
       if (online) {
@@ -388,7 +421,7 @@ class _RiderShellState extends State<RiderShell> {
         currentStatus: order.status,
       );
       if (!mounted) return;
-      IncomingRideRing.stop();
+      unawaited(IncomingRideAlert.dismiss(orderId: order.id));
       setState(() {
         _incoming = null;
         _orders = [
@@ -412,7 +445,7 @@ class _RiderShellState extends State<RiderShell> {
   Future<void> _declineRide() async {
     final order = _incoming;
     if (order == null) return;
-    IncomingRideRing.stop();
+    unawaited(IncomingRideAlert.dismiss(orderId: order.id));
     try {
       await _ordersRepo.declineOrder(order.id);
       if (!mounted) return;

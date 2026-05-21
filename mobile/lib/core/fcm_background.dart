@@ -2,10 +2,12 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:flutter_ringtone_player/flutter_ringtone_player.dart';
 
 import '../firebase_options.dart';
+import 'incoming_ride_notifications.dart';
 
-/// Shows alerts when FCM arrives while the app is backgrounded or the screen is off.
+/// FCM while app is backgrounded or screen is off — alarm notification + ringtone.
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -15,55 +17,57 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     );
   }
 
+  final type = message.data['type']?.toString() ?? '';
+  final isRide = type == 'incoming-ride';
+  final orderId = message.data['orderId']?.toString() ?? '';
+  final title = message.notification?.title ??
+      message.data['title']?.toString() ??
+      (isRide ? 'Incoming delivery job' : 'BytzGo');
+  final body = message.notification?.body ??
+      message.data['body']?.toString() ??
+      'Open BytzGo to accept';
+
+  if (isRide) {
+    try {
+      await FlutterRingtonePlayer().play(
+        android: AndroidSounds.ringtone,
+        ios: IosSounds.bell,
+        looping: true,
+        volume: 1.0,
+        asAlarm: true,
+      );
+    } catch (_) {}
+  }
+
   final plugin = FlutterLocalNotificationsPlugin();
   const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
   await plugin.initialize(const InitializationSettings(android: androidInit));
 
-  const tripChannel = AndroidNotificationChannel(
-    'trip_updates',
-    'Trip & chat alerts',
-    description: 'Biker ETA, trip status, and chat messages',
-    importance: Importance.max,
-    playSound: true,
-    enableVibration: true,
-  );
-  const rideChannel = AndroidNotificationChannel(
-    'incoming_rides',
-    'Incoming delivery jobs',
-    description: 'Alerts when a new ride is offered — works when screen is off',
-    importance: Importance.max,
-    playSound: true,
-    enableVibration: true,
-  );
   final android = plugin.resolvePlatformSpecificImplementation<
       AndroidFlutterLocalNotificationsPlugin>();
-  await android?.createNotificationChannel(tripChannel);
-  await android?.createNotificationChannel(rideChannel);
+  await android?.createNotificationChannel(kIncomingRideChannel);
+  await android?.createNotificationChannel(kTripChannel);
 
-  final title = message.notification?.title ?? 'BytzGo';
-  final body = message.notification?.body ?? 'Open BytzGo to view';
-  final type = message.data['type']?.toString() ?? '';
-  final isRide = type == 'incoming-ride';
-  final channelId = isRide ? 'incoming_rides' : 'trip_updates';
+  final channelId = isRide ? incomingRideChannelId : kTripChannel.id;
+  final notifId = isRide && orderId.isNotEmpty
+      ? incomingRideNotificationId(orderId)
+      : message.hashCode;
 
   await plugin.show(
-    message.hashCode,
+    notifId,
     title,
     body,
     NotificationDetails(
-      android: AndroidNotificationDetails(
-        channelId,
-        isRide ? rideChannel.name : tripChannel.name,
-        channelDescription: isRide ? rideChannel.description : tripChannel.description,
-        importance: Importance.max,
-        priority: Priority.max,
-        visibility: NotificationVisibility.public,
-        fullScreenIntent: isRide,
-        category: isRide
-            ? AndroidNotificationCategory.call
-            : AndroidNotificationCategory.message,
-        ticker: title,
-      ),
+      android: isRide
+          ? incomingRideAndroidDetails()
+          : AndroidNotificationDetails(
+              kTripChannel.id,
+              kTripChannel.name,
+              channelDescription: kTripChannel.description,
+              importance: Importance.max,
+              priority: Priority.high,
+              visibility: NotificationVisibility.public,
+            ),
     ),
   );
 }

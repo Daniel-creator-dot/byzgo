@@ -136,7 +136,12 @@ app.use(express.json({ limit: '12mb' }));
 app.use(express.urlencoded({ extended: true, limit: '12mb' }));
 
 app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, service: 'bytzgo-api', client: 'flutter' });
+  res.json({
+    ok: true,
+    service: 'bytzgo-api',
+    client: 'flutter',
+    fcm: firebaseAdminHasCredentials,
+  });
 });
 
 app.get('/', (_req, res) => {
@@ -1308,7 +1313,7 @@ type PushAlert = {
   body: string;
   type: string;
   orderId?: string;
-  channelId?: 'incoming_rides' | 'trip_updates';
+  channelId?: 'incoming_rides_alarm' | 'trip_updates';
   highPriority?: boolean;
 };
 
@@ -1383,6 +1388,7 @@ async function sendPushToUserIds(userIds: string[], alert: PushAlert) {
           priority: high ? ('max' as const) : ('default' as const),
           visibility: 'public',
           defaultVibrateTimings: true,
+          ...(high && alert.orderId ? { tag: `ride-${alert.orderId}` } : {}),
         },
       },
       apns: {
@@ -1413,7 +1419,7 @@ async function sendPushToRiders(order: any, riderIds: string[]) {
     body: `${pickup} → ${dropoff}`,
     type: 'incoming-ride',
     orderId: order.id,
-    channelId: 'incoming_rides',
+    channelId: 'incoming_rides_alarm',
     highPriority: true,
   });
 }

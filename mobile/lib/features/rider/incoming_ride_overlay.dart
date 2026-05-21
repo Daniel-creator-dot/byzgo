@@ -7,8 +7,6 @@ import '../../shared/format.dart';
 import '../../shared/rider_trip.dart';
 import '../../shared/theme.dart';
 import '../../shared/widgets/ride_ui.dart';
-import 'incoming_ride_ring.dart';
-
 /// Full-screen incoming call UI (parity with web `IncomingRideCallModal`).
 class IncomingRideOverlay extends StatefulWidget {
   const IncomingRideOverlay({
@@ -40,7 +38,6 @@ class _IncomingRideOverlayState extends State<IncomingRideOverlay>
   @override
   void initState() {
     super.initState();
-    IncomingRideRing.start();
     _pulseCtrl = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 2000),
@@ -68,12 +65,10 @@ class _IncomingRideOverlayState extends State<IncomingRideOverlay>
   }
 
   void _handleDecline() {
-    IncomingRideRing.stop();
     widget.onDecline();
   }
 
   void _handleAccept() {
-    IncomingRideRing.stop();
     widget.onAccept();
   }
 
@@ -82,7 +77,6 @@ class _IncomingRideOverlayState extends State<IncomingRideOverlay>
     _tick?.cancel();
     _pulseCtrl.dispose();
     _phoneCtrl.dispose();
-    IncomingRideRing.stop();
     super.dispose();
   }
 
