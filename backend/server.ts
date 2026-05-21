@@ -15,6 +15,7 @@ import axios from 'axios';
 import { OAuth2Client } from 'google-auth-library';
 import webpush from 'web-push';
 import crypto from 'crypto';
+import sharp from 'sharp';
 
 dotenv.config({ path: path.join(__dirname, '.env') });
 dotenv.config({ path: path.join(__dirname, '..', '.env.local') });
@@ -120,7 +121,9 @@ const io = new Server(httpServer, {
 });
 
 app.use(cors());
-app.use(express.json());
+// Product photos are stored as data URLs in JSON — need headroom beyond default 100kb.
+app.use(express.json({ limit: '12mb' }));
+app.use(express.urlencoded({ extended: true, limit: '12mb' }));
 
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true, service: 'bytzgo-api', client: 'flutter' });
@@ -855,6 +858,7 @@ function sanitizeOrderForRole(order: any, role: string, userId: string) {
   }
   if (o.customer_name) o.customerName = o.customer_name;
   if (o.rider_name) o.riderName = o.rider_name;
+  if (o.vendor_name) o.vendorName = o.vendor_name;
 
   if (tripAllowsContact(o)) {
     if (role === 'customer' && o.customer_id === userId && o.rider_phone) {
@@ -874,10 +878,12 @@ function sanitizeOrderForRole(order: any, role: string, userId: string) {
 
 const ORDER_CONTACT_JOINS = `
   LEFT JOIN users cu ON cu.id = o.customer_id
-  LEFT JOIN users ru ON ru.id = o.rider_id`;
+  LEFT JOIN users ru ON ru.id = o.rider_id
+  LEFT JOIN users vu ON vu.id = o.vendor_id`;
 const ORDER_CONTACT_SELECT = `
   cu.name AS customer_name, cu.phone AS customer_phone,
-  ru.name AS rider_name, ru.phone AS rider_phone`;
+  ru.name AS rider_name, ru.phone AS rider_phone,
+  vu.name AS vendor_name`;
 
 function isCustomerPaymentReady(order: any): boolean {
   if (order.payment_status === 'paid') return true;
@@ -922,6 +928,12 @@ async function broadcastOrderUpdated(order: any) {
     io.to(full.rider_id).emit(
       'order:updated',
       sanitizeOrderForRole(full, 'rider', full.rider_id)
+    );
+  }
+  if (full.vendor_id) {
+    io.to(full.vendor_id).emit(
+      'order:updated',
+      sanitizeOrderForRole(full, 'vendor', full.vendor_id)
     );
   }
   void notifyCustomerTripPush(full);
@@ -1396,17 +1408,41 @@ async function sendPushToRiders(order: any, riderIds: string[]) {
   });
 }
 
+function shopLabelForOrder(order: any): string {
+  const name = String(order.vendor_name || order.vendorName || '').trim();
+  if (name) return name;
+  const pickup = String(order.pickup_address || order.pickup || '').trim();
+  if (pickup) return pickup.length > 48 ? `${pickup.slice(0, 45)}…` : pickup;
+  return 'the shop';
+}
+
+function isShopCourierOrder(order: any): boolean {
+  return Boolean(order?.vendor_id);
+}
+
 async function notifyCustomerTripPush(order: any) {
   if (!order?.customer_id) return;
   const status = String(order.status || '');
+  const shopTrip = isShopCourierOrder(order);
+  const shopLabel = shopTrip ? shopLabelForOrder(order) : '';
   let title = 'BytzGO';
   let body = '';
   if (order.rider_id && ['pending', 'ready', 'preparing'].includes(status)) {
-    title = 'Biker on the way';
-    body = 'Your biker is heading to the pickup point';
+    if (shopTrip) {
+      title = 'Rider heading to shop';
+      body = `Your rider is going to ${shopLabel} to pick up your order`;
+    } else {
+      title = 'Biker on the way';
+      body = 'Your biker is heading to the pickup point';
+    }
   } else if (status === 'picked_up') {
-    title = 'On the way';
-    body = 'Your biker is heading to your delivery address';
+    if (shopTrip) {
+      title = 'Picked up from shop';
+      body = `Collected at ${shopLabel} — on the way to you`;
+    } else {
+      title = 'On the way';
+      body = 'Your biker is heading to your delivery address';
+    }
   } else if (status === 'arrived') {
     title = 'Biker arrived';
     body = 'Complete payment to get your delivery PIN';
@@ -2254,11 +2290,37 @@ app.get('/api/wallet', authenticateToken, async (req: any, res) => {
   }
 });
 
-// File Upload (returns Base64 Data URL to be stored in DB)
-app.post('/api/upload', authenticateToken, upload.single('image'), (req: any, res) => {
-  if (!req.file) return res.status(400).json({ message: 'No file uploaded' });
-  const base64 = `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`;
-  res.json({ url: base64 });
+/** Resize product photos so PATCH /products JSON stays under proxy limits. */
+async function productImageDataUrl(buffer: Buffer, mime?: string): Promise<string> {
+  try {
+    const out = await sharp(buffer)
+      .rotate()
+      .resize(800, 800, { fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 72, mozjpeg: true })
+      .toBuffer();
+    return `data:image/jpeg;base64,${out.toString('base64')}`;
+  } catch (err) {
+    console.warn('[upload] sharp compress failed, using original:', (err as Error).message);
+    const type = mime?.startsWith('image/') ? mime : 'image/jpeg';
+    return `data:${type};base64,${buffer.toString('base64')}`;
+  }
+}
+
+// File Upload (returns compressed Base64 Data URL to be stored in DB)
+app.post('/api/upload', authenticateToken, upload.single('image'), async (req: any, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ message: 'No file uploaded' });
+    const base64 = await productImageDataUrl(req.file.buffer, req.file.mimetype);
+    if (base64.length > 900_000) {
+      return res.status(413).json({
+        message: 'Image is still too large after compression. Try a smaller photo.',
+      });
+    }
+    res.json({ url: base64 });
+  } catch (err) {
+    console.error('Product image upload error:', err);
+    res.status(500).json({ message: 'Image upload failed' });
+  }
 });
 
 // Rider KYC documents (JPEG only)

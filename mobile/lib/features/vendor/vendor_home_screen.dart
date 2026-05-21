@@ -5,6 +5,8 @@ import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/session.dart';
+import '../../core/socket_service.dart';
+import '../../models/order.dart';
 import '../../models/product.dart';
 import '../../shared/format.dart';
 import '../../shared/shop_categories.dart';
@@ -37,10 +39,12 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
   List<Product> _menuProducts = [];
   bool _menuLoading = false;
   Timer? _menuSearchDebounce;
+  SocketService? _socket;
 
   @override
   void initState() {
     super.initState();
+    _wireSocket();
     _load();
   }
 
@@ -48,7 +52,30 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
   void dispose() {
     _menuSearchDebounce?.cancel();
     _menuSearch.dispose();
+    _socket?.onOrderUpdated = null;
     super.dispose();
+  }
+
+  void _wireSocket() {
+    final userId = context.read<Session>().user?.id;
+    if (userId == null) return;
+    _socket = context.read<SocketService>();
+    _socket!.onOrderUpdated = (Order order) {
+      if (!mounted) return;
+      if (order.vendorId != userId) return;
+      if (order.status == 'picked_up') {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Rider picked up order #${order.id.length > 6 ? order.id.substring(order.id.length - 6) : order.id}'),
+            behavior: SnackBarBehavior.floating,
+            backgroundColor: BytzGoTheme.accentDark,
+          ),
+        );
+      }
+      if (_tab == _VendorTab.orders || _tab == _VendorTab.overview) {
+        unawaited(_load());
+      }
+    };
   }
 
   Future<void> _loadMenuProducts({String? query, bool append = false}) async {

@@ -72,6 +72,13 @@ class CustomerDeliveryTracker extends StatelessWidget {
           distanceKm: dist,
           searching: searching,
         ),
+        if (customerOrderHasShopPickup(order) &&
+            order.riderId != null &&
+            !searching &&
+            const {'ready', 'preparing', 'pending', 'picked_up'}.contains(order.status)) ...[
+          const SizedBox(height: 10),
+          _ShopPickupUpdateBanner(order: order),
+        ],
         if (hasRider && order.riderName != null && order.riderName!.isNotEmpty) ...[
           const SizedBox(height: 10),
           _RiderLiveCard(
@@ -119,6 +126,72 @@ class CustomerDeliveryTracker extends StatelessWidget {
           _DeliveredBanner(),
         ],
       ],
+    );
+  }
+}
+
+/// Live shop pickup status — rider at vendor before delivery leg.
+class _ShopPickupUpdateBanner extends StatelessWidget {
+  const _ShopPickupUpdateBanner({required this.order});
+
+  final Order order;
+
+  @override
+  Widget build(BuildContext context) {
+    final shop = customerShopLabel(order);
+    final pickedUp = order.status == 'picked_up';
+    final headingToShop = !pickedUp &&
+        order.riderId != null &&
+        const {'ready', 'preparing', 'pending'}.contains(order.status);
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: pickedUp
+            ? BytzGoTheme.accent.withValues(alpha: 0.14)
+            : BytzGoTheme.brandBlue.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: pickedUp
+              ? BytzGoTheme.accent.withValues(alpha: 0.4)
+              : BytzGoTheme.brandBlue.withValues(alpha: 0.28),
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            pickedUp ? Icons.check_circle_outline : Icons.storefront_outlined,
+            size: 22,
+            color: pickedUp ? BytzGoTheme.accentDark : BytzGoTheme.brandBlue,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  pickedUp ? 'Picked up from shop' : 'Rider collecting at shop',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 13,
+                    color: BytzGoTheme.sheetText,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  pickedUp
+                      ? 'Your order was collected at $shop. Track the rider on the map — they are heading to you.'
+                      : headingToShop
+                          ? 'Your rider is on the way to $shop to pick up your items. You will get another update when they leave the shop.'
+                          : 'Shop pickup in progress at $shop.',
+                  style: BytzGoTheme.sheetBody(12),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -446,7 +519,7 @@ class _StatusHero extends StatelessWidget {
                 if (distanceKm != null && order.riderId != null && !isSearching) ...[
                   const SizedBox(height: 6),
                   Text(
-                    'On radar · ${distanceKm!.toStringAsFixed(1)} km to ${order.status == 'picked_up' ? 'you' : 'pickup'}',
+                    'On radar · ${distanceKm!.toStringAsFixed(1)} km to ${order.status == 'picked_up' ? 'you' : (customerOrderHasShopPickup(order) ? 'shop' : 'pickup')}',
                     style: const TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.w800,

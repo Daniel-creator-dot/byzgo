@@ -60,6 +60,7 @@ class Order {
     this.customerPhone,
     this.riderPhone,
     this.riderName,
+    this.vendorName,
 
   });
 
@@ -121,7 +122,11 @@ class Order {
 
   final String? riderName;
 
+  final String? vendorName;
+
   bool get isCourier => orderType == 'courier';
+
+  bool get hasShopPickup => vendorId.trim().isNotEmpty;
 
 
 
@@ -204,6 +209,8 @@ class Order {
       riderPhone: (json['riderPhone'] ?? json['rider_phone'])?.toString(),
 
       riderName: (json['riderName'] ?? json['rider_name'])?.toString(),
+
+      vendorName: (json['vendorName'] ?? json['vendor_name'])?.toString(),
 
     );
 

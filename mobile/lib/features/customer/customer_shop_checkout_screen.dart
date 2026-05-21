@@ -313,6 +313,29 @@ class _RouteCard extends StatelessWidget {
               address: destination?.address ?? 'Select delivery address',
               muted: destination == null,
             ),
+            const SizedBox(height: 12),
+            const Divider(height: 1),
+            const SizedBox(height: 10),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(
+                  Icons.delivery_dining_outlined,
+                  size: 20,
+                  color: BytzGoTheme.brandBlue.withValues(alpha: 0.9),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'When your request goes through, a rider heads to $shopName first to pick up your order, then delivers to you.',
+                    style: BytzGoTheme.sheetBody(12).copyWith(
+                      color: BytzGoTheme.sheetText,
+                      height: 1.35,
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ],
         ),
       ),

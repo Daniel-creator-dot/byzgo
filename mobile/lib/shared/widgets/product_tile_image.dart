@@ -46,9 +46,11 @@ class ProductTileImage extends StatelessWidget {
     return keys.any(cat.contains);
   }
 
+  static const String pharmacyPillAsset = 'assets/branding/pharmacy_pill.png';
+
   static IconData placeholderIcon(Vendor vendor, Product product) {
     if (isPharmacyContext(vendor, product)) {
-      return Icons.medication_liquid_outlined;
+      return Icons.medication_outlined;
     }
     final shop = ShopCategory.normalizeVendorCategory(vendor.shopCategory);
     switch (shop) {
@@ -77,8 +79,7 @@ class ProductTileImage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final url = product.imageUrl?.trim();
-    final useLogo = isPrimeCareVendor(vendor) &&
-        (url == null || url.isEmpty);
+    final pharmacy = isPharmacyContext(vendor, product);
 
     return ClipRRect(
       borderRadius: BorderRadius.circular(12),
@@ -92,20 +93,21 @@ class ProductTileImage extends StatelessWidget {
                 width: size,
                 height: size,
                 fit: BoxFit.cover,
-                errorBuilder: (_, __, ___) => _placeholder(useLogo: useLogo),
+                errorBuilder: (_, __, ___) => _placeholder(pharmacy: pharmacy),
               )
-            : _placeholder(useLogo: useLogo),
+            : _placeholder(pharmacy: pharmacy),
       ),
     );
   }
 
-  Widget _placeholder({required bool useLogo}) {
-    if (useLogo) {
+  Widget _placeholder({required bool pharmacy}) {
+    if (pharmacy) {
       return Padding(
-        padding: const EdgeInsets.all(6),
+        padding: EdgeInsets.all(size * 0.12),
         child: Image.asset(
-          'assets/branding/primecare_logo.png',
+          pharmacyPillAsset,
           fit: BoxFit.contain,
+          errorBuilder: (_, __, ___) => _pharmacyIconFallback(),
         ),
       );
     }
@@ -115,6 +117,17 @@ class ProductTileImage extends StatelessWidget {
         placeholderIcon(vendor, product),
         color: tint,
         size: size * 0.42,
+      ),
+    );
+  }
+
+  Widget _pharmacyIconFallback() {
+    final tint = placeholderTint(vendor, product);
+    return Center(
+      child: Icon(
+        Icons.medication_outlined,
+        color: tint,
+        size: size * 0.44,
       ),
     );
   }

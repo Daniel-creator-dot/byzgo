@@ -58,6 +58,7 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
   final _pickupCtrl = TextEditingController();
   final _dropoffCtrl = TextEditingController();
   final _itemCtrl = TextEditingController(text: 'Package');
+  final _sheetScrollCtrl = ScrollController();
 
   LocationPoint? _pickup;
   LocationPoint? _destination;
@@ -258,6 +259,7 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
         _surgeActive = q.surgeActive;
         _quoteLoading = false;
       });
+      _revealQuoteInSheet();
     } catch (_) {
       if (!mounted) return;
       setState(() => _quoteLoading = false);
@@ -273,10 +275,23 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
       _socket?.removeOrderMessageListener(_chatNotifyHandler!);
     }
     _socket?.clearHandlers();
+    _sheetScrollCtrl.dispose();
     _pickupCtrl.dispose();
     _dropoffCtrl.dispose();
     _itemCtrl.dispose();
     super.dispose();
+  }
+
+  void _revealQuoteInSheet() {
+    if (!_sheetScrollCtrl.hasClients) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_sheetScrollCtrl.hasClients) return;
+      _sheetScrollCtrl.animateTo(
+        _sheetScrollCtrl.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 320),
+        curve: Curves.easeOutCubic,
+      );
+    });
   }
 
   void _wireSocket() {
@@ -315,16 +330,23 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
             highPriority: true,
           ));
         } else if (order.riderId != null && prev?.riderId == null) {
+          final shop = customerOrderHasShopPickup(order);
           unawaited(PushNotificationService.instance.showTripAlert(
-            title: 'Biker found',
-            body: 'Your biker is on the way',
+            title: shop ? 'Rider heading to shop' : 'Biker found',
+            body: shop
+                ? 'Going to ${customerShopLabel(order)} to pick up your order'
+                : 'Your biker is on the way',
             orderId: order.id,
           ));
         } else if (order.status == 'picked_up' && prev?.status != 'picked_up') {
+          final shop = customerOrderHasShopPickup(order);
           unawaited(PushNotificationService.instance.showTripAlert(
-            title: 'On the way',
-            body: 'Your biker is heading to your address',
+            title: shop ? 'Picked up from shop' : 'On the way',
+            body: shop
+                ? 'Collected at ${customerShopLabel(order)} — heading to you'
+                : 'Your biker is heading to your address',
             orderId: order.id,
+            highPriority: true,
           ));
         }
       }
@@ -332,8 +354,24 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
         _snack('Delivered — thanks for using BytzGO!', success: true);
       } else if (order.status == 'arrived' && prev?.status != 'arrived') {
         _snack('Driver arrived — complete payment for your PIN', success: true);
+      } else if (order.status == 'picked_up' && prev?.status != 'picked_up') {
+        if (customerOrderHasShopPickup(order)) {
+          _snack(
+            'Picked up at ${customerShopLabel(order)} — rider is on the way to you',
+            success: true,
+          );
+        } else {
+          _snack('Picked up — heading to your address', success: true);
+        }
       } else if (order.riderId != null && prev?.riderId == null) {
-        _snack('Biker found — they\'re on the way', success: true);
+        if (customerOrderHasShopPickup(order)) {
+          _snack(
+            'Rider found — heading to ${customerShopLabel(order)} to collect your order',
+            success: true,
+          );
+        } else {
+          _snack('Biker found — they\'re on the way', success: true);
+        }
       }
       _syncNearbyPoll();
       _syncEtaPoll(order);
@@ -828,17 +866,41 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
             )
           : null,
       sheet: RideSheet(
+        scrollController: _sheetScrollCtrl,
         maxHeightFraction: tracking
             ? (widget.embedded ? 0.48 : 0.52)
-            : (widget.embedded ? 0.58 : 0.72),
-        bottomInset: widget.embedded ? 4 : 0,
+            : (widget.embedded ? (fee > 0 ? 0.64 : 0.58) : (fee > 0 ? 0.78 : 0.72)),
+        bottomInset: widget.embedded ? 12 : 0,
         padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+        footerPadding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+        scrollBottomPadding: !tracking && fee > 0 ? 12 : 0,
         footer: !tracking
-            ? RidePrimaryButton(
-                label: fee > 0 ? 'Request bike · ${formatCedis(fee)}' : 'Request bike',
-                icon: Icons.two_wheeler,
-                loading: _booking,
-                onPressed: _requestDelivery,
+            ? Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  RideAnimatedReveal(
+                    visible: fee > 0,
+                    child: Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: DeliveryQuoteCard(
+                        key: ValueKey('fee-$fee-$_surgeActive'),
+                        fee: fee,
+                        distanceKm: _routeDistanceKm,
+                        surgeActive: _surgeActive,
+                        loading: _quoteLoading,
+                      ),
+                    ),
+                  ),
+                  RidePrimaryButton(
+                    label: fee > 0
+                        ? 'Request bike · ${formatCedis(fee)}'
+                        : 'Request bike',
+                    icon: Icons.two_wheeler,
+                    loading: _booking,
+                    onPressed: _requestDelivery,
+                  ),
+                ],
               )
             : null,
         child: Column(
@@ -953,17 +1015,6 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
               PackageTypeSelector(
                 selected: _packageType,
                 onSelected: (v) => setState(() => _itemCtrl.text = v),
-              ),
-              const SizedBox(height: 12),
-              RideAnimatedReveal(
-                visible: fee > 0,
-                child: DeliveryQuoteCard(
-                  key: ValueKey('fee-$fee-$_surgeActive'),
-                  fee: fee,
-                  distanceKm: _routeDistanceKm,
-                  surgeActive: _surgeActive,
-                  loading: _quoteLoading,
-                ),
               ),
             ],
             if (_loading)

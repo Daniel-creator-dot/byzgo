@@ -44,6 +44,10 @@ class ApiClient {
   }
 
   static String messageFromDio(DioException err, [String fallback = 'Something went wrong']) {
+    final status = err.response?.statusCode;
+    if (status == 413) {
+      return 'Photo or request is too large. Use a smaller image, or save without changing the photo.';
+    }
     final data = err.response?.data;
     if (data is Map) {
       final m = data['message'] ?? data['error'];

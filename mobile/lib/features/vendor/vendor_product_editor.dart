@@ -41,6 +41,7 @@ class _VendorProductEditorSheetState extends State<_VendorProductEditorSheet> {
 
   String _category = 'Pharmacy';
   String? _imageUrl;
+  bool _imageChanged = false;
   String? _localImagePath;
   bool _uploading = false;
   bool _saving = false;
@@ -85,9 +86,9 @@ class _VendorProductEditorSheetState extends State<_VendorProductEditorSheet> {
     try {
       final file = await _picker.pickImage(
         source: source,
-        maxWidth: 1200,
-        maxHeight: 1200,
-        imageQuality: 85,
+        maxWidth: 800,
+        maxHeight: 800,
+        imageQuality: 65,
         requestFullMetadata: false,
       );
       if (file == null) return;
@@ -100,6 +101,7 @@ class _VendorProductEditorSheetState extends State<_VendorProductEditorSheet> {
       if (!mounted) return;
       setState(() {
         _imageUrl = url;
+        _imageChanged = true;
         _uploading = false;
       });
     } catch (e) {
@@ -174,7 +176,7 @@ class _VendorProductEditorSheetState extends State<_VendorProductEditorSheet> {
           description: _description.text.trim(),
           price: price,
           category: _category,
-          imageUrl: _imageUrl!,
+          imageUrl: _imageChanged ? _imageUrl : null,
         );
       } else {
         await repo.createProduct(

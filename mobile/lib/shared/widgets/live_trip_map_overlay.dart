@@ -68,7 +68,9 @@ class LiveTripMapHud extends StatelessWidget {
               bottom: 12,
               child: _DistanceRadarPill(
                 distanceKm: dist,
-                label: order.status == 'picked_up' ? 'To you' : 'To pickup',
+                label: order.status == 'picked_up'
+                    ? 'To you'
+                    : (customerOrderHasShopPickup(order) ? 'To shop' : 'To pickup'),
               ),
             ),
           if (searching)

@@ -150,21 +150,24 @@ class VendorRepository {
     required String description,
     required double price,
     required String category,
-    required String imageUrl,
+    String? imageUrl,
   }) async {
+    final data = <String, dynamic>{
+      'name': name,
+      'description': description,
+      'price': price,
+      'category': category,
+    };
+    if (imageUrl != null && imageUrl.isNotEmpty) {
+      data['image_url'] = imageUrl;
+    }
     final res = await _api.dio.patch<Map<String, dynamic>>(
       '/api/products/$productId',
-      data: {
-        'name': name,
-        'description': description,
-        'price': price,
-        'category': category,
-        'image_url': imageUrl,
-      },
+      data: data,
     );
-    final data = res.data;
-    if (data == null) throw Exception('Empty product response');
-    return Product.fromJson(Map<String, dynamic>.from(data));
+    final body = res.data;
+    if (body == null) throw Exception('Empty product response');
+    return Product.fromJson(Map<String, dynamic>.from(body));
   }
 
   Future<void> deleteProduct(String productId) async {

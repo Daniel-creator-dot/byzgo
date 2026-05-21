@@ -62,6 +62,8 @@ class RideSheet extends StatelessWidget {
     this.footer,
     this.padding = const EdgeInsets.fromLTRB(20, 8, 20, 12),
     this.footerPadding = const EdgeInsets.fromLTRB(20, 0, 20, 12),
+    this.scrollBottomPadding = 0,
+    this.scrollController,
     this.maxHeightFraction = 0.62,
     this.bottomInset = 0,
     this.minSheetHeight = 220,
@@ -72,6 +74,9 @@ class RideSheet extends StatelessWidget {
   final Widget? footer;
   final EdgeInsetsGeometry padding;
   final EdgeInsetsGeometry footerPadding;
+  /// Extra space at the end of the scroll body so content is not hidden above [footer].
+  final double scrollBottomPadding;
+  final ScrollController? scrollController;
   /// Max fraction of screen height for the whole sheet (handle + body + footer).
   final double maxHeightFraction;
   /// Subtract from max height (e.g. tab bar overlap).
@@ -132,17 +137,22 @@ class RideSheet extends StatelessWidget {
               const SizedBox(height: 8),
               Expanded(
                 child: SingleChildScrollView(
+                  controller: scrollController,
                   physics: const BouncingScrollPhysics(
                     parent: AlwaysScrollableScrollPhysics(),
                   ),
-                  padding: padding,
+                  padding: padding.add(
+                    EdgeInsets.only(bottom: scrollBottomPadding),
+                  ),
                   child: child,
                 ),
               ),
               if (footer != null)
                 Padding(
                   padding: footerPadding.add(
-                    EdgeInsets.only(bottom: media.padding.bottom * 0.15),
+                    EdgeInsets.only(
+                      bottom: 8 + media.padding.bottom,
+                    ),
                   ),
                   child: footer!,
                 ),
