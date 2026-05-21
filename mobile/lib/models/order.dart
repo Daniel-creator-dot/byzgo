@@ -48,6 +48,8 @@ class Order {
 
     this.dispatchWave,
 
+    this.offerDistanceKm,
+
     this.paymentStatus,
 
     this.paymentMethod,
@@ -105,6 +107,9 @@ class Order {
   final String? expiresAt;
 
   final int? dispatchWave;
+
+  /// Distance from this rider to pickup (km), set on `ride:incoming`.
+  final double? offerDistanceKm;
 
   final String? paymentStatus;
 
@@ -193,6 +198,10 @@ class Order {
       expiresAt: (json['expiresAt'] ?? json['expires_at'])?.toString(),
 
       dispatchWave: parseJsonInt(json['dispatchWave'] ?? json['dispatch_wave']),
+
+      offerDistanceKm: parseJsonDouble(
+        json['offerDistanceKm'] ?? json['offer_distance_km'] ?? json['pickupDistanceKm'] ?? json['pickup_distance_km'],
+      ),
 
       paymentStatus: json['payment_status']?.toString(),
 

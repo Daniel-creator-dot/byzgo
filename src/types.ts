@@ -34,6 +34,9 @@ export interface Order {
   /** ISO timestamp — active dispatch offer for this rider */
   expiresAt?: string;
   dispatchWave?: number;
+  /** km from rider to pickup when offered via dispatch */
+  offerDistanceKm?: number;
+  pickupDistanceKm?: number;
 }
 
 export interface Rider {

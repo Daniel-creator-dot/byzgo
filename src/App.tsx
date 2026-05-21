@@ -3262,8 +3262,14 @@ function IncomingRideCallModal({
             <h2 className="text-2xl font-black text-white mt-2 tracking-tight">
               {isCourier ? 'Courier mission' : 'Delivery pickup'}
             </h2>
+            {(order.offerDistanceKm ?? order.pickupDistanceKm) != null &&
+              (order.offerDistanceKm ?? order.pickupDistanceKm)! > 0 && (
+              <p className="text-brand-green text-base font-black mt-2">
+                {(order.offerDistanceKm ?? order.pickupDistanceKm)!.toFixed(1)} km to pickup
+              </p>
+            )}
             <p className="text-slate-400 text-sm font-bold mt-1">
-              #{order.id.slice(-6).toUpperCase()} ? {secondsLeft}s to respond
+              #{order.id.slice(-6).toUpperCase()} · {secondsLeft}s to respond
             </p>
           </div>
 

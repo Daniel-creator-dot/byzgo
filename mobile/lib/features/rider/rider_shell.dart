@@ -1285,6 +1285,17 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
           if (!order.isCourier && vendor != null)
             Text('Pickup: ${vendor.name}', style: BytzGoTheme.sheetBody(12)),
           Text('Drop-off: ${order.address}', style: BytzGoTheme.sheetBody(13)),
+          if (order.offerDistanceKm != null && order.offerDistanceKm! > 0) ...[
+            const SizedBox(height: 6),
+            Text(
+              '${order.offerDistanceKm!.toStringAsFixed(1)} km to pickup',
+              style: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+                color: BytzGoTheme.accentDark,
+              ),
+            ),
+          ],
           if (secs != null) ...[
             const SizedBox(height: 6),
             Text(

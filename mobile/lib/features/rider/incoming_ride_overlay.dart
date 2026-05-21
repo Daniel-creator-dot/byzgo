@@ -195,6 +195,18 @@ class _IncomingRideOverlayState extends State<IncomingRideOverlay>
                   ),
                 ),
                 const SizedBox(height: 6),
+                if (order.offerDistanceKm != null && order.offerDistanceKm! > 0)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: Text(
+                      '${order.offerDistanceKm!.toStringAsFixed(1)} km to pickup',
+                      style: const TextStyle(
+                        color: BytzGoTheme.accent,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 15,
+                      ),
+                    ),
+                  ),
                 Text(
                   ringing
                       ? '#${order.id.length > 6 ? order.id.substring(order.id.length - 6).toUpperCase() : order.id.toUpperCase()} · $ringLeft s ringing'

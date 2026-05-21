@@ -575,6 +575,12 @@ export function RiderApp({
                                 <Navigation size={14} className="text-brand-green shrink-0 mt-0.5" />
                                 Drop-off: {order.address}
                               </p>
+                              {(order.offerDistanceKm ?? order.pickupDistanceKm) != null &&
+                                (order.offerDistanceKm ?? order.pickupDistanceKm)! > 0 && (
+                                <p className="text-xs font-black text-brand-green mb-2">
+                                  {(order.offerDistanceKm ?? order.pickupDistanceKm)!.toFixed(1)} km to pickup
+                                </p>
+                              )}
                               {order.expiresAt && (
                                 <p className="text-[10px] font-black uppercase tracking-widest text-amber-400/90 mb-2">
                                   Offer expires in{' '}

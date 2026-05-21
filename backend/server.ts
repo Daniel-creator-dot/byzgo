@@ -1029,6 +1029,11 @@ const OFFER_TTL_SEC = 30;
 const RIDERS_PER_WAVE = 5;
 const MAX_DISPATCH_WAVES = 3;
 const LOCATION_MAX_AGE_MIN = 15;
+/** Pickup radius (km) per wave — nearest online riders first, then widen like Bolt. */
+const DISPATCH_RADIUS_KM_BY_WAVE = [6, 12, 25] as const;
+const NEARBY_RIDERS_MAX_KM = 8;
+
+type NearbyRider = { id: string; distanceKm: number };
 
 const dispatchWaveTimers = new Map<string, NodeJS.Timeout>();
 
@@ -1110,11 +1115,12 @@ async function queryNearestActiveRiders(
   region: string | null,
   excludeRiderIds: string[],
   limit: number,
+  maxRadiusKm: number,
   useRegionFilter: boolean
-): Promise<string[]> {
+): Promise<NearbyRider[]> {
   const norm = normalizeRegion(region);
   const regionClause = useRegionFilter && norm
-    ? `AND (u.region IS NULL OR TRIM(u.region) = '' OR LOWER(TRIM(u.region)) = $6)`
+    ? `AND (u.region IS NULL OR TRIM(u.region) = '' OR LOWER(TRIM(u.region)) = $7)`
     : '';
   const params: unknown[] = [
     pickup.lat,
@@ -1122,54 +1128,82 @@ async function queryNearestActiveRiders(
     excludeRiderIds.length ? excludeRiderIds : [],
     limit,
     LOCATION_MAX_AGE_MIN,
+    maxRadiusKm,
   ];
   if (useRegionFilter && norm) params.push(norm);
 
   const result = await pool.query(
-    `SELECT u.id,
-      (6371 * acos(
-        LEAST(1, GREATEST(-1,
-          cos(radians($1)) * cos(radians(rl.lat)) * cos(radians(rl.lng) - radians($2))
-          + sin(radians($1)) * sin(radians(rl.lat))
-        ))
-      )) AS distance_km
-     FROM users u
-     INNER JOIN rider_locations rl ON rl.rider_id = u.id
-     WHERE u.role = 'rider' AND u.status = 'active' AND u.is_online = true
-     AND rl.updated_at > NOW() - INTERVAL '1 minute' * $5
-     AND (COALESCE(array_length($3::uuid[], 1), 0) = 0 OR NOT (u.id = ANY($3::uuid[])))
-     ${regionClause}
+    `SELECT id, distance_km FROM (
+      SELECT u.id,
+        (6371 * acos(
+          LEAST(1, GREATEST(-1,
+            cos(radians($1)) * cos(radians(rl.lat)) * cos(radians(rl.lng) - radians($2))
+            + sin(radians($1)) * sin(radians(rl.lat))
+          ))
+        )) AS distance_km
+       FROM users u
+       INNER JOIN rider_locations rl ON rl.rider_id = u.id
+       WHERE u.role = 'rider' AND u.status = 'active' AND u.is_online = true
+       AND rl.updated_at > NOW() - INTERVAL '1 minute' * $5
+       AND (COALESCE(array_length($3::uuid[], 1), 0) = 0 OR NOT (u.id = ANY($3::uuid[])))
+       AND NOT EXISTS (
+         SELECT 1 FROM orders busy
+         WHERE busy.rider_id = u.id
+         AND busy.status IN ('ready', 'picked_up', 'arrived')
+       )
+       ${regionClause}
+     ) ranked
+     WHERE distance_km <= $6
      ORDER BY distance_km ASC
      LIMIT $4`,
     params
   );
-  return result.rows.map((row: { id: string }) => row.id);
+  return result.rows.map((row: { id: string; distance_km: string }) => ({
+    id: row.id,
+    distanceKm: parseFloat(row.distance_km),
+  }));
 }
 
 async function getNearestActiveRiders(
   pickup: { lat: number; lng: number },
   region: string | null,
   excludeRiderIds: string[],
-  limit: number
-): Promise<string[]> {
-  let ids = await queryNearestActiveRiders(pickup, region, excludeRiderIds, limit, true);
-  if (ids.length === 0 && normalizeRegion(region)) {
-    ids = await queryNearestActiveRiders(pickup, region, excludeRiderIds, limit, false);
+  limit: number,
+  maxRadiusKm: number = DISPATCH_RADIUS_KM_BY_WAVE[0]
+): Promise<NearbyRider[]> {
+  let riders = await queryNearestActiveRiders(
+    pickup,
+    region,
+    excludeRiderIds,
+    limit,
+    maxRadiusKm,
+    true
+  );
+  if (riders.length === 0 && normalizeRegion(region)) {
+    riders = await queryNearestActiveRiders(
+      pickup,
+      region,
+      excludeRiderIds,
+      limit,
+      maxRadiusKm,
+      false
+    );
   }
-  return ids;
+  return riders;
 }
 
-async function emitOffersToRiders(order: any, riderIds: string[], wave: number) {
-  const eligible = await filterIncomingRideRecipientIds(
-    riderIds,
+async function emitOffersToRiders(order: any, candidates: NearbyRider[], wave: number) {
+  const eligibleIds = await filterIncomingRideRecipientIds(
+    candidates.map((c) => c.id),
     order?.customer_id ?? null
   );
+  const eligible = candidates.filter((c) => eligibleIds.includes(c.id));
   if (!eligible.length) return 0;
 
   const expiresAt = new Date(Date.now() + OFFER_TTL_SEC * 1000);
   const orderPayload = { ...order };
 
-  for (const riderId of eligible) {
+  for (const { id: riderId, distanceKm } of eligible) {
     await pool.query(
       `INSERT INTO order_dispatch_offers (order_id, rider_id, wave, status, offered_at, expires_at)
        VALUES ($1, $2, $3, 'offered', CURRENT_TIMESTAMP, $4)
@@ -1180,17 +1214,23 @@ async function emitOffersToRiders(order: any, riderIds: string[], wave: number) 
          expires_at = EXCLUDED.expires_at`,
       [order.id, riderId, wave, expiresAt]
     );
+    const dist =
+      Number.isFinite(distanceKm) && distanceKm >= 0
+        ? Math.round(distanceKm * 10) / 10
+        : null;
     const payload = {
       ...orderPayload,
       expiresAt: expiresAt.toISOString(),
       dispatchWave: wave,
+      offerDistanceKm: dist,
+      pickupDistanceKm: dist,
     };
     io.to(String(riderId)).emit('ride:incoming', payload);
   }
 
   console.info(
-    `[dispatch] order ${order.id} wave ${wave}: notified ${eligible.length} rider(s)`,
-    eligible
+    `[dispatch] order ${order.id} wave ${wave}: notified ${eligible.length} nearby rider(s)`,
+    eligible.map((r) => `${r.id.slice(0, 8)}…${r.distanceKm.toFixed(1)}km`)
   );
 
   await sendPushToRiders(order, eligible);
@@ -1204,7 +1244,7 @@ async function emitOffersToRiders(order: any, riderIds: string[], wave: number) 
     void handleWaveExpired(order.id, wave);
   }, OFFER_TTL_SEC * 1000 + 500);
   dispatchWaveTimers.set(order.id, timer);
-  return riderIds.length;
+  return eligible.length;
 }
 
 async function handleWaveExpired(orderId: string, wave: number) {
@@ -1235,24 +1275,38 @@ async function advanceDispatchWave(order: any, wave: number) {
 
   const exclude = await getOfferedRiderIds(order.id);
   const pickup = await getPickupPoint(order);
+  const radiusKm =
+    DISPATCH_RADIUS_KM_BY_WAVE[
+      Math.min(wave - 1, DISPATCH_RADIUS_KM_BY_WAVE.length - 1)
+    ];
 
-  let riderIds: string[] = [];
+  let candidates: NearbyRider[] = [];
 
   if (pickup) {
-    riderIds = await getNearestActiveRiders(pickup, order.region, exclude, RIDERS_PER_WAVE);
+    candidates = await getNearestActiveRiders(
+      pickup,
+      order.region,
+      exclude,
+      RIDERS_PER_WAVE,
+      radiusKm
+    );
+  } else {
+    const fallback = (await getActiveRiderIds(order.region)).filter(
+      (id) => !exclude.includes(id)
+    );
+    candidates = fallback
+      .slice(0, RIDERS_PER_WAVE)
+      .map((id) => ({ id, distanceKm: 0 }));
   }
 
-  if (riderIds.length === 0) {
-    const fallback = (await getActiveRiderIds(order.region)).filter((id) => !exclude.includes(id));
-    riderIds = fallback.slice(0, RIDERS_PER_WAVE);
-  }
-
-  if (riderIds.length === 0) {
-    console.warn(`[dispatch] order ${order.id} wave ${wave}: no riders available to notify`);
+  if (candidates.length === 0) {
+    console.warn(
+      `[dispatch] order ${order.id} wave ${wave}: no riders within ${radiusKm}km of pickup`
+    );
     return;
   }
 
-  await emitOffersToRiders(order, riderIds, wave);
+  await emitOffersToRiders(order, candidates, wave);
 }
 
 async function startOrderDispatch(order: any) {
@@ -1332,7 +1386,7 @@ async function filterIncomingRideRecipientIds(
   if (!unique.length) return [];
   const res = await pool.query(
     `SELECT id FROM users
-     WHERE id = ANY($1::uuid[]) AND role = 'rider' AND status = 'active'`,
+     WHERE id = ANY($1::uuid[]) AND role = 'rider' AND status = 'active' AND is_online = true`,
     [unique]
   );
   let ids = res.rows.map((r: { id: string }) => r.id);
@@ -1450,22 +1504,29 @@ async function sendPushToUserIds(userIds: string[], alert: PushAlert) {
   }
 }
 
-async function sendPushToRiders(order: any, riderIds: string[]) {
-  const eligible = await filterIncomingRideRecipientIds(
-    riderIds,
+async function sendPushToRiders(order: any, riders: NearbyRider[]) {
+  const eligibleIds = await filterIncomingRideRecipientIds(
+    riders.map((r) => r.id),
     order?.customer_id ?? null
   );
+  const eligible = riders.filter((r) => eligibleIds.includes(r.id));
   if (!eligible.length) return;
   const pickup = order.pickup_address || order.pickup || 'Pickup';
   const dropoff = order.address || 'Drop-off';
-  await sendPushToUserIds(eligible, {
-    title: 'New delivery job',
-    body: `${pickup} → ${dropoff}`,
-    type: 'incoming-ride',
-    orderId: order.id,
-    channelId: 'incoming_rides_alarm',
-    highPriority: true,
-  });
+  for (const { id, distanceKm } of eligible) {
+    const distLabel =
+      Number.isFinite(distanceKm) && distanceKm > 0 && distanceKm < 500
+        ? `${distanceKm.toFixed(1)} km to pickup · `
+        : '';
+    await sendPushToUserIds([id], {
+      title: 'New delivery job',
+      body: `${distLabel}${pickup} → ${dropoff}`,
+      type: 'incoming-ride',
+      orderId: order.id,
+      channelId: 'incoming_rides_alarm',
+      highPriority: true,
+    });
+  }
 }
 
 function shopLabelForOrder(order: any): string {
@@ -2618,10 +2679,17 @@ app.get('/api/riders/nearby', authenticateToken, async (req: any, res) => {
       return res.status(400).json({ message: 'lat and lng are required' });
     }
     const region = req.user?.region ?? null;
-    const riderIds = await getNearestActiveRiders({ lat, lng }, region, [], limit);
-    if (!riderIds.length) {
+    const nearby = await getNearestActiveRiders(
+      { lat, lng },
+      region,
+      [],
+      limit,
+      NEARBY_RIDERS_MAX_KM
+    );
+    if (!nearby.length) {
       return res.json({ riders: [] });
     }
+    const riderIds = nearby.map((r) => r.id);
     const locs = await pool.query(
       `SELECT rl.lat, rl.lng
        FROM rider_locations rl
@@ -4119,6 +4187,13 @@ app.post('/api/orders/:id/cancel', authenticateToken, async (req: any, res) => {
     if (prevRiderId) {
       await notifyRideTaken(orderId, prevRiderId);
     }
+
+    clearDispatchTimer(orderId);
+    await pool.query(
+      `UPDATE order_dispatch_offers SET status = 'expired'
+       WHERE order_id = $1 AND status = 'offered'`,
+      [orderId]
+    );
 
     const payload = sanitizeOrderForRole(cancelled, req.user.role, req.user.id);
     res.json({
