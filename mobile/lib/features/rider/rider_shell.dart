@@ -429,6 +429,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
         ];
         _focusedOrderId = updated.id;
         _driveSheet = _DriveSheet.active;
+        _driveListExpanded = true;
         _tab = _RiderTab.drive;
       });
       _snack('Ride accepted', success: true);
@@ -775,7 +776,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
 
   double get _driveSheetFraction {
     if (!_isOnline) return 0.36;
-    if (_primaryActive != null || _incoming != null) return 0.40;
+    if (_primaryActive != null || _incoming != null) return 0.48;
     if (_availableOrders.isEmpty) return _driveListExpanded ? 0.32 : 0.24;
     return _driveListExpanded ? 0.42 : 0.30;
   }
@@ -917,6 +918,13 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
                   ),
                 ],
               ),
+              if (_activeTripActionLabel(order) != null) ...[
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  child: _activeActionButton(order, prominent: true),
+                ),
+              ],
               if (tripAllowsContact(order)) ...[
                 const SizedBox(height: 8),
                 Row(
@@ -973,10 +981,17 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
   }
 
   Widget _driveBottomSheet() {
+    final primary = _primaryActive;
+    final pinTripCta =
+        _isOnline && _driveSheet == _DriveSheet.active && primary != null;
+
     return RideSheet(
       maxHeightFraction: _driveSheetFraction,
-      minSheetHeight: 128,
-      padding: const EdgeInsets.fromLTRB(16, 6, 16, 16),
+      minSheetHeight: pinTripCta ? 220 : 128,
+      padding: const EdgeInsets.fromLTRB(16, 6, 16, 12),
+      footerPadding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      scrollBottomPadding: pinTripCta ? 8 : 0,
+      footer: pinTripCta ? _activeTripFooter(primary) : null,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1018,18 +1033,19 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
             _mapOfferChips(),
           ],
           const SizedBox(height: 6),
-          ConstrainedBox(
-            constraints: BoxConstraints(
-              maxHeight: _driveListExpanded
-                  ? MediaQuery.sizeOf(context).height * 0.28
-                  : MediaQuery.sizeOf(context).height * 0.18,
-            ),
-            child: SingleChildScrollView(
-              child: _driveSheet == _DriveSheet.requests
-                  ? _requestsList()
-                  : _activeList(),
-            ),
-          ),
+          if (_driveSheet == _DriveSheet.requests)
+            ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: _driveListExpanded
+                    ? MediaQuery.sizeOf(context).height * 0.28
+                    : MediaQuery.sizeOf(context).height * 0.18,
+              ),
+              child: SingleChildScrollView(
+                child: _requestsList(),
+              ),
+            )
+          else
+            _activeList(hidePrimaryTripActions: pinTripCta),
           if (!_isOnline) ...[
             const SizedBox(height: 12),
             Row(
@@ -1047,6 +1063,60 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
           ],
         ],
       ),
+    );
+  }
+
+  String? _activeTripActionLabel(Order order) {
+    switch (order.status) {
+      case 'ready':
+        return 'Picked up';
+      case 'picked_up':
+        return 'I\'ve arrived';
+      case 'arrived':
+        return 'Complete delivery';
+      default:
+        return null;
+    }
+  }
+
+  Widget _activeTripFooter(Order order) {
+    final nav = navigationTarget(order, _vendors);
+    final label = _activeTripActionLabel(order);
+    if (label == null) return const SizedBox.shrink();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (nav != null) ...[
+          Text(
+            nav.label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: BytzGoTheme.sheetBody(12),
+          ),
+          const SizedBox(height: 8),
+        ],
+        Row(
+          children: [
+            if (nav != null) ...[
+              OutlinedButton.icon(
+                onPressed: () => _openNavigation(order),
+                icon: const Icon(Icons.map, size: 18),
+                label: const Text('Maps'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: BytzGoTheme.sheetText,
+                  side: const BorderSide(color: BytzGoTheme.sheetDivider),
+                  padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
+                ),
+              ),
+              const SizedBox(width: 8),
+            ],
+            Expanded(
+              child: _activeActionButton(order, prominent: true),
+            ),
+          ],
+        ),
+      ],
     );
   }
 
@@ -1239,7 +1309,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
     );
   }
 
-  Widget _activeList() {
+  Widget _activeList({bool hidePrimaryTripActions = false}) {
     if (_activeOrders.isEmpty) {
       return const BytzEmptyState(
         light: true,
@@ -1248,10 +1318,20 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
         subtitle: 'Go online on the Drive tab to receive delivery offers.',
       );
     }
-    return Column(children: _activeOrders.map(_activeCard).toList());
+    final primaryId = hidePrimaryTripActions ? _primaryActive?.id : null;
+    return Column(
+      children: _activeOrders
+          .map(
+            (o) => _activeCard(
+              o,
+              hideTripActions: hidePrimaryTripActions && o.id == primaryId,
+            ),
+          )
+          .toList(),
+    );
   }
 
-  Widget _activeCard(Order order) {
+  Widget _activeCard(Order order, {bool hideTripActions = false}) {
     final nav = navigationTarget(order, _vendors);
     final step = activeTripStep(order);
     return Container(
@@ -1321,62 +1401,81 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
                   : 'Chat with customer',
             ),
           ],
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: nav == null ? null : () => _openNavigation(order),
-                  icon: const Icon(Icons.map, size: 16),
-                  label: const Text('Maps'),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: BytzGoTheme.sheetText,
-                    side: const BorderSide(color: BytzGoTheme.sheetDivider),
+          if (!hideTripActions) ...[
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: nav == null ? null : () => _openNavigation(order),
+                    icon: const Icon(Icons.map, size: 16),
+                    label: const Text('Maps'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: BytzGoTheme.sheetText,
+                      side: const BorderSide(color: BytzGoTheme.sheetDivider),
+                    ),
                   ),
                 ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: _activeActionButton(order),
-              ),
-            ],
-          ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _activeActionButton(order),
+                ),
+              ],
+            ),
+          ],
         ],
       ),
     );
   }
 
-  Widget _activeActionButton(Order order) {
-    if (order.status == 'ready') {
-      return FilledButton(
-        onPressed: () => _markPickedUp(order),
-        style: FilledButton.styleFrom(backgroundColor: const Color(0xFF38BDF8)),
-        child: const Text('Picked up', style: TextStyle(fontSize: 12)),
-      );
+  Widget _activeActionButton(Order order, {bool prominent = false}) {
+    final label = _activeTripActionLabel(order);
+    if (label == null) return const SizedBox.shrink();
+
+    final fontSize = prominent ? 15.0 : 12.0;
+    final padding = prominent
+        ? const EdgeInsets.symmetric(vertical: 14)
+        : const EdgeInsets.symmetric(vertical: 8);
+
+    VoidCallback? onPressed;
+    Color bg;
+    switch (order.status) {
+      case 'ready':
+        onPressed = () => _markPickedUp(order);
+        bg = const Color(0xFF38BDF8);
+        break;
+      case 'picked_up':
+        onPressed = () => _markArrived(order);
+        bg = BytzGoTheme.warning;
+        break;
+      case 'arrived':
+        onPressed = () => DeliveryPinDialog.show(
+              context,
+              order: order,
+              orders: _ordersRepo,
+              onCompleted: () {
+                _snack('Delivery completed', success: true);
+                _refreshAll();
+              },
+            );
+        bg = BytzGoTheme.accent;
+        break;
+      default:
+        return const SizedBox.shrink();
     }
-    if (order.status == 'picked_up') {
-      return FilledButton(
-        onPressed: () => _markArrived(order),
-        style: FilledButton.styleFrom(backgroundColor: BytzGoTheme.warning),
-        child: const Text('Arrived', style: TextStyle(fontSize: 12)),
-      );
-    }
-    if (order.status == 'arrived') {
-      return FilledButton(
-        onPressed: () => DeliveryPinDialog.show(
-          context,
-          order: order,
-          orders: _ordersRepo,
-          onCompleted: () {
-            _snack('Delivery completed', success: true);
-            _refreshAll();
-          },
-        ),
-        style: FilledButton.styleFrom(backgroundColor: BytzGoTheme.accent),
-        child: const Text('Complete', style: TextStyle(fontSize: 12)),
-      );
-    }
-    return const SizedBox.shrink();
+
+    return FilledButton(
+      onPressed: onPressed,
+      style: FilledButton.styleFrom(
+        backgroundColor: bg,
+        padding: padding,
+        minimumSize: prominent ? const Size.fromHeight(48) : null,
+      ),
+      child: Text(
+        label,
+        style: TextStyle(fontSize: fontSize, fontWeight: FontWeight.w800),
+      ),
+    );
   }
 
   Widget _buildTripsTab() {
