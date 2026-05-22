@@ -37,6 +37,7 @@ class CustomerHomeScreen extends StatefulWidget {
   const CustomerHomeScreen({
     super.key,
     this.embedded = false,
+    this.vendorMode = false,
     this.initialPickup,
     this.onOpenShops,
     this.onOpenWallet,
@@ -45,6 +46,8 @@ class CustomerHomeScreen extends StatefulWidget {
   });
 
   final bool embedded;
+  /// Merchant sending a package (hide shops shortcut, store-oriented copy).
+  final bool vendorMode;
   final LocationPoint? initialPickup;
   final VoidCallback? onOpenShops;
   final VoidCallback? onOpenWallet;
@@ -968,7 +971,8 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
               DeliveryBookingHeader(
                 firstName: userFirstName(_session.user!),
                 balance: _session.user?.balance ?? 0,
-                onShops: widget.onOpenShops,
+                vendorMode: widget.vendorMode,
+                onShops: widget.vendorMode ? null : widget.onOpenShops,
                 onWallet: widget.onOpenWallet,
                 onTrips: widget.onOpenActivity,
                 onProfile: widget.onOpenProfile,

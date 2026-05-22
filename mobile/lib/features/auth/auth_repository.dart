@@ -175,12 +175,21 @@ class AuthRepository {
   }
 
   Future<String> uploadProfileImage(String filePath) async {
+    return _uploadImage(filePath, folder: 'avatars', filename: 'profile.jpg');
+  }
+
+  Future<String> uploadCoverImage(String filePath) async {
+    return _uploadImage(filePath, folder: 'covers', filename: 'cover.jpg');
+  }
+
+  Future<String> _uploadImage(
+    String filePath, {
+    required String folder,
+    required String filename,
+  }) async {
     final formData = FormData.fromMap({
-      'image': await MultipartFile.fromFile(
-        filePath,
-        filename: 'profile.jpg',
-      ),
-      'folder': 'avatars',
+      'image': await MultipartFile.fromFile(filePath, filename: filename),
+      'folder': folder,
     });
     final res = await _api.dio.post<Map<String, dynamic>>(
       '/api/upload',

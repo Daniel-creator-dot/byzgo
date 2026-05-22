@@ -23,6 +23,7 @@ import {
   parseUploadFolder,
   persistUploadedImage,
   probeStorage,
+  normalizeImageRefForDb,
   resolveImageUrlForClient,
   resolveUploadFileName,
   checkUploadRateLimit,
@@ -161,6 +162,7 @@ app.get('/api/health', async (_req, res) => {
     media: {
       storage: storage.configured ? 'supabase' : 'inline_fallback',
       bucket: storage.bucket,
+      publicBaseUrl: storage.publicBaseUrl,
       storageOk: storageProbe.ok,
       storageMessage: storageProbe.message,
     },
@@ -213,18 +215,18 @@ function signAuthToken(user: { id: string | number; role?: string }): string {
   );
 }
 
-/** Strip huge data URLs from profile fields in JSON responses (body is fine; never put these in JWT). */
-function userForAuthResponse(row: Record<string, unknown> | null | undefined) {
+/** Resolve stored image refs to loadable URLs for clients (Supabase CDN, data URLs, or legacy object keys). */
+async function userForAuthResponse(row: Record<string, unknown> | null | undefined) {
   if (!row) return row;
   const u = { ...row } as Record<string, unknown>;
   delete u.password;
-  if (typeof u.avatar_url === 'string' && u.avatar_url.startsWith('data:')) {
-    u.has_avatar = true;
-    u.avatar_url = null;
+  if (typeof u.avatar_url === 'string' && u.avatar_url.trim()) {
+    u.avatar_url = await resolveImageUrlForClient(u.avatar_url);
+    if (u.avatar_url) u.has_avatar = true;
   }
-  if (typeof u.cover_image === 'string' && u.cover_image.startsWith('data:')) {
-    u.has_cover_image = true;
-    u.cover_image = null;
+  if (typeof u.cover_image === 'string' && u.cover_image.trim()) {
+    u.cover_image = await resolveImageUrlForClient(u.cover_image);
+    if (u.cover_image) u.has_cover_image = true;
   }
   return u;
 }
@@ -951,10 +953,12 @@ async function assertOrderChatAccess(orderId: string, userId: string) {
   return order;
 }
 
-function sanitizeOrderForRole(order: any, role: string, userId: string) {
+async function sanitizeOrderForRole(order: any, role: string, userId: string) {
   if (!order) return order;
   const o = { ...order };
-  if (role !== 'customer' || o.customer_id !== userId) {
+  const isBooker = o.customer_id === userId;
+  const canSeeDeliveryCode = isBooker && (role === 'customer' || role === 'vendor');
+  if (!canSeeDeliveryCode) {
     delete o.delivery_code;
   }
   if (o.customer_name) o.customerName = o.customer_name;
@@ -962,7 +966,7 @@ function sanitizeOrderForRole(order: any, role: string, userId: string) {
   if (o.vendor_name) o.vendorName = o.vendor_name;
 
   if (tripAllowsContact(o)) {
-    if (role === 'customer' && o.customer_id === userId && o.rider_phone) {
+    if (isBooker && (role === 'customer' || role === 'vendor') && o.rider_phone) {
       o.riderPhone = o.rider_phone;
     }
     if (role === 'rider' && o.rider_id === userId && o.customer_phone) {
@@ -971,13 +975,15 @@ function sanitizeOrderForRole(order: any, role: string, userId: string) {
   }
 
   if (role === 'rider' && o.rider_id === userId) {
-    if (o.customer_avatar_url) o.customerAvatarUrl = o.customer_avatar_url;
+    if (o.customer_avatar_url) {
+      o.customerAvatarUrl = await resolveImageUrlForClient(o.customer_avatar_url);
+    }
     if (o.customer_avg_rating != null) {
       o.customerAvgRating = parseFloat(String(o.customer_avg_rating));
     }
   }
-  if (role === 'customer' && o.customer_id === userId && o.rider_avatar_url) {
-    o.riderAvatarUrl = o.rider_avatar_url;
+  if (isBooker && (role === 'customer' || role === 'vendor') && o.rider_avatar_url) {
+    o.riderAvatarUrl = await resolveImageUrlForClient(o.rider_avatar_url);
   }
 
   delete o.customer_phone;
@@ -2221,7 +2227,7 @@ app.post('/api/auth/register', async (req, res) => {
     }
     const user = result.rows[0];
     const token = signAuthToken(user);
-    res.json({ user: userForAuthResponse(user), token });
+    res.json({ user: await userForAuthResponse(user), token });
   } catch (err) {
     console.error('Registration failed:', err);
     res.status(400).json({ message: 'Email or Phone number already exists' });
@@ -2247,7 +2253,7 @@ app.post('/api/auth/login', async (req, res) => {
     if (await bcrypt.compare(password, user.password)) {
       const { password: _pw, ...userWithoutPassword } = user;
       const token = signAuthToken(userWithoutPassword);
-      res.json({ user: userForAuthResponse(userWithoutPassword), token });
+      res.json({ user: await userForAuthResponse(userWithoutPassword), token });
     } else {
       res.status(401).json({ message: 'Invalid phone/email or password' });
     }
@@ -2325,7 +2331,7 @@ app.post('/api/auth/google', async (req, res) => {
     }
     
     const token = signAuthToken(user);
-    res.json({ user: userForAuthResponse(user), token });
+    res.json({ user: await userForAuthResponse(user), token });
   } catch (err: any) {
     console.error('Google auth error:', err);
     res.status(500).json({ message: 'Google authentication failed' });
@@ -2378,7 +2384,7 @@ app.post('/api/auth/supabase', async (req, res) => {
     }
 
     const token = signAuthToken(user);
-    res.json({ user: userForAuthResponse(user), token });
+    res.json({ user: await userForAuthResponse(user), token });
   } catch (err: any) {
     console.error('Supabase auth error:', err.response?.data || err.message);
     res.status(500).json({ message: 'Supabase authentication failed' });
@@ -2453,7 +2459,7 @@ app.get('/api/auth/me', authenticateToken, async (req: any, res) => {
     ]);
     const row = result.rows[0];
     if (!row) return res.status(404).json({ message: 'User not found' });
-    const user = userForAuthResponse(row);
+    const user = await userForAuthResponse(row);
     const token = signAuthToken(row);
     res.json({ user, token });
   } catch (err) {
@@ -2465,6 +2471,8 @@ app.get('/api/auth/me', authenticateToken, async (req: any, res) => {
 // Profile Update
 app.patch('/api/auth/profile', authenticateToken, async (req: any, res) => {
   const { email, phone, cover_image, avatar_url, address, lat, lng, region, shop_category } = req.body;
+  const dbCover = normalizeImageRefForDb(cover_image);
+  const dbAvatar = normalizeImageRefForDb(avatar_url);
   let normalizedCategory: string | null = null;
   if (shop_category != null && String(shop_category).trim()) {
     const c = String(shop_category).trim().toLowerCase();
@@ -2492,8 +2500,8 @@ app.patch('/api/auth/profile', authenticateToken, async (req: any, res) => {
       [
         email,
         phone,
-        cover_image,
-        avatar_url,
+        dbCover === undefined ? cover_image : dbCover,
+        dbAvatar === undefined ? avatar_url : dbAvatar,
         address,
         lat,
         lng,
@@ -2502,7 +2510,7 @@ app.patch('/api/auth/profile', authenticateToken, async (req: any, res) => {
         req.user.id,
       ]
     );
-    const user = userForAuthResponse(result.rows[0]);
+    const user = await userForAuthResponse(result.rows[0]);
     const token = signAuthToken(result.rows[0]);
     res.json({ user, token });
   } catch (err: any) {
@@ -2547,7 +2555,7 @@ app.patch('/api/auth/status', authenticateToken, async (req: any, res) => {
       const user = result.rows[0];
       if (isOnline) await seedRiderLocationFromProfile(user.id);
       const token = signAuthToken(user);
-      res.json({ user: userForAuthResponse(user), token });
+      res.json({ user: await userForAuthResponse(user), token });
       io.to(String(user.id)).emit('status:updated', { status: user.status, is_online: user.is_online });
       return;
     }
@@ -2558,7 +2566,7 @@ app.patch('/api/auth/status', authenticateToken, async (req: any, res) => {
     );
     const user = result.rows[0];
     const token = signAuthToken(user);
-    res.json({ user: userForAuthResponse(user), token });
+    res.json({ user: await userForAuthResponse(user), token });
     io.to(String(user.id)).emit('status:updated', { status });
   } catch (err: any) {
     console.error('Status update error:', err);
@@ -2611,6 +2619,7 @@ app.post('/api/upload', authenticateToken, upload.single('image'), async (req: a
 
     res.json({
       url: result.url,
+      objectKey: result.objectKey,
       storage: result.storage,
       contentType: result.contentType,
       width: result.width,
@@ -2692,7 +2701,7 @@ app.post(
         url: await resolveImageUrlForClient(imageRef),
         storage: imageResult.storage,
         documents,
-        user: userForAuthResponse(user),
+        user: await userForAuthResponse(user),
         token,
       });
     } catch (err) {
@@ -2721,7 +2730,7 @@ app.post('/api/rider/documents/submit', authenticateToken, async (req: any, res)
     const token = signAuthToken(user);
     res.json({
       message: 'Submitted for admin review',
-      user: userForAuthResponse(user),
+      user: await userForAuthResponse(user),
       token,
       documents: await fetchRiderDocuments(req.user.id),
     });
@@ -3173,7 +3182,15 @@ app.get('/api/vendors', async (req, res) => {
     }
     
     const result = await pool.query(query, params);
-    res.json(dedupeVendorList(result.rows));
+    const vendors = await Promise.all(
+      dedupeVendorList(result.rows).map(async (v: Record<string, unknown>) => ({
+        ...v,
+        cover_image: await resolveImageUrlForClient(
+          typeof v.cover_image === 'string' ? v.cover_image : null
+        ),
+      }))
+    );
+    res.json(vendors);
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
   }
@@ -3311,7 +3328,9 @@ app.get('/api/vendor/dashboard', authenticateToken, async (req: any, res) => {
     const [statsRes, productsRes, recentRes] = await Promise.all([
       pool.query(
         `SELECT
-          (SELECT COUNT(*)::int FROM orders WHERE vendor_id = $1 AND status NOT IN ('delivered', 'cancelled')) AS active_orders,
+          (SELECT COUNT(*)::int FROM orders
+           WHERE (vendor_id = $1 OR (customer_id = $1 AND order_type = 'courier'))
+             AND status NOT IN ('delivered', 'cancelled')) AS active_orders,
           (SELECT COUNT(*)::int FROM products WHERE vendor_id = $1 AND is_available = true AND is_approved = true) AS in_stock,
           (SELECT COUNT(*)::int FROM products WHERE vendor_id = $1 AND is_available = false) AS out_of_stock,
           (SELECT COUNT(*)::int FROM products WHERE vendor_id = $1 AND is_approved = false) AS pending_approval,
@@ -3324,8 +3343,10 @@ app.get('/api/vendor/dashboard', authenticateToken, async (req: any, res) => {
         [vendorId]
       ),
       pool.query(
-        `SELECT id, status, total, items, created_at, customer_id
-         FROM orders WHERE vendor_id = $1 ORDER BY created_at DESC LIMIT 12`,
+        `SELECT id, status, total, items, created_at, customer_id, order_type, pickup_address, address
+         FROM orders
+         WHERE vendor_id = $1 OR (customer_id = $1 AND order_type = 'courier')
+         ORDER BY created_at DESC LIMIT 12`,
         [vendorId]
       ),
     ]);
@@ -3779,7 +3800,8 @@ app.get('/api/orders', authenticateToken, async (req: any, res) => {
       query += ' WHERE o.customer_id = $1';
       params.push(req.user.id);
     } else if (req.user.role === 'vendor') {
-      query += ' WHERE o.vendor_id = $1';
+      query +=
+        ' WHERE o.vendor_id = $1 OR (o.customer_id = $1 AND o.order_type = \'courier\')';
       params.push(req.user.id);
     } else if (req.user.role === 'rider') {
       const userRes = await pool.query('SELECT status, is_online FROM users WHERE id = $1', [req.user.id]);
@@ -3917,6 +3939,22 @@ app.post('/api/orders', authenticateToken, async (req: any, res) => {
       finalPickup = pickup || finalPickup;
       pickupLat = pickup_lat ?? pickupLat;
       pickupLng = pickup_lng ?? pickupLng;
+      if (
+        req.user.role === 'vendor' &&
+        (!pickupLat || !pickupLng || !String(finalPickup || '').trim())
+      ) {
+        const vendorResult = await pool.query(
+          'SELECT address, lat, lng, region FROM users WHERE id = $1',
+          [req.user.id]
+        );
+        const v = vendorResult.rows[0];
+        if (v?.lat != null && v?.lng != null) {
+          finalPickup = v.address || finalPickup || 'Store pickup';
+          pickupLat = v.lat;
+          pickupLng = v.lng;
+          finalRegion = finalRegion || v.region;
+        }
+      }
     }
 
     // Fallback to customer's region if still not found

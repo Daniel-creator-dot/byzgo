@@ -1,6 +1,7 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 
+import '../client_image_url.dart';
 import '../data_url_image.dart' show decodeDataUrlImage;
 
 /// Production image widget: HTTPS CDN URLs + legacy base64, with loading & error states.
@@ -24,7 +25,7 @@ class AppNetworkImage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final trimmed = url?.trim();
+    final trimmed = ClientImageUrl.resolve(url?.trim());
     if (trimmed == null || trimmed.isEmpty) {
       return _placeholder();
     }

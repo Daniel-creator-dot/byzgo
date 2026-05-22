@@ -64,7 +64,7 @@ export function ProfileAvatarUpload({
         aria-label="Change profile photo"
       >
         {avatarUrl ? (
-          <img src={avatarUrl} alt="" className="w-full h-full object-cover" />
+          <img key={avatarUrl} src={avatarUrl} alt="" className="w-full h-full object-cover" />
         ) : (
           <span
             className={cn(

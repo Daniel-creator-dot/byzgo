@@ -96,6 +96,7 @@ class AuthUser {
     String? address,
     String? avatarUrl,
     bool? hasAvatar,
+    String? coverImage,
   }) {
     return AuthUser(
       id: id,
@@ -110,7 +111,7 @@ class AuthUser {
       lng: lng ?? this.lng,
       phone: phone ?? this.phone,
       address: address ?? this.address,
-      coverImage: coverImage,
+      coverImage: coverImage ?? this.coverImage,
       avatarUrl: avatarUrl ?? this.avatarUrl,
       hasAvatar: hasAvatar ?? this.hasAvatar,
       shopCategory: shopCategory,

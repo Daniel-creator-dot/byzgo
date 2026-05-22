@@ -15,14 +15,18 @@ import '../../shared/theme.dart';
 import '../../shared/widgets/bytz_hero_header.dart';
 import '../../shared/widgets/delete_account_button.dart';
 import '../../shared/widgets/profile_avatar_upload.dart';
+import '../../shared/widgets/profile_cover_upload.dart';
 import '../../shared/widgets/legal_links.dart';
 import '../../shared/widgets/ops_stat_card.dart';
 import '../auth/auth_repository.dart';
 import 'vendor_product_editor.dart';
 import 'vendor_repository.dart';
 import '../../shared/data_url_image.dart';
+import '../../shared/system_chrome.dart';
+import '../../models/location_point.dart';
+import '../customer/customer_home_screen.dart';
 
-enum _VendorTab { overview, stock, orders, store }
+enum _VendorTab { overview, send, stock, orders, store }
 
 class VendorHomeScreen extends StatefulWidget {
   const VendorHomeScreen({super.key});
@@ -42,6 +46,18 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
   bool _menuLoading = false;
   Timer? _menuSearchDebounce;
   SocketService? _socket;
+  final _sendPackageKey = GlobalKey<CustomerHomeScreenState>();
+
+  LocationPoint? _storePickup(AuthUser user) {
+    final lat = user.lat;
+    final lng = user.lng;
+    if (lat == null || lng == null || lat == 0 || lng == 0) return null;
+    return LocationPoint(
+      address: user.address?.trim().isNotEmpty == true ? user.address!.trim() : 'My store',
+      lat: lat,
+      lng: lng,
+    );
+  }
 
   @override
   void initState() {
@@ -64,7 +80,10 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
     _socket = context.read<SocketService>();
     _socket!.onOrderUpdated = (Order order) {
       if (!mounted) return;
-      if (order.vendorId != userId) return;
+      final isShopOrder = order.vendorId == userId;
+      final isSentPackage =
+          order.customerId == userId && order.isCourier;
+      if (!isShopOrder && !isSentPackage) return;
       if (order.status == 'picked_up') {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -74,7 +93,36 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
           ),
         );
       }
-      if (_tab == _VendorTab.orders || _tab == _VendorTab.overview) {
+      if (_tab == _VendorTab.orders ||
+          _tab == _VendorTab.overview ||
+          _tab == _VendorTab.send) {
+        unawaited(_load());
+        if (_tab == _VendorTab.send) {
+          _sendPackageKey.currentState?.noteOrder(order);
+        }
+      }
+    };
+    _socket!.onOrderNew = (Order order) {
+      if (!mounted) return;
+      if (order.vendorId == userId) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('New customer order'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        unawaited(_load());
+        return;
+      }
+      if (order.customerId == userId && order.isCourier) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Package delivery booked'),
+            behavior: SnackBarBehavior.floating,
+            backgroundColor: BytzGoTheme.accentDark,
+          ),
+        );
+        _sendPackageKey.currentState?.noteOrder(order);
         unawaited(_load());
       }
     };
@@ -263,44 +311,52 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
               ),
             ),
             Expanded(
-              child: _loading && _dash == null
-                  ? const Center(
-                      child: CircularProgressIndicator(color: BytzGoTheme.accent),
+              child: _tab == _VendorTab.send
+                  ? CustomerHomeScreen(
+                      key: _sendPackageKey,
+                      embedded: true,
+                      vendorMode: true,
+                      initialPickup: _storePickup(user),
+                      onOpenActivity: () => setState(() => _tab = _VendorTab.orders),
                     )
-                  : _error != null && _dash == null
-                      ? Center(
-                          child: Padding(
-                            padding: const EdgeInsets.all(24),
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Text(_error!, style: const TextStyle(color: Colors.white70)),
-                                const SizedBox(height: 12),
-                                FilledButton(
-                                  onPressed: _load,
-                                  child: const Text('Retry'),
-                                ),
-                              ],
-                            ),
-                          ),
+                  : _loading && _dash == null
+                      ? const Center(
+                          child: CircularProgressIndicator(color: BytzGoTheme.accent),
                         )
-                      : RefreshIndicator(
-                          color: BytzGoTheme.accent,
-                          onRefresh: _load,
-                          child: ListView(
-                            padding: EdgeInsets.fromLTRB(16, 8, 16, 100 + bottomPad),
-                            children: [
-                              if (!vendorActive) ...[
-                                _pendingBanner(),
-                                const SizedBox(height: 12),
-                              ],
-                              if (_tab == _VendorTab.overview) ..._overview(user.name),
-                              if (_tab == _VendorTab.stock) ..._stock(),
-                              if (_tab == _VendorTab.orders) ..._orders(),
-                              if (_tab == _VendorTab.store) ..._store(user),
-                            ],
-                          ),
-                        ),
+                      : _error != null && _dash == null
+                          ? Center(
+                              child: Padding(
+                                padding: const EdgeInsets.all(24),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(_error!, style: const TextStyle(color: Colors.white70)),
+                                    const SizedBox(height: 12),
+                                    FilledButton(
+                                      onPressed: _load,
+                                      child: const Text('Retry'),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            )
+                          : RefreshIndicator(
+                              color: BytzGoTheme.accent,
+                              onRefresh: _load,
+                              child: ListView(
+                                padding: EdgeInsets.fromLTRB(16, 8, 16, 100 + bottomPad),
+                                children: [
+                                  if (!vendorActive) ...[
+                                    _pendingBanner(),
+                                    const SizedBox(height: 12),
+                                  ],
+                                  if (_tab == _VendorTab.overview) ..._overview(user.name),
+                                  if (_tab == _VendorTab.stock) ..._stock(),
+                                  if (_tab == _VendorTab.orders) ..._orders(user.id),
+                                  if (_tab == _VendorTab.store) ..._store(user),
+                                ],
+                              ),
+                            ),
             ),
           ],
         ),
@@ -323,6 +379,11 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
               child: InkWell(
                 onTap: () {
                   setState(() => _tab = t);
+                  if (t == _VendorTab.send) {
+                    BytzSystemChrome.applyMap();
+                  } else {
+                    BytzSystemChrome.applyDarkHero();
+                  }
                   if (t == _VendorTab.stock && _menuProducts.isEmpty) {
                     _loadMenuProducts();
                   }
@@ -387,6 +448,8 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
     switch (t) {
       case _VendorTab.overview:
         return Icons.dashboard_outlined;
+      case _VendorTab.send:
+        return Icons.local_shipping_outlined;
       case _VendorTab.stock:
         return Icons.inventory_2_outlined;
       case _VendorTab.orders:
@@ -400,6 +463,8 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
     switch (t) {
       case _VendorTab.overview:
         return 'Overview';
+      case _VendorTab.send:
+        return 'Send';
       case _VendorTab.stock:
         return 'Menu';
       case _VendorTab.orders:
@@ -449,6 +514,44 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
               accent: const Color(0xFFA855F7),
             ),
           ],
+        ),
+      ),
+      const SizedBox(height: 16),
+      Material(
+        color: const Color(0xFF0F172A),
+        borderRadius: BorderRadius.circular(16),
+        child: InkWell(
+          onTap: () => setState(() => _tab = _VendorTab.send),
+          borderRadius: BorderRadius.circular(16),
+          child: const Padding(
+            padding: EdgeInsets.all(16),
+            child: Row(
+              children: [
+                Icon(Icons.local_shipping_outlined, color: BytzGoTheme.accent, size: 28),
+                SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Send a package',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w900,
+                          fontSize: 15,
+                        ),
+                      ),
+                      Text(
+                        'Book a rider from your shop to any address',
+                        style: TextStyle(color: Colors.white54, fontSize: 11),
+                      ),
+                    ],
+                  ),
+                ),
+                Icon(Icons.chevron_right, color: Colors.white38),
+              ],
+            ),
+          ),
         ),
       ),
       const SizedBox(height: 16),
@@ -545,24 +648,49 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
     ];
   }
 
-  List<Widget> _orders() {
+  List<Widget> _orders(String vendorId) {
     final orders = _dash?.recentOrders ?? [];
+    final incoming =
+        orders.where((o) => o.vendorId == vendorId).toList();
+    final outgoing = orders
+        .where((o) => o.customerId == vendorId && o.isCourier)
+        .toList();
     return [
       BytzHeroHeader(
         kicker: 'Orders',
-        title: 'Recent activity',
+        title: 'Shop & packages',
         assetPath: 'assets/branding/hero_delivery.png',
         height: 110,
       ),
       const SizedBox(height: 12),
-      ...orders.map(_orderMovementTile),
-      if (orders.isEmpty) _emptyCard('Waiting for customer orders'),
+      if (outgoing.isNotEmpty) ...[
+        _sectionTitle('Packages you sent'),
+        const SizedBox(height: 6),
+        ...outgoing.map(_orderMovementTile),
+        const SizedBox(height: 16),
+      ],
+      if (incoming.isNotEmpty) ...[
+        _sectionTitle('Customer orders'),
+        const SizedBox(height: 6),
+        ...incoming.map(_orderMovementTile),
+      ],
+      if (incoming.isEmpty && outgoing.isEmpty)
+        _emptyCard('No orders yet — use Send to book a package delivery'),
     ];
   }
 
   List<Widget> _store(AuthUser user) {
     final cat = ShopCategory.normalizeVendorCategory(user.shopCategory?.toString());
     return [
+      ProfileCoverUpload(user: user, height: 140),
+      const SizedBox(height: 8),
+      Center(
+        child: Text(
+          'Shop cover — how customers see your store',
+          style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 11),
+        ),
+      ),
+      const SizedBox(height: 16),
       Center(child: ProfileAvatarUpload(user: user, radius: 40, dark: true)),
       const SizedBox(height: 8),
       Center(
@@ -706,9 +834,10 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
     );
   }
 
-  Widget _orderMovementTile(dynamic o) {
+  Widget _orderMovementTile(Order o) {
     final items = o.items;
     final qty = items is List ? items.length : 0;
+    final isPackage = o.isCourier;
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(14),
@@ -726,7 +855,10 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
               color: BytzGoTheme.brandBlue.withValues(alpha: 0.2),
               borderRadius: BorderRadius.circular(12),
             ),
-            child: const Icon(Icons.shopping_bag_outlined, color: Color(0xFF38BDF8)),
+            child: Icon(
+              isPackage ? Icons.local_shipping_outlined : Icons.shopping_bag_outlined,
+              color: const Color(0xFF38BDF8),
+            ),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -741,7 +873,7 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
                   ),
                 ),
                 Text(
-                  '${o.status} · $qty items · ${formatCedis(o.total)}',
+                  '${isPackage ? 'Package' : 'Order'} · ${o.status} · $qty items · ${formatCedis(o.total)}',
                   style: TextStyle(
                     color: Colors.white.withValues(alpha: 0.5),
                     fontSize: 11,

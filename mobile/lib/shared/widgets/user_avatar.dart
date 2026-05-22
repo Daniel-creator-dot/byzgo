@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../models/auth_user.dart';
+import '../client_image_url.dart';
 import '../data_url_image.dart';
 import '../theme.dart';
 import '../user_display.dart';
@@ -20,7 +21,7 @@ class UserAvatar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final url = user.avatarUrl;
+    final url = ClientImageUrl.resolve(user.avatarUrl);
     final bg = backgroundColor ?? BytzGoTheme.brandBlue.withValues(alpha: 0.15);
 
     ImageProvider? provider;

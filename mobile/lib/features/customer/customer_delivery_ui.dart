@@ -12,6 +12,7 @@ class DeliveryBookingHeader extends StatelessWidget {
     super.key,
     required this.firstName,
     required this.balance,
+    this.vendorMode = false,
     this.onShops,
     this.onWallet,
     this.onTrips,
@@ -20,6 +21,7 @@ class DeliveryBookingHeader extends StatelessWidget {
 
   final String firstName;
   final double balance;
+  final bool vendorMode;
   final VoidCallback? onShops;
   final VoidCallback? onWallet;
   final VoidCallback? onTrips;
@@ -31,8 +33,10 @@ class DeliveryBookingHeader extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         BytzHeroHeader(
-          kicker: 'Fast delivery',
-          title: 'Hey $firstName,\nwhere to?',
+          kicker: vendorMode ? 'Your store' : 'Fast delivery',
+          title: vendorMode
+              ? 'Send a package\nfrom your shop'
+              : 'Hey $firstName,\nwhere to?',
           assetPath: 'assets/branding/hero_delivery.png',
           dark: false,
           height: 118,
@@ -78,12 +82,13 @@ class DeliveryBookingHeader extends StatelessWidget {
           child: ListView(
             scrollDirection: Axis.horizontal,
             children: [
-              _QuickTile(
-                image: 'assets/branding/onboarding_delivery.png',
-                label: 'Shops',
-                accent: BytzGoTheme.brandBlue,
-                onTap: onShops,
-              ),
+              if (onShops != null)
+                _QuickTile(
+                  image: 'assets/branding/onboarding_delivery.png',
+                  label: 'Shops',
+                  accent: BytzGoTheme.brandBlue,
+                  onTap: onShops,
+                ),
               _QuickTile(
                 image: 'assets/branding/hero_delivery.png',
                 label: 'Top up',

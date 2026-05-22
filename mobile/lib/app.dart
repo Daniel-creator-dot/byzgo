@@ -21,6 +21,7 @@ import 'features/wallet/wallet_repository.dart';
 import 'routing/app_router.dart';
 import 'shared/system_chrome.dart';
 import 'shared/theme.dart';
+import 'shared/client_image_url.dart';
 import 'shared/widgets/app_launch_carousel.dart';
 
 class BytzGoApp extends StatefulWidget {
@@ -61,6 +62,10 @@ class _BytzGoAppState extends State<BytzGoApp> {
 
   Future<void> _boot() async {
     final started = DateTime.now();
+    try {
+      final health = await _api.dio.get<Map<String, dynamic>>('/api/health');
+      await ClientImageUrl.loadFromHealth(health.data);
+    } catch (_) {}
     await _session.restore();
     if (_session.isAuthenticated) {
       await _session.refreshAuthFromServer();

@@ -343,9 +343,10 @@ function MainApp() {
         ? axios.get('/api/vendors', { params: { region } }) 
         : Promise.resolve({ data: [] });
 
-      const zonesPromise = (role === 'customer' || role === 'rider' || role === 'admin') 
-        ? axios.get('/api/delivery-zones').catch(() => ({ data: [] })) 
-        : Promise.resolve({ data: [] });
+      const zonesPromise =
+        role === 'customer' || role === 'rider' || role === 'admin' || role === 'vendor'
+          ? axios.get('/api/delivery-zones').catch(() => ({ data: [] }))
+          : Promise.resolve({ data: [] });
 
       const [profileRes, ordersRes, productsRes, vendorsRes, configRes, pricingRes, zonesRes] = await Promise.all([
         walletPromise,
@@ -626,6 +627,14 @@ function MainApp() {
       if (u?.role === 'vendor' && order.vendor_id === u.id) {
         addNotification('New order received!', 'success');
       }
+      if (
+        u?.role === 'vendor' &&
+        order.customer_id === u.id &&
+        ((order as Order & { order_type?: string }).order_type === 'courier' ||
+          (order as Order & { orderType?: string }).orderType === 'courier')
+      ) {
+        addNotification('Package delivery booked', 'success');
+      }
     });
 
     socket.on('order:updated', (updatedOrder: Order) => {
@@ -651,6 +660,25 @@ function MainApp() {
       }
       if (u?.role === 'customer' && updatedOrder.status === 'delivered' && updatedOrder.customer_id === u.id) {
         addNotification('Your order has been delivered!', 'success');
+      }
+      if (
+        u?.role === 'vendor' &&
+        updatedOrder.customer_id === u.id &&
+        ((updatedOrder as Order & { order_type?: string }).order_type === 'courier' ||
+          (updatedOrder as Order & { orderType?: string }).orderType === 'courier')
+      ) {
+        if (updatedOrder.status === 'picked_up') {
+          addNotification('Your package was picked up', 'info');
+        }
+        if (updatedOrder.status === 'delivered') {
+          addNotification('Package delivered', 'success');
+        }
+        if (
+          updatedOrder.rider_id &&
+          !prevOrder?.rider_id
+        ) {
+          addNotification('Rider assigned to your package', 'success');
+        }
       }
       setIncomingRideOffer(prev =>
         prev?.id === updatedOrder.id && updatedOrder.rider_id ? null : prev
@@ -1004,6 +1032,7 @@ function MainApp() {
           user.role === 'vendor'
             ? ([
                 { id: 'orders', label: 'Orders', icon: ShoppingBag },
+                { id: 'send', label: 'Send', icon: Package },
                 { id: 'products', label: 'Menu', icon: Layout },
                 { id: 'store', label: 'Store', icon: Store },
                 { id: 'wallet', label: 'Wallet', icon: CreditCard },
@@ -1029,7 +1058,20 @@ function MainApp() {
             )}
             <AnimatePresence mode="wait">
               {user.role === 'vendor' && (
-                <VendorView user={user} orders={orders} products={products} riderLocations={riderLocations} onUpdateStatus={updateOrderStatus} addNotification={addNotification} onBalanceUpdate={(bal) => setUser((prev) => (prev ? { ...prev, balance: bal } : prev))} onAddProduct={(p) => setProducts((prev) => { const exists = prev.find((item) => item.id === p.id); if (exists) return prev.map((item) => (item.id === p.id ? p : item)); return [...prev, p]; })} onDeleteProduct={async (id) => { await axios.delete(`/api/products/${id}`); setProducts((prev) => prev.filter((p) => p.id !== id)); }} activeTab={activeTab} setActiveTab={setActiveTab} refreshData={refreshData} onUserUpdate={(updatedUser, newToken) => { setUser(updatedUser); setToken(newToken); localStorage.setItem('user', JSON.stringify(updatedUser)); localStorage.setItem('token', newToken); }} />
+                <VendorView user={user} orders={orders} products={products} riderLocations={riderLocations} zones={zones} deliveryPricePerKm={deliveryPricePerKm} paystackKey={paystackKey} setPaystackKey={setPaystackKey} onPlaceOrder={async (items, totalAmt, vendorId, extra = {}) => {
+                  try {
+                    const vendor = vendorId ? vendors.find((v) => v.id === vendorId) : undefined;
+                    const payload = vendorId
+                      ? { items, total: totalAmt, vendorId, ...buildShopOrderExtra({ user, vendor, deliveryFee, extra }) }
+                      : { items, total: totalAmt, vendorId, address: extra.address || user.address || 'East Legon, Accra', lat: extra.lat || user.lat, lng: extra.lng || user.lng, ...extra };
+                    await axios.post('/api/orders', payload);
+                    await refreshData();
+                    addNotification('Delivery booked', 'success');
+                  } catch (err) {
+                    console.error('Order failed', err);
+                    addNotification(getApiError(err, 'Failed to book delivery'), 'warning');
+                  }
+                }} onUpdateStatus={updateOrderStatus} addNotification={addNotification} onBalanceUpdate={(bal) => setUser((prev) => (prev ? { ...prev, balance: bal } : prev))} onAddProduct={(p) => setProducts((prev) => { const exists = prev.find((item) => item.id === p.id); if (exists) return prev.map((item) => (item.id === p.id ? p : item)); return [...prev, p]; })} onDeleteProduct={async (id) => { await axios.delete(`/api/products/${id}`); setProducts((prev) => prev.filter((p) => p.id !== id)); }} activeTab={activeTab} setActiveTab={setActiveTab} refreshData={refreshData} onUserUpdate={(updatedUser, newToken) => { setUser(updatedUser); setToken(newToken); localStorage.setItem('user', JSON.stringify(updatedUser)); localStorage.setItem('token', newToken); }} />
               )}
               {user.role === 'admin' && (
                 <AdminView user={user} orders={orders} addNotification={addNotification} activeTab={activeTab} setActiveTab={setActiveTab} onPendingCountChange={setAdminPendingCount} onPendingRiderCountChange={setAdminPendingRiderCount} />
@@ -2479,6 +2521,11 @@ function VendorView({
   orders,
   products,
   riderLocations,
+  zones,
+  deliveryPricePerKm,
+  paystackKey,
+  setPaystackKey,
+  onPlaceOrder,
   onUpdateStatus,
   onAddProduct,
   onDeleteProduct,
@@ -2493,6 +2540,11 @@ function VendorView({
   orders: Order[];
   products: any[];
   riderLocations: { [key: string]: { lat: number; lng: number } };
+  zones: any[];
+  deliveryPricePerKm: number;
+  paystackKey: string;
+  setPaystackKey: (k: string) => void;
+  onPlaceOrder: (items: unknown[], total: number, vendorId?: string, extra?: Record<string, unknown>) => void | Promise<void>;
   onUpdateStatus: (id: string, s: OrderStatus, extra?: any) => void | Promise<boolean>;
   onAddProduct: (p: any) => void;
   onDeleteProduct: (id: string) => void;
@@ -2535,8 +2587,77 @@ function VendorView({
       }));
     });
   }, [activeTab, user.address, user.lat, user.lng]);
+
+  useEffect(() => {
+    if (user.cover_image) {
+      setStoreForm((prev) => ({ ...prev, cover_image: user.cover_image || prev.cover_image }));
+    }
+  }, [user.cover_image]);
   const [storeSaving, setStoreSaving] = useState(false);
   const [storeMsg, setStoreMsg] = useState('');
+
+  const [courierForm, setCourierForm] = useState({
+    pickup: null as { lat: number; lng: number; address: string } | null,
+    destination: null as { lat: number; lng: number; address: string } | null,
+    itemDesc: '',
+    scheduledTime: 'now',
+    scheduleDate: '',
+    scheduleClock: '',
+    senderContact: '',
+    receiverContact: '',
+  });
+  const [mapMode, setMapMode] = useState<'pickup' | 'destination'>('pickup');
+  const [isMapOpen, setIsMapOpen] = useState(false);
+  const [showDeliveryDetails, setShowDeliveryDetails] = useState(false);
+  const courierPickupSeeded = useRef(false);
+
+  useEffect(() => {
+    if (activeTab !== 'send') return;
+    if (courierPickupSeeded.current) return;
+    if (courierForm.pickup?.lat && courierForm.pickup?.address) return;
+    if (user.lat && user.lng && user.address) {
+      courierPickupSeeded.current = true;
+      setCourierForm((prev) => ({
+        ...prev,
+        pickup: { lat: user.lat!, lng: user.lng!, address: user.address! },
+        senderContact: prev.senderContact || user.phone || '',
+      }));
+      return;
+    }
+    courierPickupSeeded.current = true;
+    detectCurrentLocation().then((loc) => {
+      if (!loc) return;
+      setCourierForm((prev) => ({
+        ...prev,
+        pickup: loc,
+        senderContact: prev.senderContact || user.phone || '',
+      }));
+    });
+  }, [activeTab, user.lat, user.lng, user.address, user.phone, courierForm.pickup]);
+
+  const calculateCourierFee = () => {
+    if (!courierForm.pickup || !courierForm.destination) return 0;
+    const distance = haversineDistanceKm(
+      courierForm.pickup.lat,
+      courierForm.pickup.lng,
+      courierForm.destination.lat,
+      courierForm.destination.lng
+    );
+    const zone = zones.find((z) => z.region === user.region && z.is_active) || zones[0];
+    const bounds = zone
+      ? { min: Number(zone.min_price), max: zone.max_price ? Number(zone.max_price) : null }
+      : undefined;
+    return deliveryFeeFromDistanceKm(distance, deliveryPricePerKm, bounds);
+  };
+  const courierFee = calculateCourierFee();
+
+  const myPackages = orders.filter(
+    (o) =>
+      o.customer_id === user.id &&
+      ((o as Order & { order_type?: string }).order_type === 'courier' ||
+        (o as Order & { orderType?: string }).orderType === 'courier')
+  );
+  const livePackages = myPackages.filter((o) => !['delivered', 'cancelled'].includes(o.status));
 
   // Wallet State
   const [withdrawMethod, setWithdrawMethod] = useState<'momo' | 'bank'>('momo');
@@ -2573,7 +2694,11 @@ function VendorView({
     }
   };
 
-  const activeOrders = orders.filter(o => o.status !== 'delivered' && o.status !== 'cancelled');
+  const shopOrders = orders.filter((o) => o.vendor_id === user.id);
+  const activeShopOrders = shopOrders.filter(
+    (o) => o.status !== 'delivered' && o.status !== 'cancelled'
+  );
+  const activeOrders = [...activeShopOrders, ...livePackages];
 
   const handleFileUpload = async (
     file: File,
@@ -2651,13 +2776,34 @@ function VendorView({
         </div>
         <div className="flex gap-2 sm:gap-4 overflow-x-auto pb-1">
            <button onClick={() => setActiveTab('orders')} className={cn("px-4 sm:px-6 py-2 rounded-xl text-[10px] sm:text-xs font-black uppercase tracking-widest transition-all whitespace-nowrap", activeTab === 'orders' ? "bg-brand-blue text-white" : "bg-slate-100 text-slate-500")}>Orders</button>
+           <button onClick={() => setActiveTab('send')} className={cn("px-4 sm:px-6 py-2 rounded-xl text-[10px] sm:text-xs font-black uppercase tracking-widest transition-all whitespace-nowrap", activeTab === 'send' ? "bg-brand-blue text-white" : "bg-slate-100 text-slate-500")}>Send package</button>
            <button onClick={() => setActiveTab('products')} className={cn("px-4 sm:px-6 py-2 rounded-xl text-[10px] sm:text-xs font-black uppercase tracking-widest transition-all whitespace-nowrap", activeTab === 'products' ? "bg-brand-blue text-white" : "bg-slate-100 text-slate-500")}>Menu</button>
            <button onClick={() => setActiveTab('store')} className={cn("px-4 sm:px-6 py-2 rounded-xl text-[10px] sm:text-xs font-black uppercase tracking-widest transition-all whitespace-nowrap", activeTab === 'store' ? "bg-brand-blue text-white" : "bg-slate-100 text-slate-500")}>Store</button>
            <button onClick={() => setActiveTab('wallet')} className={cn("px-4 sm:px-6 py-2 rounded-xl text-[10px] sm:text-xs font-black uppercase tracking-widest transition-all whitespace-nowrap", activeTab === 'wallet' ? "bg-brand-blue text-white" : "bg-slate-100 text-slate-500")}>Wallet</button>
         </div>
       </header>
 
-      {activeTab === 'orders' ? (
+      {activeTab === 'send' ? (
+        <CustomerDeliveryHome
+          liveOrders={livePackages}
+          user={user}
+          courierForm={courierForm}
+          setCourierForm={setCourierForm}
+          courierFee={courierFee}
+          mapMode={mapMode}
+          setMapMode={setMapMode}
+          isMapOpen={isMapOpen}
+          setIsMapOpen={setIsMapOpen}
+          showDeliveryDetails={showDeliveryDetails}
+          setShowDeliveryDetails={setShowDeliveryDetails}
+          onPlaceOrder={onPlaceOrder}
+          addNotification={addNotification}
+          setActiveTab={setActiveTab}
+          afterBookTab="orders"
+          paystackKey={paystackKey}
+          setPaystackKey={setPaystackKey}
+        />
+      ) : activeTab === 'orders' ? (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-8">
             {activeOrders.length === 0 && (
               <div className="col-span-full text-center py-20 bg-white rounded-[3rem] border border-slate-100 border-dashed">
@@ -2668,13 +2814,22 @@ function VendorView({
             {activeOrders.map(order => {
               const riderLoc = order.rider_id ? riderLocations[order.rider_id] : null;
               const isTrackingActive = ['pending', 'preparing', 'ready', 'picked_up'].includes(order.status) && !!order.rider_id;
+              const isOutgoingPackage =
+                order.customer_id === user.id &&
+                ((order as Order & { order_type?: string }).order_type === 'courier' ||
+                  (order as Order & { orderType?: string }).orderType === 'courier');
+              const isShopOrder = order.vendor_id === user.id;
 
               return (
                 <div key={order.id} className="bg-white p-5 sm:p-8 rounded-[2rem] sm:rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-xl transition-all">
                    <div className="flex justify-between items-start mb-4 sm:mb-6">
                     <div>
-                      <h4 className="font-black text-lg sm:text-2xl tracking-tighter">Order #{order.id.slice(-4)}</h4>
-                      <p className="text-brand-green font-mono text-xs uppercase tracking-widest mt-1">{order.customerName}</p>
+                      <h4 className="font-black text-lg sm:text-2xl tracking-tighter">
+                        {isOutgoingPackage ? `Package #${order.id.slice(-4)}` : `Order #${order.id.slice(-4)}`}
+                      </h4>
+                      <p className="text-brand-green font-mono text-xs uppercase tracking-widest mt-1">
+                        {isOutgoingPackage ? 'Sent from your store' : order.customerName}
+                      </p>
                     </div>
                     <div className="font-mono font-black text-base sm:text-xl text-slate-800">{formatCedis(order.total)}</div>
                   </div>
@@ -2691,7 +2846,10 @@ function VendorView({
                       )}
                       <TrackingMap 
                         riderLocation={riderLoc}
-                        pickupLocation={{ lat: user.lat || 5.6037, lng: user.lng || -0.1870 }}
+                        pickupLocation={{
+                          lat: (order as Order & { pickup_lat?: number }).pickup_lat || user.lat || 5.6037,
+                          lng: (order as Order & { pickup_lng?: number }).pickup_lng || user.lng || -0.1870,
+                        }}
                         destination={{ lat: order.lat || 5.6037, lng: order.lng || -0.1870 }}
                         orderStatus={order.status}
                       />
@@ -2708,8 +2866,8 @@ function VendorView({
                   </div>
 
                   <div className="flex gap-2 sm:gap-3 flex-wrap items-center">
-                     {order.status === 'pending' && <button onClick={() => onUpdateStatus(order.id, 'preparing')} className="flex-1 py-3 sm:py-4 bg-brand-blue text-white rounded-xl sm:rounded-2xl font-black uppercase tracking-widest text-[10px] sm:text-xs">Start Cook</button>}
-                     {order.status === 'preparing' && <button onClick={() => onUpdateStatus(order.id, 'ready')} className="flex-1 py-3 sm:py-4 bg-brand-green text-white rounded-xl sm:rounded-2xl font-black uppercase tracking-widest text-[10px] sm:text-xs">Mark Ready</button>}
+                     {isShopOrder && order.status === 'pending' && <button onClick={() => onUpdateStatus(order.id, 'preparing')} className="flex-1 py-3 sm:py-4 bg-brand-blue text-white rounded-xl sm:rounded-2xl font-black uppercase tracking-widest text-[10px] sm:text-xs">Start Cook</button>}
+                     {isShopOrder && order.status === 'preparing' && <button onClick={() => onUpdateStatus(order.id, 'ready')} className="flex-1 py-3 sm:py-4 bg-brand-green text-white rounded-xl sm:rounded-2xl font-black uppercase tracking-widest text-[10px] sm:text-xs">Mark Ready</button>}
                      <div className="px-3 sm:px-4 py-2 bg-slate-100 rounded-xl text-[10px] font-black uppercase tracking-widest self-center">{order.status}</div>
                      <PaymentStatusBadge order={order} />
                   </div>
@@ -2839,6 +2997,11 @@ function VendorView({
             try {
               const res = await axios.patch('/api/auth/profile', storeForm);
               onUserUpdate(res.data.user as AuthUser, res.data.token);
+              setStoreForm((prev) => ({
+                ...prev,
+                cover_image: (res.data.user as AuthUser).cover_image || prev.cover_image,
+              }));
+              void refreshData();
               setStoreMsg('Store profile updated successfully!');
             } catch (err: any) {
               setStoreMsg('Failed to update store profile');
@@ -2861,7 +3024,7 @@ function VendorView({
               </div>
               {storeForm.cover_image && (
                 <div className="rounded-3xl overflow-hidden h-40 border border-slate-100 shadow-inner">
-                  <img src={storeForm.cover_image} alt="Cover Preview" className="w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+                  <img key={storeForm.cover_image} src={storeForm.cover_image} alt="Cover Preview" className="w-full h-full object-cover" />
                 </div>
               )}
             </div>

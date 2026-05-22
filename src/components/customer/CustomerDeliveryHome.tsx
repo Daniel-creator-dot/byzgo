@@ -48,6 +48,7 @@ export function CustomerDeliveryHome({
   onPlaceOrder,
   addNotification,
   setActiveTab,
+  afterBookTab = 'tracking',
   paystackKey,
   setPaystackKey,
 }: {
@@ -65,6 +66,8 @@ export function CustomerDeliveryHome({
   onPlaceOrder: (items: unknown[], total: number, vendorId?: string, extra?: Record<string, unknown>) => void | Promise<void>;
   addNotification: (m: string, t?: 'info' | 'success' | 'warning') => void;
   setActiveTab: (tab: string) => void;
+  /** Tab to open after a successful booking (vendors use `orders`). */
+  afterBookTab?: string;
   paystackKey: string;
   setPaystackKey: (k: string) => void;
 }) {
@@ -98,7 +101,7 @@ export function CustomerDeliveryHome({
       undefined,
       extra
     );
-    setActiveTab('tracking');
+    setActiveTab(afterBookTab);
   };
 
   useEffect(() => {

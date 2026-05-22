@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../client_image_url.dart';
 import '../data_url_image.dart';
 import '../theme.dart';
 /// Avatar for trip contacts (customer/rider) from order fields.
@@ -20,7 +21,7 @@ class ContactAvatar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final bg = backgroundColor ?? BytzGoTheme.brandBlue.withValues(alpha: 0.15);
-    final url = avatarUrl?.trim();
+    final url = ClientImageUrl.resolve(avatarUrl?.trim());
     ImageProvider? provider;
     if (url != null && url.isNotEmpty) {
       if (url.startsWith('http://') || url.startsWith('https://')) {

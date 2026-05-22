@@ -42,6 +42,30 @@ export function isStorageObjectKey(value: string): boolean {
   return /^(avatars|products|covers|rider-documents)\/[a-zA-Z0-9/_\-.]+$/.test(value);
 }
 
+/** Extract canonical storage key from object key or Supabase public/signed URL. */
+export function extractPictureObjectKey(stored: string): string | null {
+  const trimmed = stored.trim();
+  if (!trimmed) return null;
+  const pathOnly = trimmed.split('?')[0];
+  if (isStorageObjectKey(pathOnly)) return pathOnly;
+  const match = pathOnly.match(
+    /\/storage\/v1\/object\/(?:public|sign)\/[^/]+\/((?:avatars|products|covers|rider-documents)\/.+)$/i
+  );
+  return match ? match[1] : null;
+}
+
+/** Normalize profile/product image refs for Postgres (prefer stable object keys). */
+export function normalizeImageRefForDb(value: unknown): string | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  const s = String(value).trim();
+  if (!s) return null;
+  const key = extractPictureObjectKey(s);
+  if (key) return key;
+  if (s.startsWith('data:') || s.startsWith('http://') || s.startsWith('https://')) return s;
+  return s;
+}
+
 function cacheBustUrl(baseUrl: string): string {
   const sep = baseUrl.includes('?') ? '&' : '?';
   return `${baseUrl}${sep}v=${Date.now()}`;
@@ -136,21 +160,29 @@ export async function resolveImageUrlForClient(
 ): Promise<string | null> {
   if (!stored || typeof stored !== 'string') return null;
   const trimmed = stored.trim();
+  if (!trimmed) return null;
+
+  const objectKey = extractPictureObjectKey(trimmed);
+  if (objectKey) {
+    if (objectKey.startsWith('rider-documents/')) {
+      const ttl = options?.adminReview
+        ? SIGNED_URL_TTL_SEC.adminReview
+        : SIGNED_URL_TTL_SEC.riderDocument;
+      return signedPictureUrl(objectKey, ttl);
+    }
+    const base = publicPictureUrl(objectKey);
+    if (objectKey.startsWith('avatars/') || objectKey.startsWith('covers/')) {
+      return cacheBustUrl(base);
+    }
+    return base;
+  }
+
   if (
     trimmed.startsWith('data:') ||
     trimmed.startsWith('http://') ||
     trimmed.startsWith('https://')
   ) {
     return trimmed;
-  }
-  if (isStorageObjectKey(trimmed)) {
-    if (trimmed.startsWith('rider-documents/')) {
-      const ttl = options?.adminReview
-        ? SIGNED_URL_TTL_SEC.adminReview
-        : SIGNED_URL_TTL_SEC.riderDocument;
-      return signedPictureUrl(trimmed, ttl);
-    }
-    return publicPictureUrl(trimmed);
   }
   return trimmed;
 }
