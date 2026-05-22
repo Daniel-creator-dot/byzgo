@@ -1,11 +1,6 @@
-import dotenv from 'dotenv';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import './load-env.mjs';
 import bcrypt from 'bcryptjs';
 import pg from 'pg';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-dotenv.config({ path: path.join(__dirname, '..', '.env') });
 
 const email = process.argv[2] || 'admin@bytzgo.net';
 const password = process.argv[3] || 'Admin@2026';

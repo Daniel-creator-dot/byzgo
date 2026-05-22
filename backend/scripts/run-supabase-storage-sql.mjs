@@ -5,11 +5,10 @@
 import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import dotenv from 'dotenv';
 import pg from 'pg';
+import './load-env.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-dotenv.config({ path: join(__dirname, '..', '.env') });
 
 const url = process.env.DATABASE_URL?.trim();
 if (!url) {
@@ -33,6 +32,10 @@ try {
   console.log('OK: supabase-storage.sql applied (bucket + policies).');
 } catch (err) {
   console.error('Failed:', err.message);
+  if (/must be owner of table objects/i.test(String(err.message))) {
+    console.error('');
+    console.error('Run backend/supabase-storage.sql in Supabase Dashboard → SQL Editor (pooler user cannot alter storage.objects).');
+  }
   process.exit(1);
 } finally {
   await client.end();

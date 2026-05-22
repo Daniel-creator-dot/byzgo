@@ -62,10 +62,19 @@ class _BytzGoAppState extends State<BytzGoApp> {
 
   Future<void> _boot() async {
     final started = DateTime.now();
-    try {
-      final health = await _api.dio.get<Map<String, dynamic>>('/api/health');
-      await ClientImageUrl.loadFromHealth(health.data);
-    } catch (_) {}
+    for (var attempt = 0; attempt < 3; attempt++) {
+      try {
+        final health = await _api.dio.get<Map<String, dynamic>>('/api/health');
+        await ClientImageUrl.loadFromHealth(health.data);
+        break;
+      } catch (_) {
+        if (attempt == 2) {
+          ClientImageUrl.setPublicBase(ClientImageUrl.defaultPublicBase);
+        } else {
+          await Future<void>.delayed(Duration(milliseconds: 400 * (attempt + 1)));
+        }
+      }
+    }
     await _session.restore();
     if (_session.isAuthenticated) {
       await _session.refreshAuthFromServer();

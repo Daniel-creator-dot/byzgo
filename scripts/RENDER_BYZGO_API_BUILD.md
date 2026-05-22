@@ -8,6 +8,8 @@ Open: https://dashboard.render.com/web/srv-d86e8qv7f7vs7395kgrg
 |-------|--------|
 | **Build Command** | `npm ci && npm run build:render` |
 | **Start Command** | `npm run start:render` |
+
+**Production custom domain** (`www.bytzgo.net`) is on **byzgoback**, not this service. Use `scripts/redeploy-production.ps1` for production deploys.
 | **Health Check Path** | `/api/health` |
 
 ## Environment (already set via automation)

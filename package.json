@@ -38,8 +38,10 @@
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
     "check:sms": "node backend/scripts/test-sms.mjs",
+    "setup:storage": "powershell -ExecutionPolicy Bypass -File scripts/apply-supabase-key.ps1",
     "check:paystack": "node backend/scripts/check-paystack.mjs",
     "check:render-api": "powershell -ExecutionPolicy Bypass -File scripts/verify-render-api.ps1",
+    "redeploy:production": "powershell -ExecutionPolicy Bypass -File scripts/redeploy-production.ps1",
     "setup:render": "powershell -ExecutionPolicy Bypass -File scripts/setup-render.ps1",
     "prepare:render-env": "powershell -ExecutionPolicy Bypass -File scripts/prepare-render-env.ps1"
   },

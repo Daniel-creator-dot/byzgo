@@ -2,13 +2,7 @@
  * Verify Supabase Storage bucket + service role (run from repo root).
  * Usage: node backend/scripts/verify-storage.mjs
  */
-import dotenv from 'dotenv';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-dotenv.config({ path: path.join(__dirname, '../.env') });
-dotenv.config({ path: path.join(__dirname, '../../.env.local') });
+import './load-env.mjs';
 
 const url = (process.env.SUPABASE_URL || '').replace(/\/$/, '');
 const key = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();

@@ -105,9 +105,9 @@ If `SUPABASE_SERVICE_ROLE_KEY` is missing, the API falls back to **compressed in
 
 ## Ops checklist
 
-- [ ] SQL policies applied  
-- [ ] Service role key on Render  
-- [ ] `npm run verify:storage` passes  
-- [ ] `/api/health` → `storageOk: true`  
-- [ ] Test avatar + product upload from app  
-- [ ] Confirm DB `image_url` / `avatar_url` are `https://` not `data:`
+1. Run `backend/supabase-storage.sql` in **Supabase Dashboard → SQL Editor** (required if `npm run setup:supabase-storage` fails with “must be owner of table objects”).
+2. `.\scripts\setup-supabase-storage.ps1` (sets `backend/.env` + Render **byzgoback** / **byzgo-api**, redeploys production).
+3. `cd backend && npm run verify:storage` — bucket reachable.
+4. `.\scripts\verify-render-api.ps1 -Url https://www.bytzgo.net` — `storage: supabase`, `storageOk: true`.
+5. Test avatar + shop cover upload from the app.
+6. Confirm DB `avatar_url` / `cover_image` are object keys or `https://`, not `data:`.

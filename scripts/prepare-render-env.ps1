@@ -24,9 +24,10 @@ foreach ($k in (Read-EnvFile $localEnv).Keys) { $merged[$k] = (Read-EnvFile $loc
 
 # Render production overrides
 $merged["NODE_ENV"] = "production"
-$merged["SERVE_WEB"] = "false"
-$merged["APP_URL"] = "https://bytzgo.net"
-$merged["PAYSTACK_CALLBACK_URL"] = "https://bytzgo.net"
+$merged["SERVE_WEB"] = "true"
+$merged["SERVE_ADMIN_WEB_ONLY"] = "true"
+$merged["APP_URL"] = "https://www.bytzgo.net"
+$merged["PAYSTACK_CALLBACK_URL"] = "https://www.bytzgo.net"
 if (-not $merged["FIREBASE_PROJECT_ID"]) { $merged["FIREBASE_PROJECT_ID"] = "bytzgo-9bd89" }
 if (-not $merged["GOOGLE_WEB_CLIENT_ID"]) {
   $merged["GOOGLE_WEB_CLIENT_ID"] = "645977332644-4gjjf08268b3irafs4bh8b7guct1i1jb.apps.googleusercontent.com"

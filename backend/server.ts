@@ -1,8 +1,8 @@
+import './loadEnv';
 import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
-import dotenv from 'dotenv';
 import { Pool } from 'pg';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
@@ -29,9 +29,6 @@ import {
   checkUploadRateLimit,
   type PictureFolder,
 } from './media';
-
-dotenv.config({ path: path.join(__dirname, '.env') });
-dotenv.config({ path: path.join(__dirname, '..', '.env.local') });
 
 const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || 'bytzgo-9bd89';
 /** Web OAuth client from Firebase `google-services.json` (type 3). */
@@ -156,7 +153,7 @@ app.get('/api/health', async (_req, res) => {
   }
   res.json({
     ok: true,
-    service: 'bytzgo-api',
+    service: process.env.RENDER_SERVICE_NAME || 'byzgoback',
     client: 'flutter',
     fcm: firebaseAdminHasCredentials,
     media: {

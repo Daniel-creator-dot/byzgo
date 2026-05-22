@@ -1,8 +1,8 @@
-# BytzGo — single Web Service: API + admin web only (/admin). Mobile app for customers/riders/vendors.
+# BytzGo — Web Service blueprint (API + admin at /admin).
 #
-# Domain must point to THIS Web Service only (not a separate Static Site).
-# Verify API:  curl https://bytzgo.net/api/health  → JSON
-# Verify admin: https://bytzgo.net/admin           → login page (not "Cannot GET")
+# Production today: Render service "byzgoback" (srv-d7use31o3t8c73fu3eig) owns
+# www.bytzgo.net / bytzgo.net. Static site "byzgo" is frontend-only — do not attach API domains to it.
+# Verify:  .\scripts\verify-render-api.ps1 -Url https://www.bytzgo.net
 #
 # Apply: https://dashboard.render.com/blueprint/new?repo=https://github.com/Daniel-creator-dot/byzgo
 
@@ -41,9 +41,9 @@ services:
       - key: VITE_GOOGLE_CLIENT_ID
         value: 645977332644-4gjjf08268b3irafs4bh8b7guct1i1jb.apps.googleusercontent.com
       - key: APP_URL
-        value: https://bytzgo.net
+        value: https://www.bytzgo.net
       - key: PAYSTACK_CALLBACK_URL
-        value: https://bytzgo.net
+        value: https://www.bytzgo.net
       - key: SMS_API_KEY
         sync: false
       - key: SMS_BASE_URL

@@ -312,13 +312,15 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
             ),
             Expanded(
               child: _tab == _VendorTab.send
-                  ? CustomerHomeScreen(
-                      key: _sendPackageKey,
-                      embedded: true,
-                      vendorMode: true,
-                      initialPickup: _storePickup(user),
-                      onOpenActivity: () => setState(() => _tab = _VendorTab.orders),
-                    )
+                  ? (_storePickup(user) == null
+                      ? _sendNeedsStoreLocation()
+                      : CustomerHomeScreen(
+                          key: _sendPackageKey,
+                          embedded: true,
+                          vendorMode: true,
+                          initialPickup: _storePickup(user),
+                          onOpenActivity: () => setState(() => _tab = _VendorTab.orders),
+                        ))
                   : _loading && _dash == null
                       ? const Center(
                           child: CircularProgressIndicator(color: BytzGoTheme.accent),
@@ -439,6 +441,43 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
               ),
             );
           }).toList(),
+        ),
+      ),
+    );
+  }
+
+  Widget _sendNeedsStoreLocation() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.storefront_outlined, size: 48, color: BytzGoTheme.accent),
+            const SizedBox(height: 16),
+            const Text(
+              'Set your store location first',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 18,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Open the Store tab, add your address, and pin your shop on the map. Pickup for Send package uses that location.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.white.withValues(alpha: 0.65), fontSize: 14),
+            ),
+            const SizedBox(height: 20),
+            FilledButton.icon(
+              onPressed: () => setState(() => _tab = _VendorTab.store),
+              icon: const Icon(Icons.edit_location_alt_outlined),
+              label: const Text('Go to Store'),
+              style: FilledButton.styleFrom(backgroundColor: BytzGoTheme.accent),
+            ),
+          ],
         ),
       ),
     );

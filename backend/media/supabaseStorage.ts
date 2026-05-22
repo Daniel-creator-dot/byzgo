@@ -4,9 +4,17 @@ import type { PictureFolder } from './constants';
 import { SIGNED_URL_TTL_SEC } from './constants';
 import { MediaError } from './errors';
 
-const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/$/, '');
-const SERVICE_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
-const BUCKET = (process.env.SUPABASE_STORAGE_BUCKET || 'pictures').trim();
+function envSupabaseUrl(): string {
+  return (process.env.SUPABASE_URL || '').replace(/\/$/, '');
+}
+
+function envServiceKey(): string {
+  return (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+}
+
+function envBucket(): string {
+  return (process.env.SUPABASE_STORAGE_BUCKET || 'pictures').trim();
+}
 
 export interface StorageConfig {
   configured: boolean;
@@ -15,11 +23,14 @@ export interface StorageConfig {
 }
 
 export function getStorageConfig(): StorageConfig {
-  const configured = Boolean(SUPABASE_URL && SERVICE_KEY && BUCKET);
+  const url = envSupabaseUrl();
+  const key = envServiceKey();
+  const bucket = envBucket();
+  const configured = Boolean(url && key && bucket);
   return {
     configured,
-    bucket: BUCKET,
-    publicBaseUrl: configured ? `${SUPABASE_URL}/storage/v1/object/public/${BUCKET}` : null,
+    bucket,
+    publicBaseUrl: configured ? `${url}/storage/v1/object/public/${bucket}` : null,
   };
 }
 
@@ -29,7 +40,7 @@ export function isSupabaseStorageConfigured(): boolean {
 
 export function publicPictureUrl(objectPath: string): string {
   const path = objectPath.replace(/^\/+/, '');
-  return `${SUPABASE_URL}/storage/v1/object/public/${BUCKET}/${path}`;
+  return `${envSupabaseUrl()}/storage/v1/object/public/${envBucket()}/${path}`;
 }
 
 export function storageObjectKey(folder: PictureFolder, relativePath: string): string {
@@ -83,13 +94,16 @@ export async function uploadPicture(params: {
     throw new MediaError('Object storage is not configured on the server.', 503, 'storage_unavailable');
   }
 
+  const supabaseUrl = envSupabaseUrl();
+  const serviceKey = envServiceKey();
+  const bucket = envBucket();
   const objectKey = storageObjectKey(params.folder, params.relativePath);
-  const uploadUrl = `${SUPABASE_URL}/storage/v1/object/${BUCKET}/${objectKey}`;
+  const uploadUrl = `${supabaseUrl}/storage/v1/object/${bucket}/${objectKey}`;
 
   try {
     await axios.post(uploadUrl, params.buffer, {
       headers: {
-        Authorization: `Bearer ${SERVICE_KEY}`,
+        Authorization: `Bearer ${serviceKey}`,
         'Content-Type': params.contentType,
         'Cache-Control': params.cacheControl,
         'x-upsert': 'true',
@@ -131,14 +145,17 @@ export async function signedPictureUrl(
   expiresInSec: number = SIGNED_URL_TTL_SEC.riderDocument
 ): Promise<string> {
   if (!isSupabaseStorageConfigured()) return objectKey;
+  const supabaseUrl = envSupabaseUrl();
+  const serviceKey = envServiceKey();
+  const bucket = envBucket();
   const path = objectKey.replace(/^\/+/, '');
   try {
     const res = await axios.post<{ signedURL?: string }>(
-      `${SUPABASE_URL}/storage/v1/object/sign/${BUCKET}/${path}`,
+      `${supabaseUrl}/storage/v1/object/sign/${bucket}/${path}`,
       { expiresIn: expiresInSec },
       {
         headers: {
-          Authorization: `Bearer ${SERVICE_KEY}`,
+          Authorization: `Bearer ${serviceKey}`,
           'Content-Type': 'application/json',
         },
         timeout: 15_000,
@@ -147,7 +164,7 @@ export async function signedPictureUrl(
     const signed = res.data?.signedURL;
     if (!signed) return publicPictureUrl(path);
     if (signed.startsWith('http')) return signed;
-    return `${SUPABASE_URL}${signed.startsWith('/') ? '' : '/'}${signed}`;
+    return `${supabaseUrl}${signed.startsWith('/') ? '' : '/'}${signed}`;
   } catch (err) {
     console.error('[storage] sign URL failed:', err);
     return publicPictureUrl(path);
@@ -192,16 +209,19 @@ export async function probeStorage(): Promise<{ ok: boolean; message?: string }>
   if (!isSupabaseStorageConfigured()) {
     return { ok: false, message: 'SUPABASE_SERVICE_ROLE_KEY not set' };
   }
+  const supabaseUrl = envSupabaseUrl();
+  const serviceKey = envServiceKey();
+  const bucket = envBucket();
   try {
-    await axios.get(`${SUPABASE_URL}/storage/v1/bucket/${BUCKET}`, {
-      headers: { Authorization: `Bearer ${SERVICE_KEY}`, apikey: SERVICE_KEY },
+    await axios.get(`${supabaseUrl}/storage/v1/bucket/${bucket}`, {
+      headers: { Authorization: `Bearer ${serviceKey}`, apikey: serviceKey },
       timeout: 10_000,
     });
     return { ok: true };
   } catch (err: unknown) {
     const status = (err as { response?: { status?: number } })?.response?.status;
     if (status === 404) {
-      return { ok: false, message: `Bucket "${BUCKET}" not found — run supabase-storage.sql` };
+      return { ok: false, message: `Bucket "${bucket}" not found — run supabase-storage.sql` };
     }
     return { ok: false, message: (err as Error).message || 'Storage unreachable' };
   }

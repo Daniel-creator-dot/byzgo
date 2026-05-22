@@ -1,4 +1,21 @@
-# Render — fix bytzgo.net for Flutter APK
+# Render — production API for Flutter APK
+
+## Production layout (current)
+
+| Render service | Type | URL | Role |
+|----------------|------|-----|------|
+| **byzgoback** | Web Service | https://byzgoback.onrender.com | **API** — custom domains **www.bytzgo.net** / **bytzgo.net** |
+| **byzgo** | Static Site | https://byzgo.onrender.com | Vite `dist/` only — **do not** attach API domains here |
+| **byzgo-api** | Web Service | https://byzgo-api.onrender.com | Alternate API deploy (same repo) |
+
+After changing Supabase env vars on **byzgoback**, redeploy:
+
+```powershell
+.\scripts\redeploy-production.ps1
+.\scripts\verify-render-api.ps1 -Url https://www.bytzgo.net
+```
+
+---
 
 ## The problem
 

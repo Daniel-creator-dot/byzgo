@@ -1,5 +1,9 @@
 /// Resolves Supabase storage object keys to public CDN URLs for image widgets.
 class ClientImageUrl {
+  /// Fallback when `/api/health` is unreachable (matches production Supabase bucket).
+  static const defaultPublicBase =
+      'https://ypmiurbtmfiyzmrygonh.supabase.co/storage/v1/object/public/pictures';
+
   static String? _publicBase;
 
   static void setPublicBase(String? base) {
@@ -7,7 +11,7 @@ class ClientImageUrl {
     _publicBase = b != null && b.isNotEmpty ? b.replaceAll(RegExp(r'/$'), '') : null;
   }
 
-  static String? get publicBase => _publicBase;
+  static String? get publicBase => _publicBase ?? defaultPublicBase;
 
   /// Load `media.publicBaseUrl` from `/api/health` (safe to call without auth).
   static Future<void> loadFromHealth(Map<String, dynamic>? healthJson) async {
@@ -28,8 +32,8 @@ class ClientImageUrl {
       return trimmed;
     }
     final pathOnly = trimmed.split('?').first;
-    if (_isObjectKey(pathOnly) && _publicBase != null) {
-      return '$_publicBase/$pathOnly';
+    if (_isObjectKey(pathOnly)) {
+      return '${publicBase}/$pathOnly';
     }
     return trimmed;
   }
