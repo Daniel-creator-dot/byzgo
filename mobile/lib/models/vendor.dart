@@ -18,6 +18,10 @@ class Vendor {
     this.shopDiscountLabel,
     this.shopDiscountPercent,
     this.shopPromoUpdatedAt,
+    this.shopStoryImage,
+    this.shopStoryPostedAt,
+    this.shopStoryExpiresAt,
+    this.hasActiveStory = false,
   });
 
   final String id;
@@ -35,6 +39,10 @@ class Vendor {
   final String? shopDiscountLabel;
   final double? shopDiscountPercent;
   final DateTime? shopPromoUpdatedAt;
+  final String? shopStoryImage;
+  final DateTime? shopStoryPostedAt;
+  final DateTime? shopStoryExpiresAt;
+  final bool hasActiveStory;
 
   VendorShopPromo get promo => VendorShopPromo(
         shopOpenStatus: shopOpenStatus,
@@ -42,6 +50,10 @@ class Vendor {
         shopDiscountLabel: shopDiscountLabel,
         shopDiscountPercent: shopDiscountPercent,
         shopPromoUpdatedAt: shopPromoUpdatedAt,
+        shopStoryImage: shopStoryImage,
+        shopStoryPostedAt: shopStoryPostedAt,
+        shopStoryExpiresAt: shopStoryExpiresAt,
+        hasActiveStory: hasActiveStory,
       );
 
   bool get hasCustomerFacingPromo => promo.hasCustomerFacingPromo;
@@ -70,6 +82,17 @@ class Vendor {
         (json['shop_promo_updated_at'] ?? json['shopPromoUpdatedAt'] ?? '')
             .toString(),
       ),
+      shopStoryImage:
+          (json['shop_story_image'] ?? json['shopStoryImage'])?.toString(),
+      shopStoryPostedAt: DateTime.tryParse(
+        (json['shop_story_posted_at'] ?? json['shopStoryPostedAt'] ?? '')
+            .toString(),
+      ),
+      shopStoryExpiresAt: DateTime.tryParse(
+        (json['shop_story_expires_at'] ?? json['shopStoryExpiresAt'] ?? '')
+            .toString(),
+      ),
+      hasActiveStory: json['has_active_story'] == true,
     );
   }
 
@@ -85,8 +108,7 @@ class Vendor {
       phone: phone,
       shopCategory: shopCategory,
       coverImage: coverImage,
-      shopOpenStatus:
-          (json['shop_open_status'] ?? shopOpenStatus).toString(),
+      shopOpenStatus: (json['shop_open_status'] ?? shopOpenStatus).toString(),
       shopStatusMessage: json.containsKey('shop_status_message')
           ? json['shop_status_message']?.toString()
           : shopStatusMessage,
@@ -101,6 +123,18 @@ class Vendor {
       shopPromoUpdatedAt: json.containsKey('shop_promo_updated_at')
           ? DateTime.tryParse((json['shop_promo_updated_at'] ?? '').toString())
           : shopPromoUpdatedAt,
+      shopStoryImage: json.containsKey('shop_story_image')
+          ? json['shop_story_image']?.toString()
+          : shopStoryImage,
+      shopStoryPostedAt: json.containsKey('shop_story_posted_at')
+          ? DateTime.tryParse((json['shop_story_posted_at'] ?? '').toString())
+          : shopStoryPostedAt,
+      shopStoryExpiresAt: json.containsKey('shop_story_expires_at')
+          ? DateTime.tryParse((json['shop_story_expires_at'] ?? '').toString())
+          : shopStoryExpiresAt,
+      hasActiveStory: json.containsKey('has_active_story')
+          ? json['has_active_story'] == true
+          : hasActiveStory,
     );
   }
 }

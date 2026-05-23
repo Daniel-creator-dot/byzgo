@@ -239,7 +239,21 @@ function normalizeShopOpenStatus(value: unknown): ShopOpenStatus | null {
   return null;
 }
 
-function vendorPromoPayload(row: Record<string, unknown>) {
+const SHOP_STORY_TTL_HOURS = 24;
+
+function shopStoryIsActive(row: Record<string, unknown>): boolean {
+  const raw = row.shop_story_image;
+  if (!raw || !String(raw).trim()) return false;
+  const exp = row.shop_story_expires_at;
+  if (!exp) return true;
+  return new Date(String(exp)).getTime() > Date.now();
+}
+
+async function vendorPromoPayload(row: Record<string, unknown>) {
+  const storyResolved = await resolveImageUrlForClient(
+    typeof row.shop_story_image === 'string' ? row.shop_story_image : null
+  );
+  const active = Boolean(storyResolved && shopStoryIsActive(row));
   return {
     vendorId: row.id,
     id: row.id,
@@ -251,11 +265,27 @@ function vendorPromoPayload(row: Record<string, unknown>) {
     shop_discount_percent:
       row.shop_discount_percent != null ? Number(row.shop_discount_percent) : null,
     shop_promo_updated_at: row.shop_promo_updated_at ?? null,
+    shop_story_image: active ? storyResolved : null,
+    shop_story_posted_at: row.shop_story_posted_at ?? null,
+    shop_story_expires_at: row.shop_story_expires_at ?? null,
+    has_active_story: active,
   };
 }
 
-function emitVendorPromo(row: Record<string, unknown>) {
-  io.emit('vendor:promo', vendorPromoPayload(row));
+async function emitVendorPromo(row: Record<string, unknown>) {
+  io.emit('vendor:promo', await vendorPromoPayload(row));
+}
+
+async function vendorRowForClient(row: Record<string, unknown>) {
+  const cover = await resolveImageUrlForClient(
+    typeof row.cover_image === 'string' ? row.cover_image : null
+  );
+  const promo = await vendorPromoPayload(row);
+  return {
+    ...row,
+    cover_image: cover,
+    ...promo,
+  };
 }
 
 const PRIMECARE_CANONICAL_EMAIL = 'vendor@bytzgo.net';
@@ -634,6 +664,9 @@ const initDb = async () => {
         ALTER TABLE users ADD COLUMN IF NOT EXISTS shop_discount_label TEXT;
         ALTER TABLE users ADD COLUMN IF NOT EXISTS shop_discount_percent DECIMAL(5,2);
         ALTER TABLE users ADD COLUMN IF NOT EXISTS shop_promo_updated_at TIMESTAMP WITH TIME ZONE;
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS shop_story_image TEXT;
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS shop_story_posted_at TIMESTAMP WITH TIME ZONE;
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS shop_story_expires_at TIMESTAMP WITH TIME ZONE;
         ALTER TABLE users ALTER COLUMN password DROP NOT NULL;
       EXCEPTION WHEN others THEN NULL;
       END $$;
@@ -3200,7 +3233,7 @@ app.get('/api/vendors', async (req, res) => {
     let query =
       `SELECT id, name, email, phone, cover_image, address, lat, lng, region, shop_category,
               shop_open_status, shop_status_message, shop_discount_label, shop_discount_percent,
-              shop_promo_updated_at
+              shop_promo_updated_at, shop_story_image, shop_story_posted_at, shop_story_expires_at
        FROM users WHERE role = $1 AND status = 'active'`;
     const params: any[] = ['vendor'];
     const { category } = req.query;
@@ -3216,12 +3249,7 @@ app.get('/api/vendors', async (req, res) => {
     
     const result = await pool.query(query, params);
     const vendors = await Promise.all(
-      dedupeVendorList(result.rows).map(async (v: Record<string, unknown>) => ({
-        ...v,
-        cover_image: await resolveImageUrlForClient(
-          typeof v.cover_image === 'string' ? v.cover_image : null
-        ),
-      }))
+      dedupeVendorList(result.rows).map((v: Record<string, unknown>) => vendorRowForClient(v))
     );
     res.json(vendors);
   } catch (err) {
@@ -3359,12 +3387,13 @@ app.get('/api/vendor/shop-promo', authenticateToken, async (req: any, res) => {
   try {
     const result = await pool.query(
       `SELECT id, name, shop_category, shop_open_status, shop_status_message,
-              shop_discount_label, shop_discount_percent, shop_promo_updated_at
+              shop_discount_label, shop_discount_percent, shop_promo_updated_at,
+              shop_story_image, shop_story_posted_at, shop_story_expires_at
        FROM users WHERE id = $1 AND role = 'vendor'`,
       [req.user.id]
     );
     if (!result.rows[0]) return res.status(404).json({ message: 'Vendor not found' });
-    res.json(vendorPromoPayload(result.rows[0]));
+    res.json(await vendorPromoPayload(result.rows[0]));
   } catch (err) {
     console.error('Vendor shop-promo read error:', err);
     res.status(500).json({ message: 'Failed to load shop status' });
@@ -3378,6 +3407,8 @@ app.patch('/api/vendor/shop-promo', authenticateToken, async (req: any, res) => 
     shop_status_message,
     shop_discount_label,
     shop_discount_percent,
+    shop_story_image,
+    clear_shop_story,
   } = req.body ?? {};
 
   const openStatus = normalizeShopOpenStatus(shop_open_status);
@@ -3441,6 +3472,25 @@ app.patch('/api/vendor/shop-promo', authenticateToken, async (req: any, res) => 
       params.push(discountPercent);
       sets.push(`shop_discount_percent = $${params.length}`);
     }
+    if (clear_shop_story === true || shop_story_image === null) {
+      params.push(null);
+      sets.push(`shop_story_image = $${params.length}`);
+      sets.push('shop_story_posted_at = NULL');
+      sets.push('shop_story_expires_at = NULL');
+    } else if (shop_story_image !== undefined) {
+      const storyRef = normalizeImageRefForDb(shop_story_image);
+      params.push(storyRef);
+      sets.push(`shop_story_image = $${params.length}`);
+      if (storyRef) {
+        sets.push('shop_story_posted_at = CURRENT_TIMESTAMP');
+        sets.push(
+          `shop_story_expires_at = CURRENT_TIMESTAMP + interval '${SHOP_STORY_TTL_HOURS} hours'`
+        );
+      } else {
+        sets.push('shop_story_posted_at = NULL');
+        sets.push('shop_story_expires_at = NULL');
+      }
+    }
     if (sets.length === 0) {
       return res.status(400).json({ message: 'No shop status fields to update' });
     }
@@ -3450,12 +3500,13 @@ app.patch('/api/vendor/shop-promo', authenticateToken, async (req: any, res) => 
       `UPDATE users SET ${sets.join(', ')}
        WHERE id = $${params.length} AND role = 'vendor'
        RETURNING id, name, shop_category, shop_open_status, shop_status_message,
-                 shop_discount_label, shop_discount_percent, shop_promo_updated_at`,
+                 shop_discount_label, shop_discount_percent, shop_promo_updated_at,
+                 shop_story_image, shop_story_posted_at, shop_story_expires_at`,
       params
     );
     const row = result.rows[0];
-    const payload = vendorPromoPayload(row);
-    emitVendorPromo(row);
+    const payload = await vendorPromoPayload(row);
+    await emitVendorPromo(row);
     res.json(payload);
   } catch (err) {
     console.error('Vendor shop-promo update error:', err);

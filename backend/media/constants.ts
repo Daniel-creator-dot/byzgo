@@ -1,10 +1,11 @@
 /** ISO-style media profiles — tuned for mobile bandwidth & CDN caching. */
-export type PictureFolder = 'avatars' | 'products' | 'covers' | 'rider-documents';
+export type PictureFolder = 'avatars' | 'products' | 'covers' | 'stories' | 'rider-documents';
 
 export const PICTURE_FOLDERS: PictureFolder[] = [
   'avatars',
   'products',
   'covers',
+  'stories',
   'rider-documents',
 ];
 
@@ -49,6 +50,16 @@ export const IMAGE_PROFILES: Record<PictureFolder, ImageProfile> = {
     maxInputBytes: 5 * 1024 * 1024,
     format: 'webp',
     quality: 80,
+    cacheControl: 'public, max-age=3600',
+    isPublic: true,
+  },
+  stories: {
+    folder: 'stories',
+    maxWidth: 1080,
+    maxHeight: 1920,
+    maxInputBytes: 6 * 1024 * 1024,
+    format: 'webp',
+    quality: 82,
     cacheControl: 'public, max-age=3600',
     isPublic: true,
   },

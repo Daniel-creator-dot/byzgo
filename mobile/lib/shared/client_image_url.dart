@@ -39,6 +39,6 @@ class ClientImageUrl {
   }
 
   static bool _isObjectKey(String value) {
-    return RegExp(r'^(avatars|products|covers|rider-documents)/').hasMatch(value);
+    return RegExp(r'^(avatars|products|covers|stories|rider-documents)/').hasMatch(value);
   }
 }

@@ -76,14 +76,32 @@ class VendorRepository {
     return VendorShopPromo.fromJson(Map<String, dynamic>.from(data));
   }
 
+  Future<String> uploadShopStoryFlyer(String filePath) async {
+    final formData = FormData.fromMap({
+      'image': await MultipartFile.fromFile(filePath, filename: 'story.jpg'),
+      'folder': 'stories',
+    });
+    final res = await _api.dio.post<Map<String, dynamic>>(
+      '/api/upload',
+      data: formData,
+    );
+    final url = res.data?['url']?.toString();
+    if (url == null || url.isEmpty) {
+      throw Exception('Upload failed — no flyer URL returned');
+    }
+    return url;
+  }
+
   Future<VendorShopPromo> updateShopPromo({
     String? shopOpenStatus,
     String? shopStatusMessage,
     String? shopDiscountLabel,
     double? shopDiscountPercent,
+    String? shopStoryImage,
     bool clearStatusMessage = false,
     bool clearDiscountLabel = false,
     bool clearDiscountPercent = false,
+    bool clearShopStory = false,
   }) async {
     final data = <String, dynamic>{};
     if (shopOpenStatus != null) data['shop_open_status'] = shopOpenStatus;
@@ -101,6 +119,11 @@ class VendorRepository {
       data['shop_discount_percent'] = null;
     } else if (shopDiscountPercent != null) {
       data['shop_discount_percent'] = shopDiscountPercent;
+    }
+    if (clearShopStory) {
+      data['clear_shop_story'] = true;
+    } else if (shopStoryImage != null) {
+      data['shop_story_image'] = shopStoryImage;
     }
     final res = await _api.dio.patch<Map<String, dynamic>>(
       '/api/vendor/shop-promo',

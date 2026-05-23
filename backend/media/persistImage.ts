@@ -28,6 +28,7 @@ export function parseUploadFolder(raw: unknown, fallback: PictureFolder): Pictur
 export function resolveUploadFileName(folder: PictureFolder, docType?: string): string {
   if (folder === 'avatars') return 'avatar';
   if (folder === 'covers') return 'cover';
+  if (folder === 'stories') return 'drop';
   if (folder === 'rider-documents' && docType) {
     return docType.replace(/[^a-z0-9_-]/gi, '');
   }
@@ -56,7 +57,8 @@ export async function persistUploadedImage(params: {
   const processed = await processImageForProfile(params.buffer, profile);
 
   const relativePath = `${params.userId}/${params.fileName}.${processed.extension}`;
-  const bustCache = params.folder === 'avatars' || params.folder === 'covers';
+  const bustCache =
+    params.folder === 'avatars' || params.folder === 'covers' || params.folder === 'stories';
 
   if (isSupabaseStorageConfigured()) {
     const { url, objectKey } = await uploadPicture({

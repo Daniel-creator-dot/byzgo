@@ -50,7 +50,7 @@ export function storageObjectKey(folder: PictureFolder, relativePath: string): s
 
 export function isStorageObjectKey(value: string): boolean {
   if (!value || value.includes('://')) return false;
-  return /^(avatars|products|covers|rider-documents)\/[a-zA-Z0-9/_\-.]+$/.test(value);
+  return /^(avatars|products|covers|stories|rider-documents)\/[a-zA-Z0-9/_\-.]+$/.test(value);
 }
 
 /** Extract canonical storage key from object key or Supabase public/signed URL. */
@@ -60,7 +60,7 @@ export function extractPictureObjectKey(stored: string): string | null {
   const pathOnly = trimmed.split('?')[0];
   if (isStorageObjectKey(pathOnly)) return pathOnly;
   const match = pathOnly.match(
-    /\/storage\/v1\/object\/(?:public|sign)\/[^/]+\/((?:avatars|products|covers|rider-documents)\/.+)$/i
+    /\/storage\/v1\/object\/(?:public|sign)\/[^/]+\/((?:avatars|products|covers|stories|rider-documents)\/.+)$/i
   );
   return match ? match[1] : null;
 }
@@ -127,7 +127,10 @@ export async function uploadPicture(params: {
 
   const profile = params.folder;
   const isPublic =
-    profile === 'avatars' || profile === 'products' || profile === 'covers';
+    profile === 'avatars' ||
+    profile === 'products' ||
+    profile === 'covers' ||
+    profile === 'stories';
 
   if (!isPublic) {
     return { objectKey, url: objectKey };
@@ -188,7 +191,11 @@ export async function resolveImageUrlForClient(
       return signedPictureUrl(objectKey, ttl);
     }
     const base = publicPictureUrl(objectKey);
-    if (objectKey.startsWith('avatars/') || objectKey.startsWith('covers/')) {
+    if (
+      objectKey.startsWith('avatars/') ||
+      objectKey.startsWith('covers/') ||
+      objectKey.startsWith('stories/')
+    ) {
       return cacheBustUrl(base);
     }
     return base;

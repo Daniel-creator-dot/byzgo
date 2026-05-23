@@ -12,11 +12,15 @@ import '../../shared/vendor_contact.dart';
 import '../../shared/widgets/accra_shops_map.dart';
 import '../../shared/widgets/bytz_hero_header.dart';
 import '../../shared/widgets/ops_stat_card.dart';
+import '../../shared/shop_story_views.dart';
 import '../../shared/widgets/vendor_shop_avatar.dart';
 import '../../shared/widgets/vendor_promo_badge.dart';
+import '../../shared/widgets/vendor_story_ring.dart';
 import '../orders/orders_repository.dart';
 import 'customer_shop_promo_float.dart';
+import 'customer_shop_stories_rail.dart';
 import 'customer_vendor_menu_screen.dart';
+import 'vendor_story_viewer.dart';
 
 class CustomerShopsTab extends StatefulWidget {
   const CustomerShopsTab({
@@ -34,6 +38,7 @@ class CustomerShopsTab extends StatefulWidget {
 
 class _CustomerShopsTabState extends State<CustomerShopsTab> {
   List<Vendor> _vendors = [];
+  Map<String, int> _seenPostedAt = {};
   bool _loading = true;
   String? _error;
   final _searchCtrl = TextEditingController();
@@ -46,7 +51,14 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
   void initState() {
     super.initState();
     _wirePromoSocket();
+    _loadSeen();
     _load();
+  }
+
+  Future<void> _loadSeen() async {
+    final seen = await ShopStoryViews.loadSeenPostedAt();
+    if (!mounted) return;
+    setState(() => _seenPostedAt = seen);
   }
 
   @override
@@ -138,6 +150,41 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
   int get _openShopCount =>
       _vendors.where((v) => v.shopOpenStatus == 'open').length;
 
+  List<Vendor> get _storyVendors =>
+      _vendors.where((v) => v.hasActiveStory).toList();
+
+  Future<void> _markStorySeen(Vendor vendor) async {
+    await ShopStoryViews.markSeen(vendor);
+    final posted = vendor.shopStoryPostedAt?.millisecondsSinceEpoch;
+    if (posted == null || !mounted) return;
+    setState(() => _seenPostedAt = {..._seenPostedAt, vendor.id: posted});
+  }
+
+  Future<void> _openShopStories({Vendor? startVendor}) async {
+    final stories = _storyVendors;
+    if (stories.isEmpty) return;
+    var index = 0;
+    if (startVendor != null) {
+      final i = stories.indexWhere((v) => v.id == startVendor.id);
+      if (i >= 0) index = i;
+    }
+    await Navigator.of(context).push<void>(
+      PageRouteBuilder<void>(
+        opaque: false,
+        pageBuilder: (_, __, ___) => VendorStoryViewer(
+          vendors: stories,
+          initialIndex: index,
+          seenPostedAt: _seenPostedAt,
+          onSeen: _markStorySeen,
+          onOrder: _openVendorMenu,
+        ),
+        transitionsBuilder: (_, anim, __, child) =>
+            FadeTransition(opacity: anim, child: child),
+      ),
+    );
+    if (mounted) await _loadSeen();
+  }
+
   void _openVendorMenu(Vendor vendor) {
     setState(() => _mapSelectedVendorId = vendor.id);
     Navigator.of(context).push(
@@ -185,6 +232,18 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
                 child: CustomerShopPromoFloat(
                   vendors: _vendors,
                   onTapVendor: _openVendorMenu,
+                ),
+              ),
+            ),
+          if (!_loading && _error == null && _storyVendors.isNotEmpty)
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: CustomerShopStoriesRail(
+                  vendors: _vendors,
+                  seenPostedAt: _seenPostedAt,
+                  onSeenVendor: _markStorySeen,
+                  onOrderFromStory: _openVendorMenu,
                 ),
               ),
             ),
@@ -376,11 +435,22 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
                               padding: const EdgeInsets.all(14),
                               child: Row(
                                 children: [
-                                  VendorShopAvatar(
-                                    vendor: v,
-                                    size: 56,
-                                    categoryId: _categoryId,
-                                  ),
+                                  if (v.hasActiveStory)
+                                    VendorStoryRing(
+                                      vendor: v,
+                                      size: 56,
+                                      unseen: ShopStoryViews.showStoryRing(
+                                        v,
+                                        _seenPostedAt,
+                                      ),
+                                      onTap: () => _openShopStories(startVendor: v),
+                                    )
+                                  else
+                                    VendorShopAvatar(
+                                      vendor: v,
+                                      size: 56,
+                                      categoryId: _categoryId,
+                                    ),
                                   const SizedBox(width: 14),
                                   Expanded(
                                     child: Column(

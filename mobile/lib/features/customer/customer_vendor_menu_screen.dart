@@ -15,8 +15,11 @@ import '../../shared/vendor_contact.dart';
 import '../../shared/vendor_pickup.dart';
 import '../../shared/widgets/product_tile_image.dart';
 import '../../shared/widgets/sheet_theme_scope.dart';
+import '../../shared/shop_story_views.dart';
+import '../../shared/widgets/app_network_image.dart';
 import '../../shared/widgets/vendor_shop_avatar.dart';
 import '../../shared/widgets/vendor_promo_badge.dart';
+import 'vendor_story_viewer.dart';
 import '../orders/orders_repository.dart';
 import 'customer_shop_checkout_screen.dart';
 
@@ -48,12 +51,14 @@ class _CustomerVendorMenuScreenState extends State<CustomerVendorMenuScreen>
   VendorPromoHandler? _promoHandler;
   late final SocketService _socket;
   late Vendor _vendor;
+  Map<String, int> _seenPostedAt = {};
 
   @override
   void initState() {
     super.initState();
     _vendor = widget.vendor;
     WidgetsBinding.instance.addObserver(this);
+    _loadSeen();
     _load();
     _socket = context.read<SocketService>();
     _productHandler = (vendorId, product) {
@@ -124,6 +129,36 @@ class _CustomerVendorMenuScreenState extends State<CustomerVendorMenuScreen>
       if (q > 0) map[p] = q;
     }
     return map;
+  }
+
+  Future<void> _loadSeen() async {
+    final seen = await ShopStoryViews.loadSeenPostedAt();
+    if (!mounted) return;
+    setState(() => _seenPostedAt = seen);
+  }
+
+  Future<void> _openShopDrop() async {
+    if (!_vendor.hasActiveStory) return;
+    await Navigator.of(context).push<void>(
+      PageRouteBuilder<void>(
+        opaque: false,
+        pageBuilder: (_, __, ___) => VendorStoryViewer(
+          vendors: [_vendor],
+          initialIndex: 0,
+          seenPostedAt: _seenPostedAt,
+          onSeen: (v) async {
+            await ShopStoryViews.markSeen(v);
+            final posted = v.shopStoryPostedAt?.millisecondsSinceEpoch;
+            if (posted != null && mounted) {
+              setState(() => _seenPostedAt = {..._seenPostedAt, v.id: posted});
+            }
+          },
+          onOrder: (_) {},
+        ),
+        transitionsBuilder: (_, anim, __, child) =>
+            FadeTransition(opacity: anim, child: child),
+      ),
+    );
   }
 
   Future<void> _load() async {
@@ -275,21 +310,77 @@ class _CustomerVendorMenuScreenState extends State<CustomerVendorMenuScreen>
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(16),
-              child: SizedBox(
-                height: 120,
-                width: double.infinity,
-                child: VendorShopAvatar(
-                  vendor: v,
-                  size: 120,
+          if (v.hasActiveStory && (v.shopStoryImage?.trim().isNotEmpty ?? false))
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: _openShopDrop,
                   borderRadius: BorderRadius.circular(16),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(16),
+                    child: Stack(
+                      children: [
+                        AspectRatio(
+                          aspectRatio: 9 / 16,
+                          child: AppNetworkImage(
+                            url: v.shopStoryImage!,
+                            fit: BoxFit.cover,
+                            semanticLabel: '${v.name} shop drop',
+                          ),
+                        ),
+                        Positioned(
+                          left: 12,
+                          top: 12,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 6,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.black54,
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.auto_awesome, color: Colors.white, size: 16),
+                                SizedBox(width: 6),
+                                Text(
+                                  'Shop Drop · tap to watch',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            )
+          else
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(16),
+                child: SizedBox(
+                  height: 120,
+                  width: double.infinity,
+                  child: VendorShopAvatar(
+                    vendor: v,
+                    size: 120,
+                    borderRadius: BorderRadius.circular(16),
+                  ),
                 ),
               ),
             ),
-          ),
           if (v.hasCustomerFacingPromo)
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),

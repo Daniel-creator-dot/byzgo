@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 
 import '../../models/vendor_shop_promo.dart';
 import '../../shared/theme.dart';
+import '../../shared/widgets/app_network_image.dart';
 import 'vendor_repository.dart';
 
-/// Vendor controls what customers see on the Shops tab (status + discount).
+/// Vendor controls Shop Drops (flyer stories) + status + discount for customers.
 class VendorShopPromoEditor extends StatefulWidget {
   const VendorShopPromoEditor({super.key});
 
@@ -16,11 +18,16 @@ class VendorShopPromoEditor extends StatefulWidget {
 class _VendorShopPromoEditorState extends State<VendorShopPromoEditor> {
   bool _loading = true;
   bool _saving = false;
+  bool _uploadingFlyer = false;
   String? _msg;
   String _openStatus = 'open';
+  String? _pendingFlyerUrl;
+  String? _currentFlyerUrl;
+  bool _clearStoryOnSave = false;
   final _statusMsgCtrl = TextEditingController();
   final _discountLabelCtrl = TextEditingController();
   final _discountPctCtrl = TextEditingController();
+  final _picker = ImagePicker();
 
   @override
   void initState() {
@@ -57,6 +64,9 @@ class _VendorShopPromoEditorState extends State<VendorShopPromoEditor> {
 
   void _applyPromo(VendorShopPromo promo) {
     _openStatus = promo.shopOpenStatus;
+    _currentFlyerUrl = promo.shopStoryImage;
+    _pendingFlyerUrl = null;
+    _clearStoryOnSave = false;
     _statusMsgCtrl.text = promo.shopStatusMessage ?? '';
     _discountLabelCtrl.text = promo.shopDiscountLabel ?? '';
     _discountPctCtrl.text = promo.shopDiscountPercent != null
@@ -64,6 +74,48 @@ class _VendorShopPromoEditorState extends State<VendorShopPromoEditor> {
             promo.shopDiscountPercent! % 1 == 0 ? 0 : 1,
           )
         : '';
+  }
+
+  String? get _previewFlyer => _pendingFlyerUrl ?? _currentFlyerUrl;
+
+  Future<void> _pickFlyer() async {
+    final file = await _picker.pickImage(
+      source: ImageSource.gallery,
+      maxWidth: 1080,
+      maxHeight: 1920,
+      imageQuality: 88,
+    );
+    if (file == null || !mounted) return;
+    setState(() {
+      _uploadingFlyer = true;
+      _msg = null;
+    });
+    try {
+      final url = await context.read<VendorRepository>().uploadShopStoryFlyer(file.path);
+      if (!mounted) return;
+      setState(() {
+        _pendingFlyerUrl = url;
+        _clearStoryOnSave = false;
+        _uploadingFlyer = false;
+        _msg = 'Flyer ready — tap Publish to go live for 24h';
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _uploadingFlyer = false;
+        _msg = VendorRepository.errorMessage(e);
+      });
+    }
+  }
+
+  Future<void> _removeFlyer() async {
+    setState(() {
+      if (_currentFlyerUrl != null || _pendingFlyerUrl != null) {
+        _clearStoryOnSave = true;
+      }
+      _pendingFlyerUrl = null;
+      _currentFlyerUrl = null;
+    });
   }
 
   Future<void> _save() async {
@@ -80,20 +132,23 @@ class _VendorShopPromoEditorState extends State<VendorShopPromoEditor> {
           throw Exception('Discount percent must be between 0 and 100');
         }
       }
-      final promo = await context.read<VendorRepository>().updateShopPromo(
-            shopOpenStatus: _openStatus,
-            shopStatusMessage: _statusMsgCtrl.text.trim(),
-            shopDiscountLabel: _discountLabelCtrl.text.trim(),
-            shopDiscountPercent: pct,
-            clearStatusMessage: _statusMsgCtrl.text.trim().isEmpty,
-            clearDiscountLabel: _discountLabelCtrl.text.trim().isEmpty,
-            clearDiscountPercent: pctText.isEmpty,
-          );
+      final repo = context.read<VendorRepository>();
+      final promo = await repo.updateShopPromo(
+        shopOpenStatus: _openStatus,
+        shopStatusMessage: _statusMsgCtrl.text.trim(),
+        shopDiscountLabel: _discountLabelCtrl.text.trim(),
+        shopDiscountPercent: pct,
+        shopStoryImage: _pendingFlyerUrl,
+        clearStatusMessage: _statusMsgCtrl.text.trim().isEmpty,
+        clearDiscountLabel: _discountLabelCtrl.text.trim().isEmpty,
+        clearDiscountPercent: pctText.isEmpty,
+        clearShopStory: _clearStoryOnSave && _previewFlyer == null,
+      );
       if (!mounted) return;
       _applyPromo(promo);
       setState(() {
         _saving = false;
-        _msg = 'Live for customers on the Shops tab';
+        _msg = 'Shop Drop is live — customers see your ring on Shops';
       });
     } catch (e) {
       if (!mounted) return;
@@ -125,11 +180,11 @@ class _VendorShopPromoEditorState extends State<VendorShopPromoEditor> {
         children: [
           const Row(
             children: [
-              Icon(Icons.campaign_outlined, color: BytzGoTheme.accent, size: 22),
+              Icon(Icons.auto_awesome, color: BytzGoTheme.accent, size: 22),
               SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  'Customer visibility',
+                  'Shop Drop',
                   style: TextStyle(
                     color: Colors.white,
                     fontWeight: FontWeight.w900,
@@ -141,12 +196,84 @@ class _VendorShopPromoEditorState extends State<VendorShopPromoEditor> {
           ),
           const SizedBox(height: 6),
           Text(
-            'Customers see a floating update on Shops when you post status or a discount.',
+            'Post a flyer like WhatsApp status. Customers tap your glowing ring on Shops to watch, then order.',
             style: TextStyle(color: Colors.white.withValues(alpha: 0.55), fontSize: 11),
           ),
           const SizedBox(height: 14),
+          AspectRatio(
+            aspectRatio: 9 / 16,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(14),
+              child: Container(
+                color: const Color(0xFF1E293B),
+                child: _previewFlyer != null
+                    ? Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          AppNetworkImage(
+                            url: _previewFlyer!,
+                            fit: BoxFit.cover,
+                            semanticLabel: 'Shop drop preview',
+                          ),
+                          if (_uploadingFlyer)
+                            const ColoredBox(
+                              color: Colors.black54,
+                              child: Center(
+                                child: CircularProgressIndicator(color: BytzGoTheme.accent),
+                              ),
+                            ),
+                        ],
+                      )
+                    : Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.add_photo_alternate_outlined,
+                              size: 48,
+                              color: Colors.white.withValues(alpha: 0.35),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              'Portrait flyer works best',
+                              style: TextStyle(
+                                color: Colors.white.withValues(alpha: 0.45),
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: _uploadingFlyer ? null : _pickFlyer,
+                  icon: const Icon(Icons.photo_library_outlined),
+                  label: Text(_previewFlyer == null ? 'Upload flyer' : 'Change flyer'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: BytzGoTheme.accent,
+                    side: const BorderSide(color: Color(0xFF334155)),
+                  ),
+                ),
+              ),
+              if (_previewFlyer != null) ...[
+                const SizedBox(width: 8),
+                IconButton(
+                  onPressed: _removeFlyer,
+                  icon: const Icon(Icons.delete_outline, color: BytzGoTheme.danger),
+                  tooltip: 'Remove flyer',
+                ),
+              ],
+            ],
+          ),
+          const SizedBox(height: 16),
           Text(
-            'STORE STATUS',
+            'CAPTION & OFFERS',
             style: TextStyle(
               color: Colors.white.withValues(alpha: 0.4),
               fontSize: 10,
@@ -174,29 +301,19 @@ class _VendorShopPromoEditorState extends State<VendorShopPromoEditor> {
               }),
             ),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
           TextField(
             controller: _statusMsgCtrl,
             maxLength: 160,
             style: const TextStyle(color: Colors.white),
             decoration: InputDecoration(
-              labelText: 'Status message (optional)',
+              labelText: 'Caption on the story',
               labelStyle: TextStyle(color: Colors.white.withValues(alpha: 0.5)),
-              hintText: 'e.g. Fresh jollof today · closes 9pm',
+              hintText: 'e.g. Weekend promo — free delivery over ₵100',
               hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.3)),
               filled: true,
               fillColor: const Color(0xFF1E293B),
               border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'DISCOUNT',
-            style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.4),
-              fontSize: 10,
-              fontWeight: FontWeight.w900,
-              letterSpacing: 1,
             ),
           ),
           const SizedBox(height: 8),
@@ -207,8 +324,6 @@ class _VendorShopPromoEditorState extends State<VendorShopPromoEditor> {
             decoration: InputDecoration(
               labelText: 'Discount headline',
               labelStyle: TextStyle(color: Colors.white.withValues(alpha: 0.5)),
-              hintText: 'e.g. 15% off all orders today',
-              hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.3)),
               filled: true,
               fillColor: const Color(0xFF1E293B),
               border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
@@ -221,8 +336,7 @@ class _VendorShopPromoEditorState extends State<VendorShopPromoEditor> {
             style: const TextStyle(color: Colors.white),
             decoration: InputDecoration(
               labelText: 'Discount % (optional)',
-              labelStyle: TextStyle(color: Colors.white.withValues(alpha: 0.5),
-              ),
+              labelStyle: TextStyle(color: Colors.white.withValues(alpha: 0.5)),
               suffixText: '%',
               filled: true,
               fillColor: const Color(0xFF1E293B),
@@ -234,7 +348,7 @@ class _VendorShopPromoEditorState extends State<VendorShopPromoEditor> {
             Text(
               _msg!,
               style: TextStyle(
-                color: _msg!.startsWith('Live')
+                color: _msg!.contains('live') || _msg!.contains('ready')
                     ? const Color(0xFF4ADE80)
                     : BytzGoTheme.danger,
                 fontSize: 12,
@@ -244,15 +358,15 @@ class _VendorShopPromoEditorState extends State<VendorShopPromoEditor> {
           ],
           const SizedBox(height: 14),
           FilledButton.icon(
-            onPressed: _saving ? null : _save,
+            onPressed: (_saving || _uploadingFlyer) ? null : _save,
             icon: _saving
                 ? const SizedBox(
                     width: 18,
                     height: 18,
                     child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black),
                   )
-                : const Icon(Icons.publish_outlined),
-            label: Text(_saving ? 'Publishing…' : 'Publish to customers'),
+                : const Icon(Icons.bolt),
+            label: Text(_saving ? 'Publishing…' : 'Publish Shop Drop'),
             style: FilledButton.styleFrom(
               backgroundColor: BytzGoTheme.accent,
               foregroundColor: Colors.black,

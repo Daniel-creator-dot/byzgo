@@ -15,7 +15,7 @@ ON storage.objects FOR SELECT
 TO public
 USING (
   bucket_id = 'pictures'
-  AND (storage.foldername(name))[1] IN ('avatars', 'products', 'covers')
+  AND (storage.foldername(name))[1] IN ('avatars', 'products', 'covers', 'stories')
 );
 
 CREATE POLICY "pictures_authenticated_insert"
@@ -23,7 +23,7 @@ ON storage.objects FOR INSERT
 TO authenticated
 WITH CHECK (
   bucket_id = 'pictures'
-  AND (storage.foldername(name))[1] IN ('avatars', 'products', 'covers')
+  AND (storage.foldername(name))[1] IN ('avatars', 'products', 'covers', 'stories')
 );
 
 CREATE POLICY "pictures_authenticated_update"

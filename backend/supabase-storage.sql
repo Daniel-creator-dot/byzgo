@@ -38,7 +38,7 @@ ON storage.objects FOR SELECT
 TO public
 USING (
   bucket_id = 'pictures'
-  AND (storage.foldername(name))[1] IN ('avatars', 'products', 'covers')
+  AND (storage.foldername(name))[1] IN ('avatars', 'products', 'covers', 'stories')
 );
 
 -- 5) Rider KYC — never public; API returns short-lived signed URLs (service role)
@@ -50,7 +50,7 @@ ON storage.objects FOR INSERT
 TO authenticated
 WITH CHECK (
   bucket_id = 'pictures'
-  AND (storage.foldername(name))[1] IN ('avatars', 'products', 'covers')
+  AND (storage.foldername(name))[1] IN ('avatars', 'products', 'covers', 'stories')
 );
 
 CREATE POLICY "pictures_authenticated_update"
