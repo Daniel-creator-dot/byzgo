@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/session.dart';
+import '../../core/socket_service.dart';
 import '../../models/location_point.dart';
 import '../../models/order.dart';
 import '../../models/vendor.dart';
@@ -12,7 +13,9 @@ import '../../shared/widgets/accra_shops_map.dart';
 import '../../shared/widgets/bytz_hero_header.dart';
 import '../../shared/widgets/ops_stat_card.dart';
 import '../../shared/widgets/vendor_shop_avatar.dart';
+import '../../shared/widgets/vendor_promo_badge.dart';
 import '../orders/orders_repository.dart';
+import 'customer_shop_promo_float.dart';
 import 'customer_vendor_menu_screen.dart';
 
 class CustomerShopsTab extends StatefulWidget {
@@ -36,17 +39,38 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
   final _searchCtrl = TextEditingController();
   String _categoryId = 'restaurant';
   String? _mapSelectedVendorId;
+  SocketService? _socket;
+  VendorPromoHandler? _promoHandler;
 
   @override
   void initState() {
     super.initState();
+    _wirePromoSocket();
     _load();
   }
 
   @override
   void dispose() {
+    if (_promoHandler != null) {
+      _socket?.removeVendorPromoListener(_promoHandler!);
+    }
     _searchCtrl.dispose();
     super.dispose();
+  }
+
+  void _wirePromoSocket() {
+    _socket = context.read<SocketService>();
+    _promoHandler = (data) {
+      final id = data['vendorId']?.toString() ?? data['id']?.toString();
+      if (id == null || !mounted) return;
+      setState(() {
+        final i = _vendors.indexWhere((v) => v.id == id);
+        if (i >= 0) {
+          _vendors[i] = _vendors[i].copyWithPromo(data);
+        }
+      });
+    };
+    _socket!.addVendorPromoListener(_promoHandler!);
   }
 
   Future<void> _load() async {
@@ -90,8 +114,29 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
               (v.address?.toLowerCase().contains(q) ?? false))
           .toList();
     }
+    list.sort((a, b) {
+      int rank(Vendor v) {
+        switch (v.shopOpenStatus) {
+          case 'closed':
+            return 3;
+          case 'busy':
+            return 2;
+          default:
+            return 1;
+        }
+      }
+      final r = rank(a).compareTo(rank(b));
+      if (r != 0) return r;
+      if (a.hasCustomerFacingPromo != b.hasCustomerFacingPromo) {
+        return a.hasCustomerFacingPromo ? -1 : 1;
+      }
+      return a.name.compareTo(b.name);
+    });
     return list;
   }
+
+  int get _openShopCount =>
+      _vendors.where((v) => v.shopOpenStatus == 'open').length;
 
   void _openVendorMenu(Vendor vendor) {
     setState(() => _mapSelectedVendorId = vendor.id);
@@ -111,7 +156,9 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
     final cat = ShopCategory.byId(_categoryId) ?? ShopCategory.ordered.first;
     final filtered = _filtered;
 
-    return RefreshIndicator(
+    return Stack(
+      children: [
+        RefreshIndicator(
       color: BytzGoTheme.accent,
       onRefresh: _load,
       child: CustomScrollView(
@@ -133,6 +180,16 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
               ),
             ),
           ),
+          if (!_loading && _error == null && _vendors.any((v) => v.hasCustomerFacingPromo))
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                child: CustomerShopPromoFloat(
+                  vendors: _vendors,
+                  onTapVendor: _openVendorMenu,
+                ),
+              ),
+            ),
           SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
@@ -213,7 +270,7 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
                       value: '${filtered.length}',
                       icon: cat.icon,
                       accent: cat.accent,
-                      subtitle: 'Open now',
+                      subtitle: '$_openShopCount open now',
                     ),
                     OpsStatCard(
                       light: true,
@@ -300,15 +357,18 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
                   (context, i) {
                     final v = filtered[i];
                     final chip = ShopCategory.byId(v.shopCategory) ?? cat;
+                    final closed = v.shopOpenStatus == 'closed';
                     return Padding(
                       padding: const EdgeInsets.only(bottom: 10),
-                      child: Material(
+                      child: Opacity(
+                        opacity: closed ? 0.72 : 1,
+                        child: Material(
                         color: BytzGoTheme.sheetBg,
                         elevation: 0,
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(18),
                           side: BorderSide(
-                            color: chip.accent.withValues(alpha: 0.25),
+                            color: chip.accent.withValues(alpha: closed ? 0.12 : 0.25),
                           ),
                         ),
                         child: InkWell(
@@ -336,6 +396,8 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
                                           color: BytzGoTheme.sheetText,
                                         ),
                                       ),
+                                      const SizedBox(height: 6),
+                                      v.promoBadgeRow(compact: true),
                                       const SizedBox(height: 4),
                                       Container(
                                         padding: const EdgeInsets.symmetric(
@@ -416,6 +478,8 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
                           ),
                         ),
                       ),
+                    ),
+                  ),
                     );
                   },
                   childCount: filtered.length,
@@ -424,6 +488,8 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
             ),
         ],
       ),
+    ),
+      ],
     );
   }
 }

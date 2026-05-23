@@ -4,6 +4,7 @@ import '../../core/api_client.dart';
 import '../../core/json_parse.dart';
 import '../../models/order.dart';
 import '../../models/product.dart';
+import '../../models/vendor_shop_promo.dart';
 
 class VendorDashboardStats {
   const VendorDashboardStats({
@@ -66,6 +67,48 @@ class VendorRepository {
         .whereType<Map>()
         .map((e) => Product.fromJson(Map<String, dynamic>.from(e)))
         .toList();
+  }
+
+  Future<VendorShopPromo> fetchShopPromo() async {
+    final res = await _api.dio.get<Map<String, dynamic>>('/api/vendor/shop-promo');
+    final data = res.data;
+    if (data == null) throw Exception('Empty shop promo response');
+    return VendorShopPromo.fromJson(Map<String, dynamic>.from(data));
+  }
+
+  Future<VendorShopPromo> updateShopPromo({
+    String? shopOpenStatus,
+    String? shopStatusMessage,
+    String? shopDiscountLabel,
+    double? shopDiscountPercent,
+    bool clearStatusMessage = false,
+    bool clearDiscountLabel = false,
+    bool clearDiscountPercent = false,
+  }) async {
+    final data = <String, dynamic>{};
+    if (shopOpenStatus != null) data['shop_open_status'] = shopOpenStatus;
+    if (clearStatusMessage) {
+      data['shop_status_message'] = null;
+    } else if (shopStatusMessage != null) {
+      data['shop_status_message'] = shopStatusMessage.trim();
+    }
+    if (clearDiscountLabel) {
+      data['shop_discount_label'] = null;
+    } else if (shopDiscountLabel != null) {
+      data['shop_discount_label'] = shopDiscountLabel.trim();
+    }
+    if (clearDiscountPercent) {
+      data['shop_discount_percent'] = null;
+    } else if (shopDiscountPercent != null) {
+      data['shop_discount_percent'] = shopDiscountPercent;
+    }
+    final res = await _api.dio.patch<Map<String, dynamic>>(
+      '/api/vendor/shop-promo',
+      data: data,
+    );
+    final body = res.data;
+    if (body == null) throw Exception('Empty shop promo response');
+    return VendorShopPromo.fromJson(Map<String, dynamic>.from(body));
   }
 
   Future<VendorDashboard> fetchDashboard() async {

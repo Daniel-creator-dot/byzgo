@@ -229,6 +229,34 @@ async function userForAuthResponse(row: Record<string, unknown> | null | undefin
 }
 
 const SHOP_CATEGORIES = ['pharmacy', 'food', 'restaurant', 'fashion', 'groceries'] as const;
+const SHOP_OPEN_STATUSES = ['open', 'busy', 'closed'] as const;
+type ShopOpenStatus = (typeof SHOP_OPEN_STATUSES)[number];
+
+function normalizeShopOpenStatus(value: unknown): ShopOpenStatus | null {
+  if (value == null || value === '') return null;
+  const s = String(value).trim().toLowerCase();
+  if ((SHOP_OPEN_STATUSES as readonly string[]).includes(s)) return s as ShopOpenStatus;
+  return null;
+}
+
+function vendorPromoPayload(row: Record<string, unknown>) {
+  return {
+    vendorId: row.id,
+    id: row.id,
+    name: row.name,
+    shop_category: row.shop_category,
+    shop_open_status: row.shop_open_status ?? 'open',
+    shop_status_message: row.shop_status_message ?? null,
+    shop_discount_label: row.shop_discount_label ?? null,
+    shop_discount_percent:
+      row.shop_discount_percent != null ? Number(row.shop_discount_percent) : null,
+    shop_promo_updated_at: row.shop_promo_updated_at ?? null,
+  };
+}
+
+function emitVendorPromo(row: Record<string, unknown>) {
+  io.emit('vendor:promo', vendorPromoPayload(row));
+}
 
 const PRIMECARE_CANONICAL_EMAIL = 'vendor@bytzgo.net';
 
@@ -601,6 +629,11 @@ const initDb = async () => {
         ALTER TABLE users ADD COLUMN IF NOT EXISTS is_online BOOLEAN DEFAULT false;
         ALTER TABLE users ADD COLUMN IF NOT EXISTS shop_category TEXT DEFAULT 'food';
         ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT;
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS shop_open_status TEXT DEFAULT 'open';
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS shop_status_message TEXT;
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS shop_discount_label TEXT;
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS shop_discount_percent DECIMAL(5,2);
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS shop_promo_updated_at TIMESTAMP WITH TIME ZONE;
         ALTER TABLE users ALTER COLUMN password DROP NOT NULL;
       EXCEPTION WHEN others THEN NULL;
       END $$;
@@ -3165,7 +3198,10 @@ app.get('/api/vendors', async (req, res) => {
   const { region } = req.query;
   try {
     let query =
-      'SELECT id, name, email, phone, cover_image, address, lat, lng, region, shop_category FROM users WHERE role = $1 AND status = \'active\'';
+      `SELECT id, name, email, phone, cover_image, address, lat, lng, region, shop_category,
+              shop_open_status, shop_status_message, shop_discount_label, shop_discount_percent,
+              shop_promo_updated_at
+       FROM users WHERE role = $1 AND status = 'active'`;
     const params: any[] = ['vendor'];
     const { category } = req.query;
     
@@ -3315,6 +3351,115 @@ app.patch('/api/products/:id', authenticateToken, async (req: any, res) => {
     }
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.get('/api/vendor/shop-promo', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'vendor') return res.sendStatus(403);
+  try {
+    const result = await pool.query(
+      `SELECT id, name, shop_category, shop_open_status, shop_status_message,
+              shop_discount_label, shop_discount_percent, shop_promo_updated_at
+       FROM users WHERE id = $1 AND role = 'vendor'`,
+      [req.user.id]
+    );
+    if (!result.rows[0]) return res.status(404).json({ message: 'Vendor not found' });
+    res.json(vendorPromoPayload(result.rows[0]));
+  } catch (err) {
+    console.error('Vendor shop-promo read error:', err);
+    res.status(500).json({ message: 'Failed to load shop status' });
+  }
+});
+
+app.patch('/api/vendor/shop-promo', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'vendor') return res.sendStatus(403);
+  const {
+    shop_open_status,
+    shop_status_message,
+    shop_discount_label,
+    shop_discount_percent,
+  } = req.body ?? {};
+
+  const openStatus = normalizeShopOpenStatus(shop_open_status);
+  if (shop_open_status != null && shop_open_status !== '' && !openStatus) {
+    return res.status(400).json({
+      message: `shop_open_status must be one of: ${SHOP_OPEN_STATUSES.join(', ')}`,
+    });
+  }
+
+  const statusMessage =
+    shop_status_message === undefined
+      ? undefined
+      : shop_status_message == null
+        ? null
+        : String(shop_status_message).trim().slice(0, 160) || null;
+
+  const discountLabel =
+    shop_discount_label === undefined
+      ? undefined
+      : shop_discount_label == null
+        ? null
+        : String(shop_discount_label).trim().slice(0, 80) || null;
+
+  let discountPercent: number | null | undefined = undefined;
+  if (shop_discount_percent !== undefined) {
+    if (shop_discount_percent == null || shop_discount_percent === '') {
+      discountPercent = null;
+    } else {
+      const n = Number(shop_discount_percent);
+      if (!Number.isFinite(n) || n < 0 || n > 100) {
+        return res.status(400).json({ message: 'shop_discount_percent must be between 0 and 100' });
+      }
+      discountPercent = Math.round(n * 100) / 100;
+    }
+  }
+
+  try {
+    const acct = await pool.query(`SELECT status FROM users WHERE id = $1 AND role = 'vendor'`, [
+      req.user.id,
+    ]);
+    if (!acct.rows[0]) return res.status(404).json({ message: 'Vendor not found' });
+    if (acct.rows[0].status !== 'active') {
+      return res.status(403).json({ message: 'Your store must be active before posting status to customers.' });
+    }
+
+    const sets: string[] = [];
+    const params: unknown[] = [];
+    if (openStatus) {
+      params.push(openStatus);
+      sets.push(`shop_open_status = $${params.length}`);
+    }
+    if (shop_status_message !== undefined) {
+      params.push(statusMessage);
+      sets.push(`shop_status_message = $${params.length}`);
+    }
+    if (shop_discount_label !== undefined) {
+      params.push(discountLabel);
+      sets.push(`shop_discount_label = $${params.length}`);
+    }
+    if (shop_discount_percent !== undefined) {
+      params.push(discountPercent);
+      sets.push(`shop_discount_percent = $${params.length}`);
+    }
+    if (sets.length === 0) {
+      return res.status(400).json({ message: 'No shop status fields to update' });
+    }
+    sets.push('shop_promo_updated_at = CURRENT_TIMESTAMP');
+    params.push(req.user.id);
+    const result = await pool.query(
+      `UPDATE users SET ${sets.join(', ')}
+       WHERE id = $${params.length} AND role = 'vendor'
+       RETURNING id, name, shop_category, shop_open_status, shop_status_message,
+                 shop_discount_label, shop_discount_percent, shop_promo_updated_at`,
+      params
+    );
+    const row = result.rows[0];
+    const payload = vendorPromoPayload(row);
+    emitVendorPromo(row);
+    res.json(payload);
+  } catch (err) {
+    console.error('Vendor shop-promo update error:', err);
+    res.status(500).json({ message: 'Failed to update shop status' });
   }
 });
 

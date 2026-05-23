@@ -16,6 +16,7 @@ import '../../shared/vendor_pickup.dart';
 import '../../shared/widgets/product_tile_image.dart';
 import '../../shared/widgets/sheet_theme_scope.dart';
 import '../../shared/widgets/vendor_shop_avatar.dart';
+import '../../shared/widgets/vendor_promo_badge.dart';
 import '../orders/orders_repository.dart';
 import 'customer_shop_checkout_screen.dart';
 
@@ -44,16 +45,19 @@ class _CustomerVendorMenuScreenState extends State<CustomerVendorMenuScreen>
   bool _loading = true;
   String? _error;
   ProductUpdatedHandler? _productHandler;
+  VendorPromoHandler? _promoHandler;
   late final SocketService _socket;
+  late Vendor _vendor;
 
   @override
   void initState() {
     super.initState();
+    _vendor = widget.vendor;
     WidgetsBinding.instance.addObserver(this);
     _load();
     _socket = context.read<SocketService>();
     _productHandler = (vendorId, product) {
-      if (vendorId != widget.vendor.id || !mounted) return;
+      if (vendorId != _vendor.id || !mounted) return;
       final id = product['id']?.toString();
       if (id == null) return;
       final idx = _products.indexWhere((p) => p.id == id);
@@ -77,6 +81,12 @@ class _CustomerVendorMenuScreenState extends State<CustomerVendorMenuScreen>
       });
     };
     _socket.onProductUpdated = _productHandler;
+    _promoHandler = (data) {
+      final id = data['vendorId']?.toString() ?? data['id']?.toString();
+      if (id != _vendor.id || !mounted) return;
+      setState(() => _vendor = _vendor.copyWithPromo(data));
+    };
+    _socket.addVendorPromoListener(_promoHandler!);
   }
 
   @override
@@ -84,6 +94,9 @@ class _CustomerVendorMenuScreenState extends State<CustomerVendorMenuScreen>
     WidgetsBinding.instance.removeObserver(this);
     if (_socket.onProductUpdated == _productHandler) {
       _socket.onProductUpdated = null;
+    }
+    if (_promoHandler != null) {
+      _socket.removeVendorPromoListener(_promoHandler!);
     }
     super.dispose();
   }
@@ -120,7 +133,7 @@ class _CustomerVendorMenuScreenState extends State<CustomerVendorMenuScreen>
     });
     try {
       final list = await context.read<OrdersRepository>().fetchProducts(
-            vendorId: widget.vendor.id,
+            vendorId: _vendor.id,
           );
       if (!mounted) return;
       setState(() {
@@ -148,7 +161,7 @@ class _CustomerVendorMenuScreenState extends State<CustomerVendorMenuScreen>
   }
 
   Future<LocationPoint?> _resolveShopPickup() async {
-    return resolveVendorPickup(widget.vendor, context.read<PlacesService>());
+    return resolveVendorPickup(_vendor, context.read<PlacesService>());
   }
 
   Future<void> _bookPickupFromShop() async {
@@ -169,6 +182,15 @@ class _CustomerVendorMenuScreenState extends State<CustomerVendorMenuScreen>
 
   Future<void> _openCheckout() async {
     if (_cartCount == 0) return;
+    if (_vendor.shopOpenStatus == 'closed') {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('This shop is closed — check back when they reopen.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
     final pickup = await _resolveShopPickup();
     if (!mounted) return;
     if (pickup == null) {
@@ -183,7 +205,7 @@ class _CustomerVendorMenuScreenState extends State<CustomerVendorMenuScreen>
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => CustomerShopCheckoutScreen(
-          vendor: widget.vendor,
+          vendor: _vendor,
           pickup: pickup,
           cart: _cartProducts,
           onOrderPlaced: widget.onShopOrderPlaced,
@@ -205,7 +227,7 @@ class _CustomerVendorMenuScreenState extends State<CustomerVendorMenuScreen>
 
   @override
   Widget build(BuildContext context) {
-    final v = widget.vendor;
+    final v = _vendor;
     final hasCart = _cartCount > 0;
 
     return SheetThemeScope(
@@ -268,6 +290,32 @@ class _CustomerVendorMenuScreenState extends State<CustomerVendorMenuScreen>
               ),
             ),
           ),
+          if (v.hasCustomerFacingPromo)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: BytzGoTheme.accent.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: BytzGoTheme.accent.withValues(alpha: 0.35)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      v.shopOpenStatus == 'closed'
+                          ? 'This shop is closed right now'
+                          : 'Update from ${v.name}',
+                      style: BytzGoTheme.sheetTitle(13),
+                    ),
+                    const SizedBox(height: 8),
+                    v.promoBadgeRow(),
+                  ],
+                ),
+              ),
+            ),
           if (v.address != null && v.address!.trim().isNotEmpty)
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),

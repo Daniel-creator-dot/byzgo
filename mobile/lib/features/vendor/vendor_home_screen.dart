@@ -21,6 +21,7 @@ import '../../shared/widgets/ops_stat_card.dart';
 import '../auth/auth_repository.dart';
 import 'vendor_product_editor.dart';
 import 'vendor_repository.dart';
+import 'vendor_shop_promo_editor.dart';
 import '../../shared/data_url_image.dart';
 import '../../shared/system_chrome.dart';
 import '../../models/location_point.dart';
@@ -522,6 +523,8 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
         assetPath: 'assets/branding/hero_delivery.png',
         height: 120,
       ),
+      const SizedBox(height: 14),
+      const VendorShopPromoEditor(),
       const SizedBox(height: 14),
       SizedBox(
         height: 100,
