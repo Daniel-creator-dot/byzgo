@@ -156,9 +156,7 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
     final cat = ShopCategory.byId(_categoryId) ?? ShopCategory.ordered.first;
     final filtered = _filtered;
 
-    return Stack(
-      children: [
-        RefreshIndicator(
+    return RefreshIndicator(
       color: BytzGoTheme.accent,
       onRefresh: _load,
       child: CustomScrollView(
@@ -363,123 +361,122 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
                       child: Opacity(
                         opacity: closed ? 0.72 : 1,
                         child: Material(
-                        color: BytzGoTheme.sheetBg,
-                        elevation: 0,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(18),
-                          side: BorderSide(
-                            color: chip.accent.withValues(alpha: closed ? 0.12 : 0.25),
+                          color: BytzGoTheme.sheetBg,
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(18),
+                            side: BorderSide(
+                              color: chip.accent.withValues(alpha: closed ? 0.12 : 0.25),
+                            ),
                           ),
-                        ),
-                        child: InkWell(
-                          onTap: () => _openVendorMenu(v),
-                          borderRadius: BorderRadius.circular(18),
-                          child: Padding(
-                            padding: const EdgeInsets.all(14),
-                            child: Row(
-                              children: [
-                                VendorShopAvatar(
-                                  vendor: v,
-                                  size: 56,
-                                  categoryId: _categoryId,
-                                ),
-                                const SizedBox(width: 14),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        v.name,
-                                        style: const TextStyle(
-                                          fontWeight: FontWeight.w800,
-                                          fontSize: 16,
-                                          color: BytzGoTheme.sheetText,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 6),
-                                      v.promoBadgeRow(compact: true),
-                                      const SizedBox(height: 4),
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 8,
-                                          vertical: 3,
-                                        ),
-                                        decoration: BoxDecoration(
-                                          color: chip.accent.withValues(alpha: 0.12),
-                                          borderRadius: BorderRadius.circular(8),
-                                        ),
-                                        child: Text(
-                                          chip.label,
-                                          style: TextStyle(
-                                            fontSize: 10,
+                          child: InkWell(
+                            onTap: () => _openVendorMenu(v),
+                            borderRadius: BorderRadius.circular(18),
+                            child: Padding(
+                              padding: const EdgeInsets.all(14),
+                              child: Row(
+                                children: [
+                                  VendorShopAvatar(
+                                    vendor: v,
+                                    size: 56,
+                                    categoryId: _categoryId,
+                                  ),
+                                  const SizedBox(width: 14),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          v.name,
+                                          style: const TextStyle(
                                             fontWeight: FontWeight.w800,
-                                            color: chip.accent,
+                                            fontSize: 16,
+                                            color: BytzGoTheme.sheetText,
                                           ),
                                         ),
-                                      ),
-                                      if (v.address != null) ...[
                                         const SizedBox(height: 6),
-                                        Text(
-                                          v.address!,
-                                          maxLines: 2,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: BytzGoTheme.sheetBody(12),
-                                        ),
-                                      ],
-                                      if (v.phone != null && v.phone!.trim().isNotEmpty) ...[
-                                        const SizedBox(height: 6),
-                                        Text(
-                                          formatVendorPhone(v.phone),
-                                          style: BytzGoTheme.sheetBody(12).copyWith(
-                                            fontWeight: FontWeight.w700,
-                                            color: BytzGoTheme.brandBlue,
+                                        v.promoBadgeRow(compact: true),
+                                        const SizedBox(height: 4),
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 8,
+                                            vertical: 3,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: chip.accent.withValues(alpha: 0.12),
+                                            borderRadius: BorderRadius.circular(8),
+                                          ),
+                                          child: Text(
+                                            chip.label,
+                                            style: TextStyle(
+                                              fontSize: 10,
+                                              fontWeight: FontWeight.w800,
+                                              color: chip.accent,
+                                            ),
                                           ),
                                         ),
-                                      ],
-                                      const SizedBox(height: 8),
-                                      Row(
-                                        children: [
-                                          if (v.phone != null && v.phone!.trim().isNotEmpty)
+                                        if (v.address != null) ...[
+                                          const SizedBox(height: 6),
+                                          Text(
+                                            v.address!,
+                                            maxLines: 2,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: BytzGoTheme.sheetBody(12),
+                                          ),
+                                        ],
+                                        if (v.phone != null && v.phone!.trim().isNotEmpty) ...[
+                                          const SizedBox(height: 6),
+                                          Text(
+                                            formatVendorPhone(v.phone),
+                                            style: BytzGoTheme.sheetBody(12).copyWith(
+                                              fontWeight: FontWeight.w700,
+                                              color: BytzGoTheme.brandBlue,
+                                            ),
+                                          ),
+                                        ],
+                                        const SizedBox(height: 8),
+                                        Row(
+                                          children: [
+                                            if (v.phone != null && v.phone!.trim().isNotEmpty)
+                                              TextButton.icon(
+                                                onPressed: () => callVendorPhone(v.phone),
+                                                icon: const Icon(Icons.phone, size: 16),
+                                                label: const Text('Call'),
+                                                style: TextButton.styleFrom(
+                                                  foregroundColor: BytzGoTheme.brandBlue,
+                                                  padding: EdgeInsets.zero,
+                                                  minimumSize: const Size(0, 32),
+                                                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                                ),
+                                              ),
+                                            if (v.phone != null && v.phone!.trim().isNotEmpty)
+                                              const SizedBox(width: 8),
                                             TextButton.icon(
-                                              onPressed: () => callVendorPhone(v.phone),
-                                              icon: const Icon(Icons.phone, size: 16),
-                                              label: const Text('Call'),
+                                              onPressed: () => openVendorInGoogleMaps(v),
+                                              icon: const Icon(Icons.map, size: 16),
+                                              label: const Text('Maps'),
                                               style: TextButton.styleFrom(
-                                                foregroundColor: BytzGoTheme.brandBlue,
+                                                foregroundColor: BytzGoTheme.sheetMuted,
                                                 padding: EdgeInsets.zero,
                                                 minimumSize: const Size(0, 32),
                                                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                                               ),
                                             ),
-                                          if (v.phone != null && v.phone!.trim().isNotEmpty)
-                                            const SizedBox(width: 8),
-                                          TextButton.icon(
-                                            onPressed: () => openVendorInGoogleMaps(v),
-                                            icon: const Icon(Icons.map, size: 16),
-                                            label: const Text('Maps'),
-                                            style: TextButton.styleFrom(
-                                              foregroundColor: BytzGoTheme.sheetMuted,
-                                              padding: EdgeInsets.zero,
-                                              minimumSize: const Size(0, 32),
-                                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ],
+                                          ],
+                                        ),
+                                      ],
+                                    ),
                                   ),
-                                ),
-                                const Icon(
-                                  Icons.chevron_right_rounded,
-                                  color: BytzGoTheme.brandBlue,
-                                ),
-                              ],
+                                  const Icon(
+                                    Icons.chevron_right_rounded,
+                                    color: BytzGoTheme.brandBlue,
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
                         ),
                       ),
-                    ),
-                  ),
                     );
                   },
                   childCount: filtered.length,
@@ -488,8 +485,6 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
             ),
         ],
       ),
-    ),
-      ],
     );
   }
 }

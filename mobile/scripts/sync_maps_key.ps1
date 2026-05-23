@@ -31,6 +31,10 @@ $lines = @()
 if (Test-Path $localProps) {
     $lines = @(Get-Content $localProps | Where-Object {
         $_ -notmatch '^\s*GOOGLE_MAPS_API_KEY\s*='
+    } | ForEach-Object {
+        if ($_ -match '^\s*sdk\.dir\s*=') {
+            $_ -replace '\\Android\\sdk\s*$', '\Android\Sdk'
+        } else { $_ }
     })
 }
 $hasMaps = $lines | Where-Object { $_ -match '^\s*GOOGLE_MAPS_API_KEY\s*=' }
@@ -54,7 +58,7 @@ if ((Test-Path (Join-Path $repoFlutter "bin\flutter.bat"))) {
 }
 if (-not ($lines | Where-Object { $_ -match '^\s*sdk\.dir\s*=' })) {
     $androidHome = $env:ANDROID_HOME
-    if (-not $androidHome) { $androidHome = "$env:LOCALAPPDATA\Android\sdk" }
+    if (-not $androidHome) { $androidHome = "$env:LOCALAPPDATA\Android\Sdk" }
     if (Test-Path $androidHome) {
         $lines += "sdk.dir=$($androidHome -replace '\\', '\\')"
     }
