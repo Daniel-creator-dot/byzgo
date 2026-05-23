@@ -59,8 +59,14 @@ try {
 }
 
 $apk = Join-Path $mobileRoot "build\app\outputs\flutter-apk\app-release.apk"
+$copyScript = Join-Path $repoRoot "scripts\copy-apk-to-public.mjs"
+if (Test-Path $copyScript) {
+  node $copyScript
+  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
 Write-Host ""
 Write-Host "APK ready:" -ForegroundColor Green
 Write-Host "  $apk"
+Write-Host "  public/bytzgo.apk (for https://www.bytzgo.net/download/android after deploy)"
 Write-Host "Copy to your phone and install, or: adb install $apk"
 Write-Host "For Google Play use: npm run flutter:build:aab (see docs/PLAY_STORE.md)"

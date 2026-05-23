@@ -38,11 +38,14 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
       AndroidFlutterLocalNotificationsPlugin>();
   await android?.createNotificationChannel(kIncomingRideChannel);
   await android?.createNotificationChannel(kTripChannel);
+  await android?.createNotificationChannel(kSupportChannel);
 
   final notifId = isRide && orderId.isNotEmpty
       ? incomingRideNotificationId(orderId)
       : message.hashCode;
 
+  final isSupport = type == 'support-message';
+  final channel = isSupport ? kSupportChannel : kTripChannel;
   await plugin.show(
     notifId,
     title,
@@ -51,10 +54,10 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
       android: isRide
           ? incomingRideAndroidDetails(playSound: true)
           : AndroidNotificationDetails(
-              kTripChannel.id,
-              kTripChannel.name,
-              channelDescription: kTripChannel.description,
-              importance: Importance.max,
+              channel.id,
+              channel.name,
+              channelDescription: channel.description,
+              importance: isSupport ? Importance.high : Importance.max,
               priority: Priority.high,
               visibility: NotificationVisibility.public,
             ),

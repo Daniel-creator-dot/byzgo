@@ -1,4 +1,5 @@
 import '../core/json_parse.dart';
+import '../shared/client_image_url.dart';
 import 'role.dart';
 
 /// Mirrors `AuthUser` in `src/App.tsx`.
@@ -59,8 +60,8 @@ class AuthUser {
       lng: parseJsonDouble(json['lng']),
       phone: json['phone']?.toString(),
       address: json['address']?.toString(),
-      coverImage: json['cover_image']?.toString(),
-      avatarUrl: json['avatar_url']?.toString(),
+      coverImage: ClientImageUrl.resolve(json['cover_image']?.toString()),
+      avatarUrl: ClientImageUrl.resolve(json['avatar_url']?.toString()),
       hasAvatar: json['has_avatar'] == true,
       shopCategory: json['shop_category']?.toString(),
     );

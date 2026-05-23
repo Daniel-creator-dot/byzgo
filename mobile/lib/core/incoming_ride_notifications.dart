@@ -22,6 +22,15 @@ const AndroidNotificationChannel kTripChannel = AndroidNotificationChannel(
   enableVibration: true,
 );
 
+const AndroidNotificationChannel kSupportChannel = AndroidNotificationChannel(
+  'support_updates',
+  'Support messages',
+  description: 'Replies from BytzGo support on your tickets',
+  importance: Importance.high,
+  playSound: true,
+  enableVibration: true,
+);
+
 int incomingRideNotificationId(String orderId) =>
     orderId.hashCode & 0x7fffffff;
 

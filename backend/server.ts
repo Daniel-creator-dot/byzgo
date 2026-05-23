@@ -1284,19 +1284,19 @@ async function broadcastOrderUpdated(order: any) {
   if (full.customer_id) {
     io.to(full.customer_id).emit(
       'order:updated',
-      sanitizeOrderForRole(full, 'customer', full.customer_id)
+      await sanitizeOrderForRole(full, 'customer', full.customer_id)
     );
   }
   if (full.rider_id) {
     io.to(full.rider_id).emit(
       'order:updated',
-      sanitizeOrderForRole(full, 'rider', full.rider_id)
+      await sanitizeOrderForRole(full, 'rider', full.rider_id)
     );
   }
   if (full.vendor_id) {
     io.to(full.vendor_id).emit(
       'order:updated',
-      sanitizeOrderForRole(full, 'vendor', full.vendor_id)
+      await sanitizeOrderForRole(full, 'vendor', full.vendor_id)
     );
   }
   void notifyCustomerTripPush(full);
@@ -1732,7 +1732,8 @@ type PushAlert = {
   body: string;
   type: string;
   orderId?: string;
-  channelId?: 'incoming_rides_alarm' | 'trip_updates';
+  ticketId?: string;
+  channelId?: 'incoming_rides_alarm' | 'trip_updates' | 'support_updates';
   highPriority?: boolean;
 };
 
@@ -4173,14 +4174,16 @@ app.get('/api/orders', authenticateToken, async (req: any, res) => {
     }
 
     const result = await pool.query(query, params);
-    const rows = result.rows.map((o: any) => {
-      const row = sanitizeOrderForRole(o, req.user.role, req.user.id);
-      if (req.user.role === 'rider' && o.rider_offer_expires_at) {
-        row.expiresAt = new Date(o.rider_offer_expires_at).toISOString();
-        row.dispatchWave = o.rider_offer_wave;
-      }
-      return row;
-    });
+    const rows = await Promise.all(
+      result.rows.map(async (o: any) => {
+        const row = await sanitizeOrderForRole(o, req.user.role, req.user.id);
+        if (req.user.role === 'rider' && o.rider_offer_expires_at) {
+          row.expiresAt = new Date(o.rider_offer_expires_at).toISOString();
+          row.dispatchWave = o.rider_offer_wave;
+        }
+        return row;
+      })
+    );
     res.json(rows);
   } catch (err) {
     console.error('Fetch orders error:', err);
@@ -4458,7 +4461,7 @@ app.patch('/api/orders/:id', authenticateToken, async (req: any, res) => {
     }
     
     if (order) {
-      res.json(sanitizeOrderForRole(order, req.user.role, req.user.id));
+      res.json(await sanitizeOrderForRole(order, req.user.role, req.user.id));
       broadcastOrderUpdated(order);
       if (riderId && order.rider_id) {
         await notifyRideTaken(order.id, order.rider_id);
@@ -4514,7 +4517,7 @@ app.patch('/api/orders/:id/arrive', authenticateToken, async (req: any, res) => 
     );
     const order = result.rows[0];
     broadcastOrderUpdated(order);
-    res.json(sanitizeOrderForRole(order, 'rider', req.user.id));
+    res.json(await sanitizeOrderForRole(order, 'rider', req.user.id));
   } catch (err) {
     console.error('Arrive error:', err);
     res.status(500).json({ message: 'Server error' });
@@ -4532,7 +4535,7 @@ app.post('/api/orders/:id/ack-cash', authenticateToken, async (req: any, res) =>
       return res.status(400).json({ message: 'Confirm cash payment when your driver has arrived.' });
     }
     if (order.payment_status === 'paid') {
-      return res.json(sanitizeOrderForRole(order, 'customer', req.user.id));
+      return res.json(await sanitizeOrderForRole(order, 'customer', req.user.id));
     }
     const result = await pool.query(
       `UPDATE orders SET customer_payment_ack = 'cash', updated_at = CURRENT_TIMESTAMP WHERE id = $1 RETURNING *`,
@@ -4540,7 +4543,7 @@ app.post('/api/orders/:id/ack-cash', authenticateToken, async (req: any, res) =>
     );
     const updated = result.rows[0];
     broadcastOrderUpdated(updated);
-    res.json(sanitizeOrderForRole(updated, 'customer', req.user.id));
+    res.json(await sanitizeOrderForRole(updated, 'customer', req.user.id));
   } catch (err) {
     console.error('Ack cash error:', err);
     res.status(500).json({ message: 'Server error' });
@@ -4559,7 +4562,7 @@ app.post('/api/orders/:id/pay-at-delivery', authenticateToken, async (req: any, 
       return res.status(400).json({ message: 'Pay when your driver has arrived.' });
     }
     if (order.payment_status === 'paid') {
-      return res.json(sanitizeOrderForRole(order, 'customer', req.user.id));
+      return res.json(await sanitizeOrderForRole(order, 'customer', req.user.id));
     }
 
     const total = parseFloat(order.total);
@@ -4595,7 +4598,7 @@ app.post('/api/orders/:id/pay-at-delivery', authenticateToken, async (req: any, 
     );
     const updated = result.rows[0];
     broadcastOrderUpdated(updated);
-    res.json(sanitizeOrderForRole(updated, 'customer', req.user.id));
+    res.json(await sanitizeOrderForRole(updated, 'customer', req.user.id));
   } catch (err) {
     console.error('Pay at delivery error:', err);
     res.status(500).json({ message: err instanceof Error ? err.message : 'Payment failed' });
@@ -4657,7 +4660,7 @@ app.post('/api/orders/:id/complete-delivery', authenticateToken, async (req: any
       console.error('[complete-delivery] settlement failed (order still delivered):', settleErr);
     }
     broadcastOrderUpdated(delivered);
-    res.json(sanitizeOrderForRole(delivered, 'rider', req.user.id));
+    res.json(await sanitizeOrderForRole(delivered, 'rider', req.user.id));
   } catch (err) {
     console.error('Complete delivery error:', err);
     res.status(500).json({ message: 'Server error' });
@@ -4817,7 +4820,7 @@ app.post('/api/orders/:id/cancel', authenticateToken, async (req: any, res) => {
       [orderId]
     );
 
-    const payload = sanitizeOrderForRole(cancelled, req.user.role, req.user.id);
+    const payload = await sanitizeOrderForRole(cancelled, req.user.role, req.user.id);
     res.json({
       ...payload,
       refundCredited,
@@ -4909,7 +4912,7 @@ app.post('/api/orders/:id/pulse-guide', authenticateToken, async (req: any, res)
     });
 
     broadcastOrderUpdated(full);
-    res.json(sanitizeOrderForRole(full, 'customer', req.user.id));
+    res.json(await sanitizeOrderForRole(full, 'customer', req.user.id));
   } catch (err: any) {
     console.error('Pulse Guide error:', err);
     res.status(500).json({ message: 'Could not activate Pulse Guide' });
@@ -5769,6 +5772,21 @@ app.get('/privacy-policy', (_req, res) => res.redirect(301, '/privacy'));
 app.get('/terms', serveLegalPage('terms'));
 app.get('/account-deletion', serveLegalPage('account-deletion'));
 
+/** Direct APK install for testers / before Play listing (file copied by scripts/copy-apk-to-public.mjs). */
+app.get('/download/android', (_req, res) => {
+  const candidates = [
+    path.join(__dirname, '..', 'dist', 'bytzgo.apk'),
+    path.join(__dirname, '..', 'public', 'bytzgo.apk'),
+  ];
+  const apk = candidates.find((p) => fs.existsSync(p));
+  if (!apk) {
+    return res.status(404).type('text/plain').send('APK not published yet. Check back after the next release.');
+  }
+  res.setHeader('Content-Type', 'application/vnd.android.package-archive');
+  res.setHeader('Content-Disposition', 'attachment; filename="BytzGo.apk"');
+  res.sendFile(apk);
+});
+
 /** Production: serve Vite build — admin portal only on web (mobile app for everyone else). */
 function attachWebApp() {
   const shouldServe =
@@ -5794,7 +5812,7 @@ function attachWebApp() {
   const isAssetPath = (p: string) =>
     p.startsWith('/assets/') ||
     p.startsWith('/branding/') ||
-    /\.(js|css|png|jpg|jpeg|gif|webp|svg|ico|woff2?|ttf|map|webmanifest|json)$/i.test(p);
+    /\.(js|css|png|jpg|jpeg|gif|webp|svg|ico|woff2?|ttf|map|webmanifest|json|apk)$/i.test(p);
 
   app.get('/', (_req, res) => {
     if (fs.existsSync(landingHtml)) {

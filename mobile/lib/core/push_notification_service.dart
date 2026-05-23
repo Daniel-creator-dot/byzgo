@@ -65,6 +65,7 @@ class PushNotificationService {
         AndroidFlutterLocalNotificationsPlugin>();
     await android?.createNotificationChannel(kIncomingRideChannel);
     await android?.createNotificationChannel(kTripChannel);
+    await android?.createNotificationChannel(kSupportChannel);
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
       await android?.requestNotificationsPermission();
       await android?.requestFullScreenIntentPermission();
@@ -186,16 +187,18 @@ class PushNotificationService {
         await FlutterRingtonePlayer().playNotification();
       } catch (_) {}
     }
+    final isSupport = type == 'support-message';
+    final channel = isSupport ? kSupportChannel : kTripChannel;
     await _local.show(
       DateTime.now().millisecondsSinceEpoch.remainder(100000),
       title,
       body,
       NotificationDetails(
         android: AndroidNotificationDetails(
-          kTripChannel.id,
-          kTripChannel.name,
-          channelDescription: kTripChannel.description,
-          importance: Importance.max,
+          channel.id,
+          channel.name,
+          channelDescription: channel.description,
+          importance: isSupport ? Importance.high : Importance.max,
           priority: Priority.high,
           visibility: NotificationVisibility.public,
           category: highPriority
@@ -264,16 +267,18 @@ class PushNotificationService {
       return;
     }
 
+    final isSupport = type == 'support-message';
+    final channel = isSupport ? kSupportChannel : kTripChannel;
     await _local.show(
       DateTime.now().millisecondsSinceEpoch.remainder(100000),
       title,
       body,
       NotificationDetails(
         android: AndroidNotificationDetails(
-          kTripChannel.id,
-          kTripChannel.name,
-          channelDescription: kTripChannel.description,
-          importance: Importance.max,
+          channel.id,
+          channel.name,
+          channelDescription: channel.description,
+          importance: isSupport ? Importance.high : Importance.max,
           priority: isRide ? Priority.max : Priority.high,
           visibility: NotificationVisibility.public,
         ),

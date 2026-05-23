@@ -1,4 +1,5 @@
 import '../core/json_parse.dart';
+import '../shared/client_image_url.dart';
 import 'vendor_shop_promo.dart';
 
 class Vendor {
@@ -70,7 +71,9 @@ class Vendor {
       region: json['region']?.toString(),
       phone: json['phone']?.toString(),
       shopCategory: (json['shop_category'] ?? json['shopCategory'])?.toString(),
-      coverImage: (json['cover_image'] ?? json['coverImage'])?.toString(),
+      coverImage: ClientImageUrl.resolve(
+        (json['cover_image'] ?? json['coverImage'])?.toString(),
+      ),
       shopOpenStatus:
           (json['shop_open_status'] ?? json['shopOpenStatus'] ?? 'open').toString(),
       shopStatusMessage:

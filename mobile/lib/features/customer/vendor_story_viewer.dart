@@ -5,7 +5,6 @@ import 'package:flutter/services.dart';
 
 import '../../models/vendor.dart';
 import '../../shared/vendor_contact.dart';
-import '../../shared/shop_story_views.dart';
 import '../../shared/theme.dart';
 import '../../shared/widgets/app_network_image.dart';
 import '../../shared/widgets/vendor_promo_badge.dart';
