@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/session.dart';
 import '../../shared/ghana_regions.dart';
 import '../../shared/theme.dart';
 import '../../shared/user_display.dart';
+import '../../shared/widgets/help_support_tile.dart';
 import '../../shared/widgets/profile_avatar_upload.dart';
 import '../../shared/widgets/delete_account_button.dart';
 import '../../shared/widgets/legal_links.dart';
@@ -160,24 +160,8 @@ class _CustomerProfileTabState extends State<CustomerProfileTab> {
           ),
         ],
         const SizedBox(height: 28),
-        _actionRow(
-          icon: Icons.help_outline,
-          label: 'Help & support',
-          subtitle: 'Email support@bytzgo.com',
-          onTap: () async {
-            final uri = Uri.parse('mailto:support@bytzgo.com?subject=BytzGo%20support');
-            if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
-              if (context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Email support@bytzgo.com'),
-                    behavior: SnackBarBehavior.floating,
-                  ),
-                );
-              }
-            }
-          },
-        ),
+        const HelpSupportTile(),
+        const SizedBox(height: 12),
         _actionRow(
           icon: Icons.shield_outlined,
           label: 'Delivery PIN',

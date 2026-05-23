@@ -8,6 +8,7 @@ import '../../core/session.dart';
 import '../../core/socket_service.dart';
 import '../../features/admin/admin_repository.dart';
 import '../../features/orders/orders_repository.dart';
+import '../../features/support/support_repository.dart';
 import '../../models/admin_overview.dart';
 import '../../models/order.dart';
 import '../../shared/format.dart';
@@ -16,11 +17,12 @@ import 'admin_drivers_tab.dart';
 import 'admin_live_map.dart';
 import 'admin_stores_hub.dart';
 import 'admin_pricing_tab.dart';
+import 'admin_support_tab.dart';
 import 'widgets/admin_hero_header.dart';
 import 'widgets/admin_order_detail_sheet.dart';
 import 'widgets/admin_stat_card.dart';
 
-enum _AdminTab { live, drivers, stores, orders, pricing, insights }
+enum _AdminTab { live, drivers, stores, orders, support, pricing, insights }
 
 class AdminHomeScreen extends StatefulWidget {
   const AdminHomeScreen({super.key});
@@ -40,8 +42,10 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
 
   final _driversTabKey = GlobalKey<AdminDriversTabState>();
   final _storesHubKey = GlobalKey<AdminStoresHubState>();
+  final _supportTabKey = GlobalKey<AdminSupportTabState>();
   int _pendingVendors = 0;
   int _pendingMenu = 0;
+  int _openSupport = 0;
 
   List<Order> _orders = [];
   bool _ordersLoading = false;
@@ -58,7 +62,15 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
       _loadRevenue();
       _loadPendingCount();
       _loadPendingVendorCount();
+      _loadOpenSupportCount();
     });
+  }
+
+  Future<void> _loadOpenSupportCount() async {
+    try {
+      final list = await context.read<SupportRepository>().fetchAdminTickets(status: 'open');
+      if (mounted) setState(() => _openSupport = list.length);
+    } catch (_) {}
   }
 
   Future<void> _loadPendingVendorCount() async {
@@ -264,6 +276,8 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
         );
       case _AdminTab.orders:
         return _buildOrdersTab();
+      case _AdminTab.support:
+        return AdminSupportTab(key: _supportTabKey);
       case _AdminTab.pricing:
         return const AdminPricingTab();
       case _AdminTab.insights:
@@ -814,6 +828,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
               _navItem(_AdminTab.drivers, Icons.verified_user, 'Drivers', badge: _pendingDrivers),
               _navItem(_AdminTab.stores, Icons.storefront, 'Stores', badge: _storesBadgeCount),
               _navItem(_AdminTab.orders, Icons.list_alt, 'Orders'),
+              _navItem(_AdminTab.support, Icons.support_agent, 'Support', badge: _openSupport),
               _navItem(_AdminTab.pricing, Icons.payments_outlined, 'Pricing'),
               _navItem(_AdminTab.insights, Icons.insights, 'Insights'),
             ],
@@ -835,6 +850,10 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
           _loadPendingVendorCount();
         }
         if (tab == _AdminTab.orders) _loadOrders();
+        if (tab == _AdminTab.support) {
+          _supportTabKey.currentState?.load();
+          _loadOpenSupportCount();
+        }
         if (tab == _AdminTab.insights) _loadRevenue();
       },
       child: Padding(

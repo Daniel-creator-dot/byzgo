@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
 
 import '../models/order.dart';
+import '../models/support_message.dart';
 import '../models/trip_message.dart';
 import 'env.dart';
 import 'push_notification_service.dart';
@@ -12,6 +13,7 @@ typedef OrderIdHandler = void Function(String orderId);
 typedef WalletHandler = void Function(double balance);
 typedef LocationHandler = void Function(String riderId, double lat, double lng);
 typedef OrderMessageHandler = void Function(String orderId, TripMessage message);
+typedef SupportMessageHandler = void Function(String ticketId, SupportMessage message);
 typedef ProductUpdatedHandler = void Function(String vendorId, Map<String, dynamic> product);
 typedef PulseGuideHandler = void Function({
   required String orderId,
@@ -40,6 +42,8 @@ class SocketService {
   LocationHandler? onLocationUpdated;
   OrderMessageHandler? onOrderMessage;
   final List<OrderMessageHandler> _orderMessageListeners = [];
+  SupportMessageHandler? onSupportMessage;
+  final List<SupportMessageHandler> _supportMessageListeners = [];
   ProductUpdatedHandler? onProductUpdated;
   PulseGuideHandler? onPulseGuide;
   StatusUpdatedHandler? onStatusUpdated;
@@ -77,6 +81,7 @@ class SocketService {
       ..on('wallet:updated', _onWalletUpdated)
       ..on('location:updated', _onLocationUpdated)
       ..on('order:message', _onOrderMessage)
+      ..on('ticket:message', _onSupportMessage)
       ..on('product:updated', _onProductUpdated)
       ..on('pulse:guide', _onPulseGuide)
       ..on('status:updated', _onStatusUpdated)
@@ -159,6 +164,33 @@ class SocketService {
 
   void removeOrderMessageListener(OrderMessageHandler listener) {
     _orderMessageListeners.remove(listener);
+  }
+
+  void addSupportMessageListener(SupportMessageHandler listener) {
+    if (!_supportMessageListeners.contains(listener)) {
+      _supportMessageListeners.add(listener);
+    }
+  }
+
+  void removeSupportMessageListener(SupportMessageHandler listener) {
+    _supportMessageListeners.remove(listener);
+  }
+
+  void _onSupportMessage(dynamic data) {
+    final map = _asMap(data);
+    if (map == null || map['ticketId'] == null || map['message'] == null) return;
+    try {
+      final message = SupportMessage.fromJson(
+        Map<String, dynamic>.from(map['message'] as Map),
+      );
+      final ticketId = map['ticketId'].toString();
+      onSupportMessage?.call(ticketId, message);
+      for (final listener in List<SupportMessageHandler>.from(_supportMessageListeners)) {
+        listener(ticketId, message);
+      }
+    } catch (e) {
+      debugPrint('[socket] bad ticket:message: $e');
+    }
   }
 
   void _onPulseGuide(dynamic data) {
@@ -244,6 +276,7 @@ class SocketService {
     onWalletUpdated = null;
     onLocationUpdated = null;
     onOrderMessage = null;
+    onSupportMessage = null;
     onProductUpdated = null;
     onPulseGuide = null;
     onStatusUpdated = null;

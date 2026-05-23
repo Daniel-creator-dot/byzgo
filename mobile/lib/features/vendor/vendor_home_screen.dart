@@ -16,6 +16,7 @@ import '../../shared/widgets/bytz_hero_header.dart';
 import '../../shared/widgets/delete_account_button.dart';
 import '../../shared/widgets/profile_avatar_upload.dart';
 import '../../shared/widgets/profile_cover_upload.dart';
+import '../../shared/widgets/help_support_tile.dart';
 import '../../shared/widgets/legal_links.dart';
 import '../../shared/widgets/ops_stat_card.dart';
 import '../auth/auth_repository.dart';
@@ -778,6 +779,8 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
         style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 11),
       ),
       const SizedBox(height: 24),
+      const HelpSupportTile(dark: true),
+      const SizedBox(height: 16),
       const ProfileLegalSection(),
       const SizedBox(height: 12),
       const Center(child: DeleteAccountButton(dark: true)),

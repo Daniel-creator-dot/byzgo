@@ -824,6 +824,38 @@ const initDb = async () => {
       CREATE INDEX IF NOT EXISTS idx_order_messages_order_id
         ON order_messages(order_id, created_at);
 
+      CREATE TABLE IF NOT EXISTS support_tickets (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        display_id TEXT NOT NULL UNIQUE,
+        created_by UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        created_by_role TEXT NOT NULL CHECK (created_by_role IN ('customer', 'vendor', 'rider', 'admin')),
+        category TEXT NOT NULL CHECK (category IN ('order', 'payment', 'account', 'delivery', 'shop', 'other')),
+        subject TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'pending', 'resolved', 'closed')),
+        related_order_id UUID REFERENCES orders(id) ON DELETE SET NULL,
+        assigned_admin_id UUID REFERENCES users(id) ON DELETE SET NULL,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_support_tickets_created_by
+        ON support_tickets(created_by, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_support_tickets_status
+        ON support_tickets(status, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_support_tickets_assigned
+        ON support_tickets(assigned_admin_id, updated_at DESC);
+
+      CREATE TABLE IF NOT EXISTS support_messages (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        ticket_id UUID NOT NULL REFERENCES support_tickets(id) ON DELETE CASCADE,
+        sender_id UUID NOT NULL REFERENCES users(id),
+        body TEXT NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_support_messages_ticket_id
+        ON support_messages(ticket_id, created_at);
+
       CREATE TABLE IF NOT EXISTS order_dispatch_offers (
         order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
         rider_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -990,6 +1022,116 @@ function formatOrderMessage(row: any, viewerId: string) {
     createdAt: row.created_at,
     isMine: row.sender_id === viewerId,
   };
+}
+
+const SUPPORT_CATEGORIES = new Set(['order', 'payment', 'account', 'delivery', 'shop', 'other']);
+const SUPPORT_STATUSES = new Set(['open', 'pending', 'resolved', 'closed']);
+
+function generateSupportDisplayId(): string {
+  return `SUP-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+}
+
+function formatSupportMessage(row: any, viewerId: string) {
+  return {
+    id: row.id,
+    ticketId: row.ticket_id,
+    senderId: row.sender_id,
+    senderName: row.sender_name || 'User',
+    senderRole: row.sender_role || null,
+    body: row.body,
+    createdAt: row.created_at,
+    isMine: row.sender_id === viewerId,
+  };
+}
+
+function formatSupportTicket(row: any) {
+  return {
+    id: row.id,
+    displayId: row.display_id,
+    category: row.category,
+    subject: row.subject,
+    status: row.status,
+    createdBy: row.created_by,
+    createdByRole: row.created_by_role,
+    creatorName: row.creator_name || null,
+    creatorEmail: row.creator_email || null,
+    relatedOrderId: row.related_order_id || null,
+    assignedAdminId: row.assigned_admin_id || null,
+    assignedAdminName: row.assigned_admin_name || null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    lastMessageAt: row.last_message_at || row.updated_at,
+    lastMessagePreview: row.last_message_preview || null,
+    messageCount: row.message_count != null ? Number(row.message_count) : undefined,
+  };
+}
+
+async function fetchSupportTicketRow(ticketId: string) {
+  const result = await pool.query(
+    `SELECT t.*,
+            u.name AS creator_name,
+            u.email AS creator_email,
+            a.name AS assigned_admin_name,
+            (SELECT MAX(m.created_at) FROM support_messages m WHERE m.ticket_id = t.id) AS last_message_at,
+            (SELECT m.body FROM support_messages m WHERE m.ticket_id = t.id ORDER BY m.created_at DESC LIMIT 1) AS last_message_preview,
+            (SELECT COUNT(*)::int FROM support_messages m WHERE m.ticket_id = t.id) AS message_count
+     FROM support_tickets t
+     JOIN users u ON u.id = t.created_by
+     LEFT JOIN users a ON a.id = t.assigned_admin_id
+     WHERE t.id = $1`,
+    [ticketId]
+  );
+  return result.rows[0] || null;
+}
+
+async function assertSupportTicketAccess(ticketId: string, userId: string, role: string) {
+  const row = await fetchSupportTicketRow(ticketId);
+  if (!row) {
+    const err: any = new Error('Ticket not found');
+    err.status = 404;
+    throw err;
+  }
+  if (role === 'admin') return row;
+  if (row.created_by !== userId) {
+    const err: any = new Error('Unauthorized');
+    err.status = 403;
+    throw err;
+  }
+  return row;
+}
+
+async function emitSupportMessage(ticket: any, messageRow: any, senderId: string) {
+  const nameRes = await pool.query(
+    'SELECT name, role FROM users WHERE id = $1',
+    [senderId]
+  );
+  messageRow.sender_name = nameRes.rows[0]?.name;
+  messageRow.sender_role = nameRes.rows[0]?.role;
+
+  const notifyIds = new Set<string>();
+  if (ticket.created_by) notifyIds.add(String(ticket.created_by));
+  if (ticket.assigned_admin_id) notifyIds.add(String(ticket.assigned_admin_id));
+  notifyIds.delete(String(senderId));
+
+  for (const uid of notifyIds) {
+    io.to(uid).emit('ticket:message', {
+      ticketId: ticket.id,
+      message: formatSupportMessage(messageRow, uid),
+    });
+  }
+
+  if (notifyIds.size > 0) {
+    const senderName = nameRes.rows[0]?.name || 'Support';
+    const body = String(messageRow.body || '');
+    void sendPushToUserIds([...notifyIds], {
+      title: `Support · ${ticket.display_id}`,
+      body: `${senderName}: ${body.length > 120 ? `${body.slice(0, 117)}…` : body}`,
+      type: 'support-message',
+      ticketId: ticket.id,
+      channelId: 'support_updates',
+      highPriority: true,
+    });
+  }
 }
 
 async function assertOrderChatAccess(orderId: string, userId: string) {
@@ -2496,6 +2638,8 @@ app.delete('/api/auth/account', authenticateToken, async (req: any, res) => {
       await client.query('UPDATE orders SET customer_id = NULL WHERE customer_id = $1', [userId]);
     }
     await client.query('DELETE FROM order_messages WHERE sender_id = $1', [userId]);
+    await client.query('DELETE FROM support_messages WHERE sender_id = $1', [userId]);
+    await client.query('DELETE FROM support_tickets WHERE created_by = $1', [userId]);
     await client.query('DELETE FROM order_dispatch_offers WHERE rider_id = $1', [userId]);
     await client.query('DELETE FROM wallet_transactions WHERE user_id = $1', [userId]);
     await client.query('DELETE FROM fcm_tokens WHERE user_id = $1', [userId]);
@@ -4845,6 +4989,298 @@ app.post('/api/orders/:id/messages', authenticateToken, async (req: any, res) =>
   } catch (err: any) {
     const status = err.status || 500;
     res.status(status).json({ message: err.message || 'Server error' });
+  }
+});
+
+// --- Support tickets (customer / vendor / rider / admin) ---
+
+app.post('/api/support/tickets', authenticateToken, async (req: any, res) => {
+  const category = String(req.body?.category ?? '').trim().toLowerCase();
+  const subject = String(req.body?.subject ?? '').trim();
+  const description = String(req.body?.description ?? req.body?.body ?? '').trim();
+  const relatedOrderId = req.body?.relatedOrderId ?? req.body?.related_order_id ?? null;
+
+  if (!SUPPORT_CATEGORIES.has(category)) {
+    return res.status(400).json({ message: 'Invalid category' });
+  }
+  if (!subject) return res.status(400).json({ message: 'Subject is required' });
+  if (subject.length > 200) {
+    return res.status(400).json({ message: 'Subject is too long (max 200 characters)' });
+  }
+  if (!description) {
+    return res.status(400).json({ message: 'Please describe your issue' });
+  }
+  if (description.length > 2000) {
+    return res.status(400).json({ message: 'Description is too long (max 2000 characters)' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    let displayId = generateSupportDisplayId();
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        const inserted = await client.query(
+          `INSERT INTO support_tickets
+             (display_id, created_by, created_by_role, category, subject, status, related_order_id)
+           VALUES ($1, $2, $3, $4, $5, 'open', $6)
+           RETURNING *`,
+          [displayId, req.user.id, req.user.role, category, subject, relatedOrderId || null]
+        );
+        const ticket = inserted.rows[0];
+        const msgRes = await client.query(
+          `INSERT INTO support_messages (ticket_id, sender_id, body)
+           VALUES ($1, $2, $3)
+           RETURNING *`,
+          [ticket.id, req.user.id, description]
+        );
+        await client.query('COMMIT');
+        const row = await fetchSupportTicketRow(ticket.id);
+        const msgRow = msgRes.rows[0];
+        const nameRes = await pool.query('SELECT name, role FROM users WHERE id = $1', [
+          req.user.id,
+        ]);
+        msgRow.sender_name = nameRes.rows[0]?.name;
+        msgRow.sender_role = nameRes.rows[0]?.role;
+        const ticketPayload = formatSupportTicket(row);
+        const adminRes = await pool.query(
+          "SELECT id FROM users WHERE role = 'admin' AND status = 'active'"
+        );
+        const adminIds = adminRes.rows.map((r: any) => String(r.id));
+        for (const adminId of adminIds) {
+          io.to(adminId).emit('ticket:new', { ticket: ticketPayload });
+        }
+        if (adminIds.length > 0) {
+          void sendPushToUserIds(adminIds, {
+            title: `New support case · ${ticketPayload.displayId}`,
+            body: `${nameRes.rows[0]?.name || 'User'}: ${subject}`,
+            type: 'support-ticket',
+            ticketId: ticketPayload.id,
+            channelId: 'support_updates',
+            highPriority: true,
+          });
+        }
+        return res.status(201).json({
+          ticket: ticketPayload,
+          message: formatSupportMessage(msgRow, req.user.id),
+        });
+      } catch (err: any) {
+        if (err?.code === '23505' && attempt < 4) {
+          displayId = generateSupportDisplayId();
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw new Error('Could not create ticket');
+  } catch (err: any) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('Create support ticket error:', err);
+    res.status(500).json({ message: 'Could not create support ticket' });
+  } finally {
+    client.release();
+  }
+});
+
+app.get('/api/support/tickets', authenticateToken, async (req: any, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT t.*,
+              u.name AS creator_name,
+              u.email AS creator_email,
+              a.name AS assigned_admin_name,
+              (SELECT MAX(m.created_at) FROM support_messages m WHERE m.ticket_id = t.id) AS last_message_at,
+              (SELECT m.body FROM support_messages m WHERE m.ticket_id = t.id ORDER BY m.created_at DESC LIMIT 1) AS last_message_preview,
+              (SELECT COUNT(*)::int FROM support_messages m WHERE m.ticket_id = t.id) AS message_count
+       FROM support_tickets t
+       JOIN users u ON u.id = t.created_by
+       LEFT JOIN users a ON a.id = t.assigned_admin_id
+       WHERE t.created_by = $1
+       ORDER BY COALESCE(
+         (SELECT MAX(m.created_at) FROM support_messages m WHERE m.ticket_id = t.id),
+         t.updated_at
+       ) DESC
+       LIMIT 100`,
+      [req.user.id]
+    );
+    res.json(result.rows.map((row: any) => formatSupportTicket(row)));
+  } catch (err) {
+    console.error('List support tickets error:', err);
+    res.status(500).json({ message: 'Could not load tickets' });
+  }
+});
+
+app.get('/api/support/tickets/:id', authenticateToken, async (req: any, res) => {
+  try {
+    const ticket = await assertSupportTicketAccess(
+      req.params.id,
+      req.user.id,
+      req.user.role
+    );
+    res.json(formatSupportTicket(ticket));
+  } catch (err: any) {
+    const status = err.status || 500;
+    res.status(status).json({ message: err.message || 'Server error' });
+  }
+});
+
+app.get('/api/support/tickets/:id/messages', authenticateToken, async (req: any, res) => {
+  try {
+    await assertSupportTicketAccess(req.params.id, req.user.id, req.user.role);
+    const result = await pool.query(
+      `SELECT m.*, u.name AS sender_name, u.role AS sender_role
+       FROM support_messages m
+       JOIN users u ON u.id = m.sender_id
+       WHERE m.ticket_id = $1
+       ORDER BY m.created_at ASC
+       LIMIT 300`,
+      [req.params.id]
+    );
+    res.json(result.rows.map((row: any) => formatSupportMessage(row, req.user.id)));
+  } catch (err: any) {
+    const status = err.status || 500;
+    res.status(status).json({ message: err.message || 'Server error' });
+  }
+});
+
+app.post('/api/support/tickets/:id/messages', authenticateToken, async (req: any, res) => {
+  const body = String(req.body?.body ?? req.body?.text ?? '').trim();
+  if (!body) return res.status(400).json({ message: 'Message cannot be empty' });
+  if (body.length > 2000) {
+    return res.status(400).json({ message: 'Message is too long (max 2000 characters)' });
+  }
+  try {
+    const ticket = await assertSupportTicketAccess(
+      req.params.id,
+      req.user.id,
+      req.user.role
+    );
+    if (ticket.status === 'closed') {
+      return res.status(400).json({ message: 'This ticket is closed' });
+    }
+
+    const inserted = await pool.query(
+      `INSERT INTO support_messages (ticket_id, sender_id, body)
+       VALUES ($1, $2, $3)
+       RETURNING *`,
+      [req.params.id, req.user.id, body]
+    );
+    const row = inserted.rows[0];
+
+    let newStatus = ticket.status;
+    let assignedAdminId = ticket.assigned_admin_id;
+    if (req.user.role === 'admin') {
+      if (!assignedAdminId) assignedAdminId = req.user.id;
+      if (ticket.status === 'open' || ticket.status === 'pending') newStatus = 'pending';
+    } else if (ticket.status === 'pending') {
+      newStatus = 'open';
+    }
+
+    await pool.query(
+      `UPDATE support_tickets
+       SET status = $2,
+           assigned_admin_id = COALESCE($3, assigned_admin_id),
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1`,
+      [req.params.id, newStatus, assignedAdminId]
+    );
+
+    const freshTicket = await fetchSupportTicketRow(req.params.id);
+    const nameRes = await pool.query('SELECT name, role FROM users WHERE id = $1', [req.user.id]);
+    row.sender_name = nameRes.rows[0]?.name;
+    row.sender_role = nameRes.rows[0]?.role;
+    await emitSupportMessage(freshTicket || ticket, row, req.user.id);
+    res.status(201).json(formatSupportMessage(row, req.user.id));
+  } catch (err: any) {
+    const status = err.status || 500;
+    res.status(status).json({ message: err.message || 'Server error' });
+  }
+});
+
+app.get('/api/admin/support/tickets', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ message: 'Unauthorized' });
+  const status = String(req.query.status ?? '').trim().toLowerCase();
+  const category = String(req.query.category ?? '').trim().toLowerCase();
+  const role = String(req.query.role ?? '').trim().toLowerCase();
+
+  const clauses: string[] = [];
+  const params: any[] = [];
+  if (status && SUPPORT_STATUSES.has(status)) {
+    params.push(status);
+    clauses.push(`t.status = $${params.length}`);
+  }
+  if (category && SUPPORT_CATEGORIES.has(category)) {
+    params.push(category);
+    clauses.push(`t.category = $${params.length}`);
+  }
+  if (role && ['customer', 'vendor', 'rider', 'admin'].includes(role)) {
+    params.push(role);
+    clauses.push(`t.created_by_role = $${params.length}`);
+  }
+  const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+
+  try {
+    const result = await pool.query(
+      `SELECT t.*,
+              u.name AS creator_name,
+              u.email AS creator_email,
+              a.name AS assigned_admin_name,
+              (SELECT MAX(m.created_at) FROM support_messages m WHERE m.ticket_id = t.id) AS last_message_at,
+              (SELECT m.body FROM support_messages m WHERE m.ticket_id = t.id ORDER BY m.created_at DESC LIMIT 1) AS last_message_preview,
+              (SELECT COUNT(*)::int FROM support_messages m WHERE m.ticket_id = t.id) AS message_count
+       FROM support_tickets t
+       JOIN users u ON u.id = t.created_by
+       LEFT JOIN users a ON a.id = t.assigned_admin_id
+       ${where}
+       ORDER BY
+         CASE t.status WHEN 'open' THEN 0 WHEN 'pending' THEN 1 WHEN 'resolved' THEN 2 ELSE 3 END,
+         COALESCE(
+           (SELECT MAX(m.created_at) FROM support_messages m WHERE m.ticket_id = t.id),
+           t.updated_at
+         ) DESC
+       LIMIT 200`,
+      params
+    );
+    res.json(result.rows.map((row: any) => formatSupportTicket(row)));
+  } catch (err) {
+    console.error('Admin list support tickets error:', err);
+    res.status(500).json({ message: 'Could not load support inbox' });
+  }
+});
+
+app.patch('/api/admin/support/tickets/:id', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ message: 'Unauthorized' });
+  const status = req.body?.status != null ? String(req.body.status).trim().toLowerCase() : null;
+  const assignSelf = req.body?.assign === true || req.body?.assignSelf === true;
+
+  if (status && !SUPPORT_STATUSES.has(status)) {
+    return res.status(400).json({ message: 'Invalid status' });
+  }
+  if (!status && !assignSelf) {
+    return res.status(400).json({ message: 'Nothing to update' });
+  }
+
+  try {
+    const existing = await fetchSupportTicketRow(req.params.id);
+    if (!existing) return res.status(404).json({ message: 'Ticket not found' });
+
+    const nextStatus = status || existing.status;
+    const assignedAdminId = assignSelf ? req.user.id : existing.assigned_admin_id;
+
+    await pool.query(
+      `UPDATE support_tickets
+       SET status = $2,
+           assigned_admin_id = $3,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1`,
+      [req.params.id, nextStatus, assignedAdminId]
+    );
+
+    const row = await fetchSupportTicketRow(req.params.id);
+    res.json(formatSupportTicket(row));
+  } catch (err) {
+    console.error('Admin update support ticket error:', err);
+    res.status(500).json({ message: 'Could not update ticket' });
   }
 });
 

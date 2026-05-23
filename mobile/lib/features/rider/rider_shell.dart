@@ -31,6 +31,7 @@ import '../../models/rider_map_offer.dart';
 import '../../shared/widgets/biker_search_radar.dart';
 import '../../shared/widgets/delete_account_button.dart';
 import '../../shared/widgets/profile_avatar_upload.dart';
+import '../../shared/widgets/help_support_tile.dart';
 import '../../shared/widgets/legal_links.dart';
 import '../../shared/widgets/bolt_eta_pill.dart';
 import '../../shared/widgets/bytz_scaffold.dart';
@@ -2062,6 +2063,8 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
         ),
         const SizedBox(height: 12),
         const SizedBox(height: 20),
+        const HelpSupportTile(dark: true),
+        const SizedBox(height: 16),
         const ProfileLegalSection(),
         const SizedBox(height: 12),
         const Center(child: DeleteAccountButton(dark: true)),

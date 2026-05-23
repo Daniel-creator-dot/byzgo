@@ -17,6 +17,7 @@ import 'features/orders/orders_repository.dart';
 import 'features/rider/rider_documents_repository.dart';
 import 'features/vendor/vendor_repository.dart';
 import 'features/riders/riders_repository.dart';
+import 'features/support/support_repository.dart';
 import 'features/wallet/wallet_repository.dart';
 import 'routing/app_router.dart';
 import 'shared/system_chrome.dart';
@@ -114,6 +115,7 @@ class _BytzGoAppState extends State<BytzGoApp> {
         Provider(create: (ctx) => VendorRepository(ctx.read<ApiClient>())),
         Provider(create: (ctx) => RidersRepository(ctx.read<ApiClient>())),
         Provider(create: (ctx) => WalletRepository(ctx.read<ApiClient>())),
+        Provider(create: (ctx) => SupportRepository(ctx.read<ApiClient>())),
         Provider(create: (ctx) => ConfigRepository(ctx.read<ApiClient>())),
         Provider(create: (_) => LocationService()),
         Provider(create: (ctx) => PlacesService(ctx.read<ApiClient>())),
