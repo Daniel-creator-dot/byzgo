@@ -25,8 +25,20 @@ if [[ ! -f dart_defines.json ]]; then
   echo "Created dart_defines.json from example (edit API_URL if needed)."
 fi
 
+GEN="ios/Flutter/Generated.xcconfig"
+if [[ -f "$GEN" ]] && grep -q 'FLUTTER_ROOT=/workspace' "$GEN" 2>/dev/null; then
+  echo "→ Removing cloud-only Flutter paths (fixes Xcode exit 127)"
+  rm -f "$GEN" ios/Flutter/flutter_export_environment.sh
+fi
+
 echo "→ flutter pub get"
 flutter pub get
+
+if [[ ! -f "$GEN" ]]; then
+  echo "Error: $GEN was not created. Check: flutter doctor" >&2
+  exit 1
+fi
+echo "  FLUTTER_ROOT=$(grep FLUTTER_ROOT "$GEN" | cut -d= -f2)"
 
 echo "→ pod install"
 (cd ios && pod install)

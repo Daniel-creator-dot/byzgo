@@ -260,6 +260,7 @@ Template for local defines: [`dart_defines.json.example`](dart_defines.json.exam
 | Issue | Fix |
 |-------|-----|
 | `flutter` not recognized | Install Flutter and add to PATH; restart terminal |
+| Xcode **Exited with status code 127** | Flutter missing on Mac, or `ios/Flutter/Generated.xcconfig` has `FLUTTER_ROOT=/workspace/...`. On Mac: `brew install --cask flutter`, then `cd mobile && rm -f ios/Flutter/Generated.xcconfig && flutter pub get && ./scripts/setup_ios_xcode.sh` |
 | No `android/` / incomplete `ios/` | Run `.\scripts\setup_platform.ps1` or `flutter create . --org com.bytzgo --project-name bytzgo_mobile` |
 | `flutter.sdk not set` | Create `android/local.properties` from example |
 | Connection refused (emulator) | Use `10.0.2.2:3000`, not `localhost` |
