@@ -31,7 +31,14 @@ Cross-platform iOS and Android client for **BytzGo** — **Bolt / Uber–style**
 
 ## Open in Xcode (iOS)
 
-The iOS app lives under `mobile/ios/`. On a **Mac** with [Xcode](https://developer.apple.com/xcode/) and [Flutter](https://docs.flutter.dev/get-started/install/macos) installed:
+The iOS app lives under `mobile/ios/`. On a **Mac** with [Xcode](https://developer.apple.com/xcode/) and [Flutter](https://docs.flutter.dev/get-started/install/macos) installed, run everything in one step:
+
+```bash
+cd mobile
+./scripts/setup_ios_xcode.sh
+```
+
+Or manually:
 
 ```bash
 cd mobile
