@@ -1,0 +1,39 @@
+BytzGo on iPhone Simulator — easiest path
+=======================================
+
+You do NOT need to type long commands.
+
+STEP 1 — One-time (if you have never installed Flutter)
+  • Open https://brew.sh and install Homebrew (copy the one line it shows).
+  • Open Terminal (Spotlight: type "Terminal").
+  • Paste this ONE line and press Enter:
+
+      brew install --cask flutter
+
+  • Wait until it finishes. Close Terminal.
+
+STEP 2 — Open the app in Xcode
+  • In Finder, go to this folder:  mobile
+  • Double-click:  OPEN_IN_XCODE.command
+  • If Mac says "can't be opened": right-click → Open → Open anyway
+  • Wait until Xcode opens.
+
+STEP 3 — Run
+  • In Xcode, top bar: pick "iPhone 17" (or any iPhone Simulator)
+  • Click the Play ▶ button (or press Command+R)
+
+That's it.
+
+---
+If double-click does not work, ask someone to run in Terminal:
+
+  cd "/path/to/your/mobile/folder"
+  ./OPEN_IN_XCODE.command
+
+---
+Just want to see the website (no Xcode)? From the main project folder:
+
+  npm install
+  npm run dev
+
+Then open the URL shown in the browser.
