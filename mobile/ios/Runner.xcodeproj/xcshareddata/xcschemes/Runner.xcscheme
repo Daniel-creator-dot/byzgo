@@ -10,7 +10,7 @@
             ActionType = "Xcode.IDEStandardExecutionActionsCore.ExecutionActionType.ShellScriptAction">
             <ActionContent
                title = "Run Prepare Flutter Framework Script"
-               scriptText = "/bin/sh &quot;$FLUTTER_ROOT/packages/flutter_tools/bin/xcode_backend.sh&quot; prepare&#10;">
+               scriptText = "set -e&#10;GEN=&quot;${SRCROOT}/Flutter/Generated.xcconfig&quot;&#10;if [ ! -f &quot;$GEN&quot; ]; then&#10;  echo &quot;error: Missing $GEN — run: cd .. &amp;&amp; flutter pub get&quot; &gt;&amp;2&#10;  exit 1&#10;fi&#10;export FLUTTER_ROOT=&quot;$(grep &apos;^FLUTTER_ROOT=&apos; &quot;$GEN&quot; | cut -d= -f2-)&quot;&#10;if [ -z &quot;$FLUTTER_ROOT&quot; ] || [ ! -f &quot;$FLUTTER_ROOT/packages/flutter_tools/bin/xcode_backend.sh&quot; ]; then&#10;  echo &quot;error: Invalid FLUTTER_ROOT=&apos;$FLUTTER_ROOT&apos; — install Flutter on this Mac, then: flutter pub get&quot; &gt;&amp;2&#10;  exit 1&#10;fi&#10;/bin/sh &quot;$FLUTTER_ROOT/packages/flutter_tools/bin/xcode_backend.sh&quot; prepare&#10;">
                <EnvironmentBuildable>
                   <BuildableReference
                      BuildableIdentifier = "primary"

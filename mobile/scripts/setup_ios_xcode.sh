@@ -38,7 +38,12 @@ if [[ ! -f "$GEN" ]]; then
   echo "Error: $GEN was not created. Check: flutter doctor" >&2
   exit 1
 fi
-echo "  FLUTTER_ROOT=$(grep FLUTTER_ROOT "$GEN" | cut -d= -f2)"
+FLUTTER_ROOT_VAL="$(grep '^FLUTTER_ROOT=' "$GEN" | cut -d= -f2-)"
+echo "  FLUTTER_ROOT=$FLUTTER_ROOT_VAL"
+if [[ -z "$FLUTTER_ROOT_VAL" || ! -f "$FLUTTER_ROOT_VAL/packages/flutter_tools/bin/xcode_backend.sh" ]]; then
+  echo "Error: Flutter SDK not found at FLUTTER_ROOT. Install: brew install --cask flutter" >&2
+  exit 1
+fi
 
 echo "→ pod install"
 (cd ios && pod install)
