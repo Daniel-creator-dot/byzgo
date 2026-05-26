@@ -29,6 +29,29 @@ Cross-platform iOS and Android client for **BytzGo** — **Bolt / Uber–style**
 3. Backend: `npm run backend` from repo root (port **3000**)
 4. Env: root `.env.example` and `backend/.env`
 
+## Open in Xcode (iOS)
+
+The iOS app lives under `mobile/ios/`. On a **Mac** with [Xcode](https://developer.apple.com/xcode/) and [Flutter](https://docs.flutter.dev/get-started/install/macos) installed:
+
+```bash
+cd mobile
+flutter pub get
+cd ios && pod install && cd ..
+open ios/Runner.xcworkspace
+```
+
+Always open **`Runner.xcworkspace`** (not `Runner.xcodeproj`) so CocoaPods dependencies load correctly.
+
+In Xcode: pick a simulator or your iPhone, then **Product → Run** (⌘R). Or from the terminal:
+
+```bash
+flutter run -d ios --dart-define-from-file=dart_defines.json --dart-define=API_URL=https://www.bytzgo.net
+```
+
+For a local backend on the same Wi‑Fi, use your Mac’s LAN IP instead of `localhost` (e.g. `--dart-define=API_URL=http://192.168.1.10:3000`).
+
+Sync the Google Maps key before running maps: `.\scripts\sync_maps_key.ps1` (or set `GMSApiKey` in `ios/Runner/Info.plist`).
+
 ## First-time setup
 
 ```powershell
