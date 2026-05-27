@@ -16,8 +16,9 @@ class ConfigRepository {
   Future<Map<String, dynamic>> fetchPricingPayload() async {
     final res = await _api.dio.get<Map<String, dynamic>>(
       '/api/config/pricing',
+      queryParameters: {'_': DateTime.now().millisecondsSinceEpoch},
       options: Options(
-        headers: {'Cache-Control': 'no-cache'},
+        headers: {'Cache-Control': 'no-cache', 'Pragma': 'no-cache'},
       ),
     );
     return Map<String, dynamic>.from(res.data ?? {});

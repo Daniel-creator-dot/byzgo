@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/delivery_pricing_config.dart';
 import '../../models/admin_pricing_settings.dart';
 import '../../shared/format.dart';
 import '../../shared/theme.dart';
@@ -96,8 +97,9 @@ class _AdminPricingTabState extends State<AdminPricingTab> {
         surgeEndTime: _endCtrl.text.trim(),
       );
       await context.read<AdminRepository>().savePricingSettings(body);
+      await context.read<DeliveryPricingConfig>().refresh();
       if (!mounted) return;
-      _snack('Pricing saved', success: true);
+      _snack('Pricing saved — live on all apps', success: true);
       await _load();
     } catch (e) {
       _snack(AdminRepository.errorMessage(e));

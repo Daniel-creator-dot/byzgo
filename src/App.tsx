@@ -328,7 +328,12 @@ function MainApp() {
       // Always fetch wallet and paystack config
       const walletPromise = axios.get('/api/wallet');
       const paystackPromise = axios.get('/api/config/paystack').catch(() => ({ data: { publicKey: '' } }));
-      const pricingPromise = axios.get('/api/config/pricing').catch(() => ({ data: { price_per_km: DEFAULT_DELIVERY_PRICE_PER_KM } }));
+      const pricingPromise = axios
+        .get('/api/config/pricing', {
+          params: { _: Date.now() },
+          headers: { 'Cache-Control': 'no-cache' },
+        })
+        .catch(() => ({ data: { price_per_km: DEFAULT_DELIVERY_PRICE_PER_KM } }));
 
       // Conditional promises based on role
       const ordersPromise = axios.get('/api/orders'); // Everyone needs orders
@@ -711,6 +716,13 @@ function MainApp() {
     socket.on('pricing:updated', (payload: { price_per_km?: number }) => {
       const rate = Number(payload?.price_per_km);
       if (rate > 0) setDeliveryPricePerKm(rate);
+      axios
+        .get('/api/config/pricing', { params: { _: Date.now() }, headers: { 'Cache-Control': 'no-cache' } })
+        .then((res) => {
+          const r = Number(res.data?.price_per_km);
+          if (r > 0) setDeliveryPricePerKm(r);
+        })
+        .catch(() => {});
       axios.get('/api/delivery-zones').then((res) => setZones(res.data)).catch(() => {});
     });
 
@@ -1081,7 +1093,7 @@ function MainApp() {
                 }} onUpdateStatus={updateOrderStatus} addNotification={addNotification} onBalanceUpdate={(bal) => setUser((prev) => (prev ? { ...prev, balance: bal } : prev))} onAddProduct={(p) => setProducts((prev) => { const exists = prev.find((item) => item.id === p.id); if (exists) return prev.map((item) => (item.id === p.id ? p : item)); return [...prev, p]; })} onDeleteProduct={async (id) => { await axios.delete(`/api/products/${id}`); setProducts((prev) => prev.filter((p) => p.id !== id)); }} activeTab={activeTab} setActiveTab={setActiveTab} refreshData={refreshData} onUserUpdate={(updatedUser, newToken) => { setUser(updatedUser); setToken(newToken); localStorage.setItem('user', JSON.stringify(updatedUser)); localStorage.setItem('token', newToken); }} />
               )}
               {user.role === 'admin' && (
-                <AdminView user={user} orders={orders} addNotification={addNotification} activeTab={activeTab} setActiveTab={setActiveTab} onPendingCountChange={setAdminPendingCount} onPendingRiderCountChange={setAdminPendingRiderCount} />
+                <AdminView user={user} orders={orders} addNotification={addNotification} activeTab={activeTab} setActiveTab={setActiveTab} onPendingCountChange={setAdminPendingCount} onPendingRiderCountChange={setAdminPendingRiderCount} onPricingUpdated={(rate) => { if (rate > 0) setDeliveryPricePerKm(rate); }} />
               )}
             </AnimatePresence>
           </div>
@@ -3545,6 +3557,7 @@ function AdminView({
   setActiveTab,
   onPendingCountChange,
   onPendingRiderCountChange,
+  onPricingUpdated,
 }: {
   user: AuthUser;
   orders: Order[];
@@ -3553,6 +3566,7 @@ function AdminView({
   setActiveTab: (v: any) => void;
   onPendingCountChange?: (count: number) => void;
   onPendingRiderCountChange?: (count: number) => void;
+  onPricingUpdated?: (rate: number) => void;
 }) {
   const [allUsers, setAllUsers] = useState<any[]>([]);
   const [adminVendors, setAdminVendors] = useState<any[]>([]);
@@ -4222,8 +4236,18 @@ function AdminView({
                e.preventDefault();
                setSettingsSaving(true);
                try {
-                 await axios.patch('/api/admin/settings', settings);
-                 addNotification('Settings saved', 'success');
+                 const res = await axios.patch('/api/admin/settings', settings);
+                 const rate = Number(res.data?.pricing?.price_per_km);
+                 if (rate > 0) onPricingUpdated?.(rate);
+                 else {
+                   const pr = await axios.get('/api/config/pricing', {
+                     params: { _: Date.now() },
+                     headers: { 'Cache-Control': 'no-cache' },
+                   });
+                   const r = Number(pr.data?.price_per_km);
+                   if (r > 0) onPricingUpdated?.(r);
+                 }
+                 addNotification('Settings saved — pricing is live on web and mobile', 'success');
                } catch (err) {
                  addNotification(getApiError(err, 'Failed to save settings'), 'warning');
                } finally {

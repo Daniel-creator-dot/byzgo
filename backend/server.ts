@@ -5519,8 +5519,12 @@ app.patch('/api/admin/settings', authenticateToken, async (req: any, res) => {
         [String(sms_sender_id).trim()]
       );
     }
-    if (pricingTouched) broadcastPricingUpdated();
-    res.json({ success: true, message: 'Settings updated' });
+    let pricing: Awaited<ReturnType<typeof buildPublicPricingPayload>> | undefined;
+    if (pricingTouched) {
+      pricing = await buildPublicPricingPayload();
+      io.emit('pricing:updated', pricing);
+    }
+    res.json({ success: true, message: 'Settings updated', pricing });
   } catch (err) {
     res.status(500).json({ message: 'Failed to update settings' });
   }

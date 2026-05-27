@@ -55,6 +55,30 @@ class SocketService {
 
   bool get isConnected => _socket?.connected ?? false;
 
+  /// Keeps a socket open for public `pricing:updated` pushes (works before login too).
+  void ensurePricingFeedConnected() {
+    if (_socket != null) {
+      if (!isConnected) _socket!.connect();
+      return;
+    }
+
+    _socket = io.io(
+      Env.apiBaseUrl,
+      io.OptionBuilder()
+          .setTransports(['websocket', 'polling'])
+          .enableAutoConnect()
+          .enableReconnection()
+          .setReconnectionAttempts(999)
+          .setReconnectionDelay(1000)
+          .setReconnectionDelayMax(5000)
+          .build(),
+    );
+
+    _socket!
+      ..onConnect((_) => debugPrint('[socket] pricing feed connected'))
+      ..on('pricing:updated', _onPricingUpdated);
+  }
+
   Future<void> connect({required String userId}) async {
     if (_userId == userId && isConnected) return;
     disconnect(clearCallbacks: false);

@@ -70,6 +70,7 @@ class _CustomerShopCheckoutScreenState extends State<CustomerShopCheckoutScreen>
 
   void _onLivePricingUpdated() {
     if (!mounted) return;
+    setState(() => _quote = null);
     _refreshQuote();
   }
 
