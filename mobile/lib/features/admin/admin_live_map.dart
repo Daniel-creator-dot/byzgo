@@ -2,7 +2,9 @@ import 'package:flutter/foundation.dart'
     show defaultTargetPlatform, kIsWeb, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:provider/provider.dart';
 
+import '../../core/maps_runtime_config.dart';
 import '../../models/admin_overview.dart';
 import '../../shared/ghana_location.dart';
 import '../../shared/theme.dart';
@@ -125,6 +127,8 @@ class _AdminLiveMapState extends State<AdminLiveMap> {
 
     final online = widget.riders.where((r) => r.isOnline).length;
     final onMap = widget.riders.where((r) => r.hasLocation).length;
+
+    context.watch<MapsRuntimeConfig>();
 
     return Stack(
       fit: StackFit.expand,

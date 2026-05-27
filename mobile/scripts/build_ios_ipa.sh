@@ -4,6 +4,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+if [[ -x "$(command -v node)" ]] && [[ -f "$ROOT/scripts/sync_maps_key.mjs" ]]; then
+  node "$ROOT/scripts/sync_maps_key.mjs" || true
+fi
+
 if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "IPA builds require macOS with Xcode." >&2
   exit 1

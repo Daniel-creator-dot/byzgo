@@ -67,7 +67,21 @@ flutter run -d ios --dart-define-from-file=dart_defines.json --dart-define=API_U
 
 For a local backend on the same Wi‑Fi, use your Mac’s LAN IP instead of `localhost` (e.g. `--dart-define=API_URL=http://192.168.1.10:3000`).
 
-Sync the Google Maps key before running maps: `.\scripts\sync_maps_key.ps1` (or set `GMSApiKey` in `ios/Runner/Info.plist`).
+Sync the Google Maps key before running maps (Android **and** iOS):
+
+```bash
+cd mobile
+node scripts/sync_maps_key.mjs
+```
+
+On Windows you can still run `.\scripts\sync_maps_key.ps1` — it calls the same script. Keys are read from `GOOGLE_MAPS_API_KEY` / `VITE_GOOGLE_MAPS_API_KEY` in repo root `.env.local`, or from production `GET /api/config/maps` when `.env.local` is missing.
+
+**Release builds**
+
+- Android: `bash scripts/build_apk.sh` (runs sync when Node is available)
+- iOS (macOS): `bash scripts/build_ios.sh` or `bash scripts/build_ios_ipa.sh` (sync runs first)
+
+The app also fetches the key at startup from `/api/config/maps` when the build has no baked-in key (Dart layer). **Native** iOS Maps still needs `MapsConfig.plist` + `Info.plist` from sync, or set `GOOGLE_MAPS_API_KEY` in the **Xcode scheme environment** (read by `AppDelegate`).
 
 ## First-time setup
 
@@ -90,6 +104,13 @@ GOOGLE_MAPS_API_KEY=your-maps-sdk-key
 Your web app key in **repo root** [`.env.local`](../.env.local) (`GOOGLE_MAPS_API_KEY` or `VITE_GOOGLE_MAPS_API_KEY`) is used for mobile too.
 
 **One-time sync** (copies key into Android, iOS, and Dart):
+
+```bash
+cd mobile
+node scripts/sync_maps_key.mjs
+```
+
+Windows (same script):
 
 ```powershell
 cd mobile
@@ -117,7 +138,7 @@ npm run flutter:android  # terminal 2 (emulator or device)
 
 Android also reads `../../.env.local` at build time if `local.properties` has no key.
 
-**If the map is gray or blank:** In Google Cloud, enable **Maps SDK for Android** (not only JavaScript API). For restricted keys, add an **Android** restriction with package `com.bytzgo.bytzgo_mobile` and your debug SHA-1 fingerprint.
+**If the map is gray or blank:** In Google Cloud, enable **Maps SDK for Android** and **Maps SDK for iOS** (not only JavaScript API). For restricted keys, add an **Android** restriction with package `com.bytzgo.bytzgo_mobile` and your debug SHA-1, and an **iOS** restriction with bundle id `com.bytzgo.bytzgoMobile`.
 
 ### API URL (`--dart-define`)
 

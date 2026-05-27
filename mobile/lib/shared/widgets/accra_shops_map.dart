@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:provider/provider.dart';
 
+import '../../core/maps_runtime_config.dart';
 import '../../models/vendor.dart';
 import '../ghana_location.dart';
 import '../shop_categories.dart';
@@ -65,6 +67,8 @@ class AccraShopsMap extends StatelessWidget {
     }
 
     final center = _centerFor(pins);
+
+    context.watch<MapsRuntimeConfig>();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,

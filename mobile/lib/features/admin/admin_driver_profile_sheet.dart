@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/json_parse.dart';
+import '../../core/maps_runtime_config.dart';
 import '../../shared/format.dart';
 import '../../shared/theme.dart';
 import 'admin_repository.dart';
@@ -80,6 +81,7 @@ class _AdminDriverProfileBodyState extends State<_AdminDriverProfileBody> {
 
   @override
   Widget build(BuildContext context) {
+    context.watch<MapsRuntimeConfig>();
     return Column(
       children: [
         const SizedBox(height: 8),
