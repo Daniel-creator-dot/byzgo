@@ -16,6 +16,9 @@ import '../../models/trip_message.dart';
 import '../../features/auth/auth_repository.dart';
 import '../../features/orders/orders_repository.dart';
 import '../../features/wallet/wallet_repository.dart';
+import '../../features/rider/rider_stats_repository.dart';
+import '../../models/rider_stats.dart';
+import '../../models/wallet_transaction.dart';
 import '../../models/auth_user.dart';
 import '../../models/location_point.dart';
 import '../../models/order.dart';
@@ -45,6 +48,7 @@ import 'incoming_ride_overlay.dart';
 import 'rider_drive_hud.dart';
 import 'rider_drive_map_layer.dart';
 import 'rider_verification_section.dart';
+import 'rider_performance_section.dart';
 
 enum _RiderTab { drive, trips, wallet, profile }
 
@@ -106,6 +110,9 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
   String? _walletMsg;
   bool _walletOk = false;
   String? _profileMsg;
+  RiderStats? _riderStats;
+  List<WalletTransaction> _walletTransactions = [];
+  bool _walletExtrasLoading = false;
 
   SocketService get _socket => context.read<SocketService>();
   Session get _session => context.read<Session>();
@@ -113,6 +120,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
   OrdersRepository get _ordersRepo => context.read<OrdersRepository>();
   DirectionsService get _directions => context.read<DirectionsService>();
   WalletRepository get _wallet => context.read<WalletRepository>();
+  RiderStatsRepository get _riderStatsRepo => context.read<RiderStatsRepository>();
   LocationService get _location => context.read<LocationService>();
 
   AuthUser get _user => _session.user!;
@@ -379,21 +387,99 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
   Future<void> _refreshAll({bool silent = false}) async {
     if (!silent) setState(() => _refreshing = true);
     try {
-      final orders = await _ordersRepo.fetchOrders();
-      final vendors = await _ordersRepo.fetchVendors(region: _user.region);
+      final results = await Future.wait([
+        _ordersRepo.fetchOrders(),
+        _ordersRepo.fetchVendors(region: _user.region),
+        _riderStatsRepo.fetchStats(),
+      ]);
+      final orders = results[0] as List<Order>;
+      final vendors = results[1] as List<Vendor>;
+      final stats = results[2] as RiderStats;
       if (!mounted) return;
       setState(() {
         _orders = orders;
         _vendors = vendors;
+        _riderStats = stats;
       });
       _driveMapKey.currentState?.fitAllMarkers();
       _trackOffers(orders);
       _syncOfferTimer();
       _syncNavPoll();
+      if (_tab == _RiderTab.wallet) {
+        unawaited(_loadWalletTransactions(silent: true));
+      }
     } catch (e) {
       if (!silent) _snack(OrdersRepository.errorMessage(e));
     } finally {
       if (mounted && !silent) setState(() => _refreshing = false);
+    }
+  }
+
+  Future<void> _loadWalletTransactions({bool silent = false}) async {
+    if (!silent) setState(() => _walletExtrasLoading = true);
+    try {
+      final txs = await _wallet.fetchTransactions(limit: 40);
+      if (!mounted) return;
+      setState(() => _walletTransactions = txs);
+    } catch (e) {
+      if (!silent) _snack(WalletRepository.errorMessage(e));
+    } finally {
+      if (mounted && !silent) setState(() => _walletExtrasLoading = false);
+    }
+  }
+
+  Future<void> _releaseTrip(Order order) async {
+    final reasonCtrl = TextEditingController();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => Theme(
+        data: BytzGoTheme.sheetTheme(),
+        child: AlertDialog(
+          title: const Text('Release this trip?'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text(
+                'Only use before pickup. The job goes back to other drivers.',
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: reasonCtrl,
+                style: const TextStyle(color: Colors.white),
+                decoration: _darkInputDeco(hint: 'Reason (optional)'),
+                maxLines: 2,
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Keep trip')),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Release', style: TextStyle(color: Colors.redAccent)),
+            ),
+          ],
+        ),
+      ),
+    );
+    final reason = reasonCtrl.text.trim();
+    reasonCtrl.dispose();
+    if (confirmed != true) return;
+    try {
+      await _ordersRepo.releaseTrip(
+        order.id,
+        reason: reason.isNotEmpty ? reason : null,
+      );
+      if (!mounted) return;
+      setState(() {
+        _orders = _orders.where((o) => o.id != order.id).toList();
+        if (_focusedOrderId == order.id) _focusedOrderId = null;
+        _driveSheet = _DriveSheet.requests;
+      });
+      _snack('Trip released — waiting for new offers', success: true);
+      await _refreshAll(silent: true);
+    } catch (e) {
+      _snack(OrdersRepository.errorMessage(e));
     }
   }
 
@@ -770,6 +856,13 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
       case _RiderTab.trips:
         return _buildTripsTab();
       case _RiderTab.wallet:
+        if (_walletTransactions.isEmpty && !_walletExtrasLoading) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted && _tab == _RiderTab.wallet) {
+              unawaited(_loadWalletTransactions(silent: true));
+            }
+          });
+        }
         return _buildWalletTab(user);
       case _RiderTab.profile:
         return _buildProfileTab(user);
@@ -895,9 +988,12 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
                 formatCedis(context.select<Session, double>((s) => s.user?.balance ?? 0)),
               ),
               const SizedBox(width: 8),
-              _headerStat('Active', '${_activeOrders.length}'),
+              _headerStat(
+                'Earned today',
+                formatCedis(_riderStats?.earningsToday ?? _earningsToday),
+              ),
               const SizedBox(width: 8),
-              _headerStat('Trips today', '$_tripsToday'),
+              _headerStat('Trips today', '${_riderStats?.tripsToday ?? _tripsToday}'),
             ],
           ),
         ],
@@ -1605,6 +1701,8 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
                 ),
               ),
               const Spacer(),
+              _paymentStatusChip(order),
+              const SizedBox(width: 6),
               Text(
                 order.status.replaceAll('_', ' ').toUpperCase(),
                 style: const TextStyle(
@@ -1689,8 +1787,45 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
                 ),
               ],
             ),
+            if (order.status == 'ready') ...[
+              const SizedBox(height: 8),
+              TextButton(
+                onPressed: () => _releaseTrip(order),
+                child: const Text(
+                  'Release trip (before pickup)',
+                  style: TextStyle(
+                    color: Colors.redAccent,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+            ],
           ],
         ],
+      ),
+    );
+  }
+
+  Widget _paymentStatusChip(Order order) {
+    final paid = order.paymentStatus == 'paid';
+    final cod = order.paymentMethod == 'pay_on_delivery' ||
+        order.paymentStatus == 'cash_on_delivery';
+    final label = paid ? 'PAID' : (cod ? 'COD' : 'PAY');
+    final color = paid ? BytzGoTheme.accent : BytzGoTheme.warning;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.2),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 9,
+          fontWeight: FontWeight.w900,
+          color: color,
+        ),
       ),
     );
   }
@@ -1821,12 +1956,25 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
                         ],
                       ),
                     ),
-                    Text(
-                      formatCedis(o.total),
-                      style: const TextStyle(
-                        color: BytzGoTheme.accent,
-                        fontWeight: FontWeight.w900,
-                      ),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text(
+                          formatCedis(o.deliveryFee ?? o.total),
+                          style: const TextStyle(
+                            color: BytzGoTheme.accent,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                        Text(
+                          'earned',
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.35),
+                            fontSize: 9,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
@@ -1929,7 +2077,169 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
           label: _withdrawing ? 'Processing…' : 'Withdraw',
           onPressed: _withdrawing ? null : _handleWithdraw,
         ),
+        if (_riderStats != null) ...[
+          const SizedBox(height: 24),
+          Row(
+            children: [
+              Expanded(
+                child: _walletSummaryChip(
+                  'This week',
+                  formatCedis(_riderStats!.earningsWeek),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _walletSummaryChip(
+                  'This month',
+                  formatCedis(_riderStats!.earningsMonth),
+                ),
+              ),
+            ],
+          ),
+        ],
+        const SizedBox(height: 24),
+        Row(
+          children: [
+            const Text(
+              'Transaction history',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 16,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+            const Spacer(),
+            if (_walletExtrasLoading)
+              const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2, color: BytzGoTheme.accent),
+              ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        if (_walletTransactions.isEmpty && !_walletExtrasLoading)
+          Text(
+            'No transactions yet — earnings and withdrawals appear here.',
+            style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 12),
+          )
+        else
+          ..._walletTransactions.map(_walletTransactionTile),
       ],
+    );
+  }
+
+  Widget _walletSummaryChip(String label, String value) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0F172A),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFF1E293B)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label.toUpperCase(),
+            style: TextStyle(
+              fontSize: 9,
+              fontWeight: FontWeight.w800,
+              color: Colors.white.withValues(alpha: 0.4),
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            value,
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w900,
+              fontSize: 15,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _walletTransactionTile(WalletTransaction tx) {
+    final isCredit = tx.isCredit;
+    final typeLabel = switch (tx.type) {
+      'payment' => 'Delivery pay',
+      'withdrawal' => 'Withdrawal',
+      'topup' => 'Top-up',
+      'commission' => 'Commission',
+      _ => tx.type,
+    };
+    String? when;
+    if (tx.createdAt != null) {
+      try {
+        final d = DateTime.parse(tx.createdAt!);
+        when =
+            '${d.day}/${d.month}/${d.year} ${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
+      } catch (_) {
+        when = tx.createdAt;
+      }
+    }
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0F172A),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFF1E293B)),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            isCredit ? Icons.arrow_downward : Icons.arrow_upward,
+            color: isCredit ? BytzGoTheme.accent : Colors.redAccent,
+            size: 18,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  typeLabel,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 13,
+                  ),
+                ),
+                if (tx.reference != null && tx.reference!.isNotEmpty)
+                  Text(
+                    tx.reference!,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.45),
+                      fontSize: 10,
+                    ),
+                  ),
+                if (when != null)
+                  Text(
+                    when,
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.35),
+                      fontSize: 9,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          Text(
+            '${isCredit ? '+' : ''}${formatCedis(tx.amount.abs())}',
+            style: TextStyle(
+              color: isCredit ? BytzGoTheme.accent : Colors.redAccent,
+              fontWeight: FontWeight.w900,
+              fontSize: 14,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -2040,6 +2350,8 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
         ),
         const SizedBox(height: 20),
         RiderVerificationSection(user: user),
+        const SizedBox(height: 24),
+        RiderPerformanceSection(stats: _riderStats, loading: _refreshing && _riderStats == null),
         const SizedBox(height: 24),
         TextField(
           controller: _profilePhone,

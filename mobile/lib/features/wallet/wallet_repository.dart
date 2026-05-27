@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 
 import '../../core/api_client.dart';
 import '../../core/json_parse.dart';
+import '../../models/wallet_transaction.dart';
 
 class PaystackCheckoutSession {
   const PaystackCheckoutSession({
@@ -45,6 +46,19 @@ class WalletRepository {
   Future<double> fetchBalance() async {
     final res = await _api.dio.get<Map<String, dynamic>>('/api/wallet');
     return parseJsonDoubleOrZero(res.data?['balance']);
+  }
+
+  Future<List<WalletTransaction>> fetchTransactions({int limit = 50}) async {
+    final res = await _api.dio.get<dynamic>(
+      '/api/wallet/transactions',
+      queryParameters: {'limit': limit},
+    );
+    final data = res.data;
+    if (data is! List) return [];
+    return data
+        .whereType<Map>()
+        .map((e) => WalletTransaction.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
   }
 
   Future<double> creditTopup(String reference) async {

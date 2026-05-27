@@ -43,6 +43,14 @@ import {
   openTurnByTurnNavigation,
   type TripStop,
 } from '../../lib/riderTrip';
+import {
+  fetchRiderStats,
+  fetchWalletTransactions,
+  orderDeliveryEarnings,
+  releaseRiderTrip,
+  type RiderStats,
+  type WalletTransaction,
+} from '../../lib/riderDriverApi';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -131,7 +139,47 @@ export function RiderApp({
   }, [orders]);
   const activeOrders = orders.filter((o) => o.rider_id === user.id && o.status !== 'delivered');
   const completedTrips = orders.filter((o) => o.rider_id === user.id && o.status === 'delivered');
-  const todayEarnings = completedTrips.length;
+  const tripsToday = completedTrips.filter((o) => {
+    const d = new Date(o.created_at || (o as Order & { createdAt?: string }).createdAt || 0);
+    const now = new Date();
+    return d.toDateString() === now.toDateString();
+  }).length;
+  const earningsTodayLocal = completedTrips
+    .filter((o) => {
+      const d = new Date(o.created_at || (o as Order & { createdAt?: string }).createdAt || 0);
+      return d.toDateString() === new Date().toDateString();
+    })
+    .reduce((sum, o) => sum + orderDeliveryEarnings(o), 0);
+
+  const [riderStats, setRiderStats] = useState<RiderStats | null>(null);
+  const [walletTransactions, setWalletTransactions] = useState<WalletTransaction[]>([]);
+  const [driverExtrasLoading, setDriverExtrasLoading] = useState(false);
+
+  const loadDriverExtras = async () => {
+    setDriverExtrasLoading(true);
+    try {
+      const [stats, txs] = await Promise.all([
+        fetchRiderStats(),
+        fetchWalletTransactions(40),
+      ]);
+      setRiderStats(stats);
+      setWalletTransactions(txs);
+    } catch {
+      /* non-blocking */
+    } finally {
+      setDriverExtrasLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadDriverExtras();
+  }, []);
+
+  useEffect(() => {
+    if (tab === 'wallet' && walletTransactions.length === 0) {
+      void fetchWalletTransactions(40).then(setWalletTransactions).catch(() => {});
+    }
+  }, [tab, walletTransactions.length]);
 
   const getVendor = (order: Order) => vendors.find((v) => v.id === order.vendor_id);
 
@@ -421,12 +469,14 @@ export function RiderApp({
             <p className="text-lg font-black text-brand-green font-mono">₵{Number(user.balance || 0).toFixed(2)}</p>
           </motion.div>
           <motion.div className="p-3 rounded-2xl bg-slate-900/80 border border-slate-800">
-            <p className="text-[9px] font-black uppercase tracking-widest text-slate-500">Active</p>
-            <p className="text-lg font-black">{activeOrders.length}</p>
+            <p className="text-[9px] font-black uppercase tracking-widest text-slate-500">Earned today</p>
+            <p className="text-lg font-black text-brand-green font-mono">
+              ₵{(riderStats?.earningsToday ?? earningsTodayLocal).toFixed(2)}
+            </p>
           </motion.div>
           <motion.div className="p-3 rounded-2xl bg-slate-900/80 border border-slate-800">
             <p className="text-[9px] font-black uppercase tracking-widest text-slate-500">Trips today</p>
-            <p className="text-lg font-black">{todayEarnings}</p>
+            <p className="text-lg font-black">{riderStats?.tripsToday ?? tripsToday}</p>
           </motion.div>
         </motion.div>
       </header>
@@ -560,7 +610,9 @@ export function RiderApp({
                                   </div>
                                   <PaymentChip order={order} />
                                 </div>
-                                <span className="text-xl font-black text-brand-green font-mono">₵{order.total}</span>
+                                <span className="text-xl font-black text-brand-green font-mono">
+                                  ₵{orderDeliveryEarnings(order).toFixed(2)}
+                                </span>
                               </motion.div>
                               {isCourier ? (
                                 <p className="text-xs text-slate-400 mb-1 flex items-center gap-1">
@@ -636,11 +688,14 @@ export function RiderApp({
                             key={order.id}
                             className="p-4 rounded-2xl bg-gradient-to-br from-slate-800 to-slate-900 border border-brand-green/20"
                           >
-                            <div className="flex justify-between mb-3">
+                            <div className="flex justify-between items-center mb-3 gap-2">
                               <span className="font-black text-lg">#{order.id.slice(-4)}</span>
-                              <span className="text-[10px] font-black uppercase tracking-widest text-brand-green">
-                                {order.status.replace('_', ' ')}
-                              </span>
+                              <div className="flex items-center gap-2">
+                                <PaymentChip order={order} />
+                                <span className="text-[10px] font-black uppercase tracking-widest text-brand-green">
+                                  {order.status.replace('_', ' ')}
+                                </span>
+                              </div>
                             </div>
                             <div className="flex gap-1 mb-4">
                               {[1, 2, 3, 4].map((s) => (
@@ -719,6 +774,29 @@ export function RiderApp({
                                 </button>
                               ) : null}
                             </div>
+                            {order.status === 'ready' && (
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  if (!window.confirm('Release this trip before pickup? It will be offered to other drivers.')) {
+                                    return;
+                                  }
+                                  try {
+                                    await releaseRiderTrip(order.id);
+                                    addNotification?.('Trip released', 'success');
+                                    await refreshData?.();
+                                    await loadDriverExtras();
+                                  } catch (err: unknown) {
+                                    const msg = (err as { response?: { data?: { message?: string } } })?.response
+                                      ?.data?.message;
+                                    addNotification?.(msg || 'Could not release trip', 'warning');
+                                  }
+                                }}
+                                className="mt-3 w-full py-2 text-[10px] font-black uppercase tracking-widest text-red-400 border border-red-500/30 rounded-xl"
+                              >
+                                Release trip (before pickup)
+                              </button>
+                            )}
                           </div>
                         );
                       })
@@ -775,7 +853,10 @@ export function RiderApp({
                         </div>
                         <div className="text-right shrink-0">
                           <p className="text-[9px] font-black uppercase text-brand-green">Done</p>
-                          <p className="font-mono font-black text-brand-green">₵{order.total}</p>
+                          <p className="font-mono font-black text-brand-green">
+                            ₵{orderDeliveryEarnings(order).toFixed(2)}
+                          </p>
+                          <p className="text-[8px] font-bold text-slate-500 uppercase">earned</p>
                         </div>
                       </div>
                     );
@@ -893,6 +974,60 @@ export function RiderApp({
                   {isWithdrawing ? 'Processing…' : 'Withdraw'}
                 </button>
               </form>
+              {riderStats && (
+                <div className="mt-8 grid grid-cols-2 gap-2">
+                  <div className="p-3 rounded-2xl bg-slate-900 border border-slate-800">
+                    <p className="text-[9px] font-black uppercase text-slate-500">This week</p>
+                    <p className="font-black text-brand-green font-mono">₵{riderStats.earningsWeek.toFixed(2)}</p>
+                  </div>
+                  <div className="p-3 rounded-2xl bg-slate-900 border border-slate-800">
+                    <p className="text-[9px] font-black uppercase text-slate-500">This month</p>
+                    <p className="font-black text-brand-green font-mono">₵{riderStats.earningsMonth.toFixed(2)}</p>
+                  </div>
+                </div>
+              )}
+              <div className="mt-8">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-black uppercase tracking-widest text-slate-300">Transaction history</h3>
+                  {driverExtrasLoading && <LoadingIndicator />}
+                </div>
+                {walletTransactions.length === 0 ? (
+                  <p className="text-xs text-slate-500">Earnings and withdrawals will appear here.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {walletTransactions.map((tx) => {
+                      const credit = tx.amount > 0;
+                      const label =
+                        tx.type === 'payment'
+                          ? 'Delivery pay'
+                          : tx.type === 'withdrawal'
+                            ? 'Withdrawal'
+                            : tx.type;
+                      return (
+                        <div
+                          key={tx.id}
+                          className="p-3 rounded-xl bg-slate-900 border border-slate-800 flex justify-between gap-3"
+                        >
+                          <div className="min-w-0">
+                            <p className="text-xs font-black text-slate-200">{label}</p>
+                            {tx.reference && (
+                              <p className="text-[10px] text-slate-500 truncate">{tx.reference}</p>
+                            )}
+                          </div>
+                          <p
+                            className={cn(
+                              'font-mono font-black shrink-0',
+                              credit ? 'text-brand-green' : 'text-red-400'
+                            )}
+                          >
+                            {credit ? '+' : ''}₵{Math.abs(tx.amount).toFixed(2)}
+                          </p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             </motion.div>
           )}
 
@@ -921,6 +1056,36 @@ export function RiderApp({
                   <p className="text-sm text-slate-500">{user.email}</p>
                 </div>
               </div>
+
+              {riderStats && (
+                <div className="mb-8 p-4 rounded-2xl border border-slate-800 bg-slate-900/60 space-y-3">
+                  <h3 className="text-sm font-black uppercase tracking-widest text-slate-300">Performance</h3>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
+                      <p className="text-[9px] font-black uppercase text-slate-500">Accept rate (30d)</p>
+                      <p className="font-black text-lg">
+                        {riderStats.acceptanceRate != null
+                          ? `${Math.round(riderStats.acceptanceRate * 100)}%`
+                          : '—'}
+                      </p>
+                    </div>
+                    <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
+                      <p className="text-[9px] font-black uppercase text-slate-500">Rating</p>
+                      <p className="font-black text-lg">
+                        {riderStats.avgRating != null && riderStats.avgRating > 0
+                          ? riderStats.avgRating.toFixed(1)
+                          : '—'}
+                        <span className="text-xs text-slate-500 font-bold ml-1">
+                          ({riderStats.ratedTrips})
+                        </span>
+                      </p>
+                    </div>
+                  </div>
+                  <p className="text-[10px] text-slate-500 font-bold">
+                    {riderStats.tripsMonth} trips this month · {riderStats.offersDeclined} offers declined
+                  </p>
+                </div>
+              )}
 
               <div className="mb-8 p-4 rounded-2xl border border-slate-800 bg-slate-900/60">
                 <h3 className="text-sm font-black uppercase tracking-widest text-slate-300 mb-1">Verification documents</h3>

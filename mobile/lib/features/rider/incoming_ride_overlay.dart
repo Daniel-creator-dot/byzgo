@@ -246,7 +246,9 @@ class _IncomingRideOverlayState extends State<IncomingRideOverlay>
                           fontWeight: FontWeight.w900,
                         ),
                       ),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 8),
+                      _PaymentChip(order: order),
+                      const SizedBox(height: 12),
                       _stopRow(Icons.location_on, 'Pickup', _pickupLabel),
                       const SizedBox(height: 12),
                       _stopRow(Icons.navigation, 'Drop-off', order.address),
@@ -336,6 +338,37 @@ class _IncomingRideOverlayState extends State<IncomingRideOverlay>
           ),
         ),
       ],
+    );
+  }
+}
+
+class _PaymentChip extends StatelessWidget {
+  const _PaymentChip({required this.order});
+
+  final Order order;
+
+  @override
+  Widget build(BuildContext context) {
+    final paid = order.paymentStatus == 'paid';
+    final cod = order.paymentMethod == 'pay_on_delivery' ||
+        order.paymentStatus == 'cash_on_delivery';
+    final label = paid ? 'Prepaid · collect at drop-off only' : (cod ? 'Cash on delivery' : 'Pay at delivery');
+    final color = paid ? BytzGoTheme.accent : BytzGoTheme.warning;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withValues(alpha: 0.4)),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: color,
+          fontSize: 11,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
     );
   }
 }

@@ -2865,6 +2865,121 @@ app.get('/api/wallet', authenticateToken, async (req: any, res) => {
   }
 });
 
+app.get('/api/wallet/transactions', authenticateToken, async (req: any, res) => {
+  const limit = Math.min(Math.max(parseInt(String(req.query.limit || '50'), 10) || 50, 1), 100);
+  try {
+    const result = await pool.query(
+      `SELECT id, amount, type, status, reference, created_at
+       FROM wallet_transactions
+       WHERE user_id = $1
+       ORDER BY created_at DESC
+       LIMIT $2`,
+      [req.user.id, limit]
+    );
+    res.json(
+      result.rows.map((row: Record<string, unknown>) => ({
+        id: row.id,
+        amount: parseFloat(String(row.amount)),
+        type: row.type,
+        status: row.status,
+        reference: row.reference,
+        createdAt: row.created_at,
+      }))
+    );
+  } catch (err) {
+    console.error('Wallet transactions error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.get('/api/rider/stats', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'rider') {
+    return res.status(403).json({ message: 'Riders only' });
+  }
+  const riderId = req.user.id;
+  try {
+    const tripsRes = await pool.query(
+      `SELECT
+         COUNT(*) FILTER (
+           WHERE status = 'delivered'
+             AND created_at >= date_trunc('day', CURRENT_TIMESTAMP)
+         )::int AS trips_today,
+         COUNT(*) FILTER (
+           WHERE status = 'delivered'
+             AND created_at >= date_trunc('week', CURRENT_TIMESTAMP)
+         )::int AS trips_week,
+         COUNT(*) FILTER (
+           WHERE status = 'delivered'
+             AND created_at >= date_trunc('month', CURRENT_TIMESTAMP)
+         )::int AS trips_month,
+         COALESCE(SUM(
+           CASE WHEN status = 'delivered'
+             AND created_at >= date_trunc('day', CURRENT_TIMESTAMP)
+           THEN COALESCE(delivery_fee, total) ELSE 0 END
+         ), 0)::float AS earnings_today,
+         COALESCE(SUM(
+           CASE WHEN status = 'delivered'
+             AND created_at >= date_trunc('week', CURRENT_TIMESTAMP)
+           THEN COALESCE(delivery_fee, total) ELSE 0 END
+         ), 0)::float AS earnings_week,
+         COALESCE(SUM(
+           CASE WHEN status = 'delivered'
+             AND created_at >= date_trunc('month', CURRENT_TIMESTAMP)
+           THEN COALESCE(delivery_fee, total) ELSE 0 END
+         ), 0)::float AS earnings_month,
+         AVG(rating) FILTER (WHERE rating IS NOT NULL AND rating > 0)::float AS avg_rating,
+         COUNT(*) FILTER (WHERE rating IS NOT NULL AND rating > 0)::int AS rated_trips
+       FROM orders
+       WHERE rider_id = $1`,
+      [riderId]
+    );
+
+    const offersRes = await pool.query(
+      `SELECT
+         COUNT(*)::int AS offers_received,
+         COUNT(*) FILTER (WHERE status = 'accepted')::int AS offers_accepted,
+         COUNT(*) FILTER (WHERE status = 'declined')::int AS offers_declined
+       FROM order_dispatch_offers
+       WHERE rider_id = $1
+         AND created_at >= CURRENT_TIMESTAMP - INTERVAL '30 days'`,
+      [riderId]
+    );
+
+    const trips = tripsRes.rows[0] || {};
+    const offers = offersRes.rows[0] || {};
+    const offersReceived = offers.offers_received ?? 0;
+    const offersAccepted = offers.offers_accepted ?? 0;
+    const acceptanceRate =
+      offersReceived > 0 ? Math.round((offersAccepted / offersReceived) * 1000) / 1000 : null;
+
+    const activeRes = await pool.query(
+      `SELECT COUNT(*)::int AS active_trips
+       FROM orders
+       WHERE rider_id = $1 AND status IN ('ready', 'picked_up', 'arrived')`,
+      [riderId]
+    );
+
+    res.json({
+      tripsToday: trips.trips_today ?? 0,
+      tripsWeek: trips.trips_week ?? 0,
+      tripsMonth: trips.trips_month ?? 0,
+      earningsToday: trips.earnings_today ?? 0,
+      earningsWeek: trips.earnings_week ?? 0,
+      earningsMonth: trips.earnings_month ?? 0,
+      avgRating: trips.avg_rating != null ? parseFloat(trips.avg_rating) : null,
+      ratedTrips: trips.rated_trips ?? 0,
+      offersReceived,
+      offersAccepted,
+      offersDeclined: offers.offers_declined ?? 0,
+      acceptanceRate,
+      activeTrips: activeRes.rows[0]?.active_trips ?? 0,
+    });
+  } catch (err) {
+    console.error('Rider stats error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 function handleMediaUploadError(res: express.Response, err: unknown) {
   if (isMediaError(err)) {
     return res.status(err.statusCode).json({ message: err.message, code: err.code });
@@ -4556,6 +4671,68 @@ app.post('/api/orders/:id/decline', authenticateToken, async (req: any, res) => 
     res.json({ ok: true });
   } catch (err) {
     console.error('[dispatch] decline failed:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+/** Driver releases an accepted trip before pickup — order returns to dispatch queue. */
+app.post('/api/orders/:id/release', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'rider') {
+    return res.status(403).json({ message: 'Riders only' });
+  }
+  const orderId = req.params.id;
+  const reason = String(req.body?.reason || 'Driver released trip').trim().slice(0, 200);
+  try {
+    const userRes = await pool.query('SELECT status FROM users WHERE id = $1', [req.user.id]);
+    if (userRes.rows[0]?.status !== 'active') {
+      return res.status(403).json({ message: 'Go online to manage rides.' });
+    }
+
+    const orderRes = await pool.query(
+      'SELECT * FROM orders WHERE id = $1 AND rider_id = $2',
+      [orderId, req.user.id]
+    );
+    const order = orderRes.rows[0];
+    if (!order) {
+      return res.status(404).json({ message: 'Order not found or not assigned to you.' });
+    }
+    if (order.status !== 'ready') {
+      return res.status(400).json({
+        message: 'You can only release a trip before pickup. Contact support if you cannot complete an active delivery.',
+      });
+    }
+
+    const updated = await pool.query(
+      `UPDATE orders
+       SET rider_id = NULL, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1 AND rider_id = $2 AND status = 'ready'
+       RETURNING *`,
+      [orderId, req.user.id]
+    );
+    if (!updated.rows[0]) {
+      return res.status(409).json({ message: 'Trip could not be released.' });
+    }
+
+    const released = updated.rows[0];
+    await pool.query(
+      `UPDATE order_dispatch_offers SET status = 'declined'
+       WHERE order_id = $1 AND rider_id = $2 AND status = 'accepted'`,
+      [orderId, req.user.id]
+    );
+
+    broadcastOrderUpdated(released);
+    if (isOfferableOrder(released)) {
+      await broadcastRideOfferToRiders(released);
+    }
+
+    res.json({
+      ok: true,
+      message: 'Trip released — it will be offered to other drivers.',
+      reason,
+      order: await sanitizeOrderForRole(released, 'rider', req.user.id),
+    });
+  } catch (err) {
+    console.error('Rider release trip error:', err);
     res.status(500).json({ message: 'Server error' });
   }
 });

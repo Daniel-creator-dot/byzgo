@@ -3480,6 +3480,14 @@ function IncomingRideCallModal({
             >
               <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">You earn</p>
               <p className="text-4xl font-black text-brand-green font-mono">{formatCedis(earnings)}</p>
+              <p className="mt-2 text-[10px] font-black uppercase tracking-widest">
+                {(order as Order & { payment_status?: string }).payment_status === 'paid' ||
+                order.payment_status === 'paid' ? (
+                  <span className="text-brand-green">Prepaid</span>
+                ) : (
+                  <span className="text-amber-400">Cash on delivery</span>
+                )}
+              </p>
             </motion.div>
             <motion.div className="flex items-start gap-3" initial={{ x: -8, opacity: 0.8 }} animate={{ x: 0, opacity: 1 }}>
               <div className="w-9 h-9 rounded-xl bg-brand-blue/20 flex items-center justify-center shrink-0">

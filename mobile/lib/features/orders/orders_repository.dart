@@ -308,6 +308,22 @@ class OrdersRepository {
 
   }
 
+  /// Release an accepted trip before pickup so dispatch can re-offer it.
+  Future<Order> releaseTrip(String orderId, {String? reason}) async {
+    final res = await _api.dio.post<Map<String, dynamic>>(
+      '/api/orders/$orderId/release',
+      data: reason != null && reason.trim().isNotEmpty
+          ? {'reason': reason.trim()}
+          : null,
+    );
+    final data = res.data;
+    final orderJson = data?['order'];
+    if (orderJson is Map) {
+      return Order.fromJson(Map<String, dynamic>.from(orderJson));
+    }
+    throw Exception(data?['message']?.toString() ?? 'Could not release trip');
+  }
+
   /// Pulse Guide™ — flash live GPS to the assigned rider.
   Future<Order> activatePulseGuide({
     required String orderId,
