@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/api_client.dart';
+import '../../core/config_repository.dart';
 import '../../core/directions_service.dart';
 import '../../core/location_service.dart';
 import '../../core/push_notification_service.dart';
@@ -15,6 +16,7 @@ import '../../core/trip_chat_unread.dart';
 import '../../models/trip_message.dart';
 import '../../features/auth/auth_repository.dart';
 import '../../features/orders/orders_repository.dart';
+import '../../features/wallet/paystack_checkout_screen.dart';
 import '../../features/wallet/wallet_repository.dart';
 import '../../features/rider/rider_stats_repository.dart';
 import '../../models/rider_stats.dart';
@@ -97,6 +99,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
   int? _navEtaMinutes;
   DateTime? _navEtaExpiresAt;
 
+  final _topupAmount = TextEditingController();
   final _withdrawAmount = TextEditingController();
   final _withdrawPhone = TextEditingController();
   final _withdrawBank = TextEditingController();
@@ -116,6 +119,8 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
   bool _walletExtrasLoading = false;
   RiderCommissionSummary? _commission;
   bool _commissionPaying = false;
+  bool _commissionPaystackPaying = false;
+  bool _walletTopupLoading = false;
 
   SocketService get _socket => context.read<SocketService>();
   Session get _session => context.read<Session>();
@@ -231,6 +236,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
     _offerTimer?.cancel();
     _navPollTimer?.cancel();
     _myPositionNotifier.dispose();
+    _topupAmount.dispose();
     _withdrawAmount.dispose();
     _withdrawPhone.dispose();
     _withdrawBank.dispose();
@@ -675,6 +681,94 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
       _snack(RiderCommissionRepository.errorMessage(e));
     } finally {
       if (mounted) setState(() => _commissionPaying = false);
+    }
+  }
+
+  Future<void> _payCommissionWithPaystack() async {
+    final owed = _commission?.totalOwed ?? 0;
+    if (owed < 0.01) return;
+    setState(() => _commissionPaystackPaying = true);
+    try {
+      final publicKey = await context.read<ConfigRepository>().fetchPaystackPublicKey();
+      if (publicKey.isEmpty || !publicKey.startsWith('pk_')) {
+        throw Exception(
+          'Paystack is not configured. Ask admin to add keys in Admin → Settings.',
+        );
+      }
+      final session = await _commissionRepo.initializePaystack();
+      if (!mounted) return;
+      final reference = await PaystackCheckoutScreen.open(
+        context,
+        authorizationUrl: session.authorizationUrl,
+        reference: session.reference,
+      );
+      if (!mounted) return;
+      if (reference == null || reference.isEmpty) {
+        _snack('Payment was not completed');
+        return;
+      }
+      final balance = await _commissionRepo.verifyPaystack(reference);
+      _session.patchBalance(balance);
+      await _loadCommission();
+      unawaited(_loadWalletTransactions(silent: true));
+      if (!mounted) return;
+      _snack('Commission paid via Paystack', success: true);
+    } catch (e) {
+      _snack(RiderCommissionRepository.errorMessage(e));
+    } finally {
+      if (mounted) setState(() => _commissionPaystackPaying = false);
+    }
+  }
+
+  Future<void> _topUpWalletPaystack() async {
+    final amount = double.tryParse(_topupAmount.text.trim());
+    if (amount == null || amount < 1) {
+      setState(() {
+        _walletMsg = 'Enter at least ₵1 to top up';
+        _walletOk = false;
+      });
+      return;
+    }
+    setState(() => _walletTopupLoading = true);
+    try {
+      final publicKey = await context.read<ConfigRepository>().fetchPaystackPublicKey();
+      if (publicKey.isEmpty || !publicKey.startsWith('pk_')) {
+        throw Exception(
+          'Paystack is not configured. Ask admin to add keys in Admin → Settings.',
+        );
+      }
+      final session = await _wallet.initializeTopup(amount);
+      if (!mounted) return;
+      final reference = await PaystackCheckoutScreen.open(
+        context,
+        authorizationUrl: session.authorizationUrl,
+        reference: session.reference,
+      );
+      if (!mounted) return;
+      if (reference == null || reference.isEmpty) {
+        setState(() {
+          _walletMsg = 'Payment was not completed';
+          _walletOk = false;
+        });
+        return;
+      }
+      final balance = await _wallet.creditTopup(reference);
+      _session.patchBalance(balance);
+      await _loadCommission();
+      unawaited(_loadWalletTransactions(silent: true));
+      if (!mounted) return;
+      setState(() {
+        _walletMsg = 'Wallet topped up — ${formatCedis(balance)} available';
+        _walletOk = true;
+        _topupAmount.clear();
+      });
+    } catch (e) {
+      setState(() {
+        _walletMsg = WalletRepository.errorMessage(e);
+        _walletOk = false;
+      });
+    } finally {
+      if (mounted) setState(() => _walletTopupLoading = false);
     }
   }
 
@@ -2122,6 +2216,10 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
 
   Widget _buildWalletTab(AuthUser user) {
     final comm = _commission;
+    final balance = user.balance;
+    final withdrawable = balance > 0 ? balance : 0.0;
+    final balanceColor =
+        balance < 0 ? Colors.redAccent : BytzGoTheme.accent;
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
@@ -2176,7 +2274,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
                               Text(
-                                s.settlementDate,
+                                formatSettlementDayLabel(s.settlementDate),
                                 style: TextStyle(
                                   color: Colors.white.withValues(alpha: 0.45),
                                   fontSize: 11,
@@ -2198,9 +2296,30 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
                 if (comm.totalOwed > 0.01) ...[
                   const SizedBox(height: 12),
                   RidePrimaryButton(
-                    label: _commissionPaying ? 'Paying…' : 'Pay commission from wallet',
-                    onPressed: _commissionPaying ? null : _payCommission,
+                    label: _commissionPaystackPaying
+                        ? 'Opening Paystack…'
+                        : 'Pay ${formatCedis(comm.totalOwed)} with Paystack (MoMo / Card)',
+                    onPressed: _commissionPaystackPaying || _commissionPaying
+                        ? null
+                        : _payCommissionWithPaystack,
                   ),
+                  const SizedBox(height: 8),
+                  if (comm.canPayFromWallet)
+                    RideAccentButton(
+                      label: _commissionPaying ? 'Paying…' : 'Pay from wallet balance',
+                      onPressed: _commissionPaying || _commissionPaystackPaying
+                          ? null
+                          : _payCommission,
+                    )
+                  else
+                    Text(
+                      'Wallet balance ${formatCedis(comm.walletBalance)} — not enough to cover commission. Use Paystack above.',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.5),
+                        fontSize: 11,
+                        height: 1.3,
+                      ),
+                    ),
                 ],
               ],
             ),
@@ -2224,7 +2343,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
               const Icon(Icons.account_balance_wallet, color: BytzGoTheme.accent, size: 36),
               const SizedBox(height: 8),
               Text(
-                'AVAILABLE',
+                'WALLET BALANCE',
                 style: TextStyle(
                   fontSize: 10,
                   fontWeight: FontWeight.w800,
@@ -2232,17 +2351,92 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
                 ),
               ),
               Text(
-                formatCedis(user.balance),
-                style: const TextStyle(
+                formatCedis(balance),
+                style: TextStyle(
                   fontSize: 36,
                   fontWeight: FontWeight.w900,
-                  color: BytzGoTheme.accent,
+                  color: balanceColor,
                 ),
               ),
+              if (balance < 0) ...[
+                const SizedBox(height: 8),
+                Text(
+                  'Negative balance is usually from older cash trips before ledger fix. New deliveries credit cash collected first. Top up or pay commission with Paystack.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.55),
+                    fontSize: 11,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+              if (withdrawable > 0) ...[
+                const SizedBox(height: 6),
+                Text(
+                  'Available to withdraw: ${formatCedis(withdrawable)}',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.6),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
             ],
           ),
         ),
         const SizedBox(height: 20),
+        const Text(
+          'TOP UP WALLET',
+          style: TextStyle(
+            color: Colors.white54,
+            fontSize: 10,
+            fontWeight: FontWeight.w900,
+            letterSpacing: 1,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'Add funds with Mobile Money or card via Paystack (separate from paying commission).',
+          style: TextStyle(
+            color: Colors.white.withValues(alpha: 0.55),
+            fontSize: 11,
+            height: 1.3,
+          ),
+        ),
+        const SizedBox(height: 10),
+        TextField(
+          controller: _topupAmount,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          style: const TextStyle(color: Colors.white),
+          decoration: _darkInputDeco(hint: 'Top-up amount (₵)'),
+        ),
+        const SizedBox(height: 10),
+        RidePrimaryButton(
+          label: _walletTopupLoading ? 'Opening Paystack…' : 'Top up with Paystack',
+          onPressed: _walletTopupLoading ? null : _topUpWalletPaystack,
+        ),
+        const SizedBox(height: 24),
+        const Text(
+          'WITHDRAW EARNINGS',
+          style: TextStyle(
+            color: Colors.white54,
+            fontSize: 10,
+            fontWeight: FontWeight.w900,
+            letterSpacing: 1,
+          ),
+        ),
+        const SizedBox(height: 8),
+        if (withdrawable < 1)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: Text(
+              'Nothing to withdraw yet — complete trips or top up your wallet first.',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.5),
+                fontSize: 11,
+              ),
+            ),
+          ),
         Row(
           children: [
             _withdrawMethodBtn('momo', 'MoMo'),
@@ -2293,7 +2487,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
         const SizedBox(height: 16),
         RidePrimaryButton(
           label: _withdrawing ? 'Processing…' : 'Withdraw',
-          onPressed: _withdrawing ? null : _handleWithdraw,
+          onPressed: _withdrawing || withdrawable < 1 ? null : _handleWithdraw,
         ),
         if (_riderStats != null) ...[
           const SizedBox(height: 24),
@@ -2493,9 +2687,18 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
 
   Future<void> _handleWithdraw() async {
     final amount = double.tryParse(_withdrawAmount.text.trim());
+    final available = (_session.user?.balance ?? 0) > 0 ? _session.user!.balance : 0.0;
     if (amount == null || amount <= 0) {
       setState(() {
         _walletMsg = 'Enter a valid amount';
+        _walletOk = false;
+      });
+      return;
+    }
+    if (amount > available + 0.01) {
+      setState(() {
+        _walletMsg =
+            'Insufficient balance — available to withdraw: ${formatCedis(available)}';
         _walletOk = false;
       });
       return;

@@ -848,7 +848,11 @@ function paystackPaymentEmail(user: { email?: string; phone?: string; id: string
   return `user${String(user.id).replace(/-/g, '').slice(0, 12)}@bytzgo.app`;
 }
 
-async function initializePaystackTopup(amountGhs: number, user: { id: string; email?: string; phone?: string }) {
+async function initializePaystackPayment(
+  amountGhs: number,
+  user: { id: string; email?: string; phone?: string },
+  metadata: Record<string, unknown>
+) {
   const secretKey = await getPaystackSecretKey();
   if (!secretKey) {
     throw new Error('Paystack is not configured. Add keys in Admin → Settings.');
@@ -861,7 +865,7 @@ async function initializePaystackTopup(amountGhs: number, user: { id: string; em
 
   const amount = Math.round(amountGhs * 100);
   if (!Number.isFinite(amount) || amount < 100) {
-    throw new Error('Minimum top-up is ₵1');
+    throw new Error('Minimum payment is ₵1');
   }
 
   const reference = `bytzgo_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
@@ -880,7 +884,7 @@ async function initializePaystackTopup(amountGhs: number, user: { id: string; em
       reference,
       callback_url: callbackUrl,
       channels: ['card', 'mobile_money', 'bank'],
-      metadata: { type: 'wallet_topup', user_id: user.id },
+      metadata: { user_id: user.id, ...metadata },
     },
     { headers: { Authorization: `Bearer ${secretKey}` } }
   );
@@ -900,6 +904,10 @@ async function initializePaystackTopup(amountGhs: number, user: { id: string; em
     accessCode: data.access_code as string | undefined,
     amountGhs,
   };
+}
+
+async function initializePaystackTopup(amountGhs: number, user: { id: string; email?: string; phone?: string }) {
+  return initializePaystackPayment(amountGhs, user, { type: 'wallet_topup' });
 }
 
 // Database Initialization
@@ -1657,35 +1665,56 @@ async function settleOrderPayment(order: any) {
     }
     await recordTripCommission(order);
   } else if (order.rider_id) {
-    const vendorShare = moneyRound(total * vendorSharePct);
+    const totalCollected = moneyRound(total);
+    const vendorShare =
+      order.vendor_id && String(order.vendor_id).trim()
+        ? moneyRound(total * vendorSharePct)
+        : 0;
+    const shortId = order.id.slice(0, 8);
 
-    const rRes = await pool.query(
-      'UPDATE users SET balance = balance - $1 WHERE id = $2 RETURNING balance',
-      [vendorShare, order.rider_id]
+    const codCredit = await pool.query(
+      'UPDATE users SET balance = balance + $1 WHERE id = $2 RETURNING balance',
+      [totalCollected, order.rider_id]
     );
     await pool.query(
       'INSERT INTO wallet_transactions (user_id, amount, type, reference) VALUES ($1, $2, $3, $4)',
       [
         order.rider_id,
-        -vendorShare,
+        totalCollected,
         'payment',
-        `COD Order #${order.id.slice(0, 8)} vendor share (pay vendor)`,
+        `COD collected · Order #${shortId}`,
       ]
     );
-    io.to(order.rider_id).emit('wallet:updated', { balance: parseFloat(rRes.rows[0].balance) });
+    let riderBalance = parseFloat(codCredit.rows[0].balance);
 
-    if (order.vendor_id) {
+    if (vendorShare > 0) {
+      const rRes = await pool.query(
+        'UPDATE users SET balance = balance - $1 WHERE id = $2 RETURNING balance',
+        [vendorShare, order.rider_id]
+      );
+      await pool.query(
+        'INSERT INTO wallet_transactions (user_id, amount, type, reference) VALUES ($1, $2, $3, $4)',
+        [
+          order.rider_id,
+          -vendorShare,
+          'payment',
+          `COD vendor share · Order #${shortId}`,
+        ]
+      );
+      riderBalance = parseFloat(rRes.rows[0].balance);
+
       const vRes = await pool.query(
         'UPDATE users SET balance = balance + $1 WHERE id = $2 RETURNING balance',
         [vendorShare, order.vendor_id]
       );
       await pool.query(
         'INSERT INTO wallet_transactions (user_id, amount, type, reference) VALUES ($1, $2, $3, $4)',
-        [order.vendor_id, vendorShare, 'payment', `COD Order #${order.id.slice(0, 8)} payment`]
+        [order.vendor_id, vendorShare, 'payment', `COD Order #${shortId} payment`]
       );
       io.to(order.vendor_id).emit('wallet:updated', { balance: parseFloat(vRes.rows[0].balance) });
     }
 
+    io.to(order.rider_id).emit('wallet:updated', { balance: riderBalance });
     await recordTripCommission(order);
   }
 }
@@ -4617,6 +4646,8 @@ app.get('/api/rider/commission/summary', authenticateToken, async (req: any, res
       settlements.reduce((sum: number, s: any) => sum + s.amount_owed, 0)
     );
     const overdue = settlements.some((s: any) => s.is_overdue);
+    const balRes = await pool.query('SELECT balance FROM users WHERE id = $1', [req.user.id]);
+    const walletBalance = parseFloat(balRes.rows[0]?.balance ?? 0);
     res.json({
       commission_percent: settings.totalPercent,
       insurance_percent: settings.insurancePercent,
@@ -4624,10 +4655,12 @@ app.get('/api/rider/commission/summary', authenticateToken, async (req: any, res
       total_owed: totalOwed,
       has_overdue: overdue,
       can_go_online: !overdue,
+      wallet_balance: walletBalance,
+      can_pay_from_wallet: walletBalance >= totalOwed - 0.01,
       settlements,
       policy:
         `BytzGo takes ${settings.totalPercent}% per trip (${settings.insurancePercent}% driver insurance, ${settings.platformPercent}% platform). ` +
-        'Cash trips: pay commission from your wallet by 8:00 AM Ghana time the next day.',
+        'Cash trips: pay commission with MoMo/card (Paystack) or from wallet by 8:00 AM Ghana time the next day.',
     });
   } catch (err) {
     console.error('[rider/commission/summary]', err);
@@ -4635,87 +4668,234 @@ app.get('/api/rider/commission/summary', authenticateToken, async (req: any, res
   }
 });
 
+async function loadOwedCommissionSettlements(
+  client: { query: typeof pool.query },
+  riderId: string,
+  settlementId?: string,
+  forUpdate = false
+) {
+  await refreshRiderSettlementStatus(riderId);
+  const lock = forUpdate ? ' FOR UPDATE' : '';
+  if (settlementId) {
+    const r = await client.query(
+      `SELECT * FROM rider_daily_settlements
+       WHERE id = $1 AND rider_id = $2 AND commission_total > amount_paid + 0.01${lock}`,
+      [settlementId, riderId]
+    );
+    return r.rows;
+  }
+  const r = await client.query(
+    `SELECT * FROM rider_daily_settlements
+     WHERE rider_id = $1 AND commission_total > amount_paid + 0.01
+     ORDER BY settlement_date ASC${lock}`,
+    [riderId]
+  );
+  return r.rows;
+}
+
+function commissionOwedTotal(settlements: any[]): number {
+  let totalDue = 0;
+  for (const s of settlements) {
+    totalDue += parseFloat(s.commission_total) - parseFloat(s.amount_paid);
+  }
+  return moneyRound(totalDue);
+}
+
+async function applyRiderCommissionSettlement(
+  client: { query: typeof pool.query },
+  riderId: string,
+  settlements: any[],
+  mode: 'wallet' | 'paystack',
+  paystackReference?: string
+) {
+  if (settlements.length === 0) {
+    throw new Error('No commission balance to pay');
+  }
+  const totalDue = commissionOwedTotal(settlements);
+
+  if (mode === 'paystack') {
+    const ref = String(paystackReference || '').trim();
+    if (!ref) throw new Error('Payment reference is required');
+    const used = await client.query(
+      `SELECT 1 FROM wallet_transactions WHERE user_id = $1 AND reference = $2 LIMIT 1`,
+      [riderId, ref]
+    );
+    if (used.rowCount && used.rowCount > 0) {
+      const balRes = await client.query('SELECT balance FROM users WHERE id = $1', [riderId]);
+      return {
+        paid: 0,
+        balance: parseFloat(balRes.rows[0]?.balance ?? 0),
+        alreadyProcessed: true,
+      };
+    }
+    await client.query(
+      `INSERT INTO wallet_transactions (user_id, amount, type, reference) VALUES ($1, $2, $3, $4)`,
+      [riderId, -totalDue, 'payment', `Paystack commission · ${ref}`]
+    );
+  } else {
+    const balRes = await client.query('SELECT balance FROM users WHERE id = $1 FOR UPDATE', [riderId]);
+    const balance = parseFloat(balRes.rows[0]?.balance ?? 0);
+    if (balance < totalDue - 0.01) {
+      const err = new Error(
+        `Insufficient wallet balance. Need ₵${totalDue.toFixed(2)}, have ₵${balance.toFixed(2)}. Use Paystack to pay commission.`
+      );
+      throw err;
+    }
+    await client.query('UPDATE users SET balance = balance - $1 WHERE id = $2', [totalDue, riderId]);
+    await client.query(
+      `INSERT INTO wallet_transactions (user_id, amount, type, reference) VALUES ($1, $2, $3, $4)`,
+      [
+        riderId,
+        -totalDue,
+        'payment',
+        `Trip commission settlement (${settlements.length} day(s))`,
+      ]
+    );
+  }
+
+  const now = new Date();
+  for (const s of settlements) {
+    await client.query(
+      `UPDATE rider_daily_settlements SET
+        amount_paid = commission_total,
+        status = 'paid',
+        paid_at = $2,
+        updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1`,
+      [s.id, now]
+    );
+  }
+
+  const newBal = await client.query('SELECT balance FROM users WHERE id = $1', [riderId]);
+  return {
+    paid: totalDue,
+    balance: parseFloat(newBal.rows[0]?.balance ?? 0),
+    alreadyProcessed: false,
+  };
+}
+
 app.post('/api/rider/commission/pay', authenticateToken, async (req: any, res) => {
   if (req.user.role !== 'rider') return res.sendStatus(403);
   const { settlement_id } = req.body || {};
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    await refreshRiderSettlementStatus(req.user.id);
-    let settlements: any[];
-    if (settlement_id) {
-      const r = await client.query(
-        `SELECT * FROM rider_daily_settlements
-         WHERE id = $1 AND rider_id = $2 FOR UPDATE`,
-        [settlement_id, req.user.id]
-      );
-      settlements = r.rows;
-    } else {
-      const r = await client.query(
-        `SELECT * FROM rider_daily_settlements
-         WHERE rider_id = $1 AND commission_total > amount_paid + 0.01
-         ORDER BY settlement_date ASC FOR UPDATE`,
-        [req.user.id]
-      );
-      settlements = r.rows;
-    }
+    const settlements = await loadOwedCommissionSettlements(
+      client,
+      req.user.id,
+      settlement_id,
+      true
+    );
     if (settlements.length === 0) {
       await client.query('ROLLBACK');
       return res.status(400).json({ message: 'No commission balance to pay' });
     }
-    let totalDue = 0;
-    for (const s of settlements) {
-      totalDue += parseFloat(s.commission_total) - parseFloat(s.amount_paid);
-    }
-    totalDue = moneyRound(totalDue);
-    const balRes = await client.query('SELECT balance FROM users WHERE id = $1 FOR UPDATE', [
-      req.user.id,
-    ]);
-    const balance = parseFloat(balRes.rows[0]?.balance ?? 0);
-    if (balance < totalDue - 0.01) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({
-        message: `Insufficient wallet balance. Need ₵${totalDue.toFixed(2)}, have ₵${balance.toFixed(2)}.`,
-      });
-    }
-    await client.query('UPDATE users SET balance = balance - $1 WHERE id = $2', [
-      totalDue,
-      req.user.id,
-    ]);
-    await client.query(
-      `INSERT INTO wallet_transactions (user_id, amount, type, reference) VALUES ($1, $2, $3, $4)`,
-      [
-        req.user.id,
-        -totalDue,
-        'payment',
-        `Trip commission settlement (${settlements.length} day(s))`,
-      ]
-    );
-    const now = new Date();
-    for (const s of settlements) {
-      const owed = moneyRound(parseFloat(s.commission_total) - parseFloat(s.amount_paid));
-      await client.query(
-        `UPDATE rider_daily_settlements SET
-          amount_paid = commission_total,
-          status = 'paid',
-          paid_at = $2,
-          updated_at = CURRENT_TIMESTAMP
-         WHERE id = $1`,
-        [s.id, now]
-      );
-    }
+    const result = await applyRiderCommissionSettlement(client, req.user.id, settlements, 'wallet');
     await client.query('COMMIT');
-    const newBal = await pool.query('SELECT balance FROM users WHERE id = $1', [req.user.id]);
-    io.to(req.user.id).emit('wallet:updated', { balance: parseFloat(newBal.rows[0].balance) });
+    io.to(req.user.id).emit('wallet:updated', { balance: result.balance });
     res.json({
       success: true,
-      paid: totalDue,
-      balance: parseFloat(newBal.rows[0].balance),
+      paid: result.paid,
+      balance: result.balance,
     });
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     console.error('[rider/commission/pay]', err);
-    res.status(500).json({ message: 'Commission payment failed' });
+    const message = err instanceof Error ? err.message : 'Commission payment failed';
+    const status = message.includes('Insufficient') ? 400 : 500;
+    res.status(status).json({ message });
+  } finally {
+    client.release();
+  }
+});
+
+app.post('/api/rider/commission/paystack/initialize', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'rider') return res.sendStatus(403);
+  const { settlement_id } = req.body || {};
+  try {
+    await refreshRiderSettlementStatus(req.user.id);
+    const settlements = await loadOwedCommissionSettlements(pool, req.user.id, settlement_id);
+    if (settlements.length === 0) {
+      return res.status(400).json({ message: 'No commission balance to pay' });
+    }
+    const totalDue = commissionOwedTotal(settlements);
+    const userRes = await pool.query(
+      'SELECT id, email, phone, status FROM users WHERE id = $1',
+      [req.user.id]
+    );
+    const row = userRes.rows[0];
+    if (!row || row.status === 'disabled') {
+      return res.status(403).json({ message: 'Your account is disabled.' });
+    }
+
+    const checkout = await initializePaystackPayment(totalDue, row, {
+      type: 'rider_commission',
+      settlement_ids: settlements.map((s: any) => s.id),
+    });
+
+    res.json({
+      reference: checkout.reference,
+      authorization_url: checkout.authorizationUrl,
+      access_code: checkout.accessCode,
+      amount: checkout.amountGhs,
+      total_owed: totalDue,
+    });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Could not start payment';
+    console.error('[rider/commission/paystack/initialize]', message);
+    const status = message.includes('not configured') ? 503 : 400;
+    res.status(status).json({ message });
+  }
+});
+
+app.post('/api/rider/commission/paystack/verify', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'rider') return res.sendStatus(403);
+  const reference = typeof req.body?.reference === 'string' ? req.body.reference.trim() : '';
+  if (!reference) {
+    return res.status(400).json({ message: 'Payment reference is required' });
+  }
+
+  const client = await pool.connect();
+  try {
+    const verified = await verifyPaystackTransaction(reference);
+    if (verified.currency && verified.currency !== 'GHS') {
+      return res.status(400).json({ message: `Unexpected currency: ${verified.currency}` });
+    }
+
+    await client.query('BEGIN');
+    const settlements = await loadOwedCommissionSettlements(client, req.user.id, undefined, true);
+    if (settlements.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ message: 'No commission balance to pay' });
+    }
+    const totalDue = commissionOwedTotal(settlements);
+    if (verified.amountGhs < totalDue - 0.02) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        message: `Payment amount ₵${verified.amountGhs.toFixed(2)} is less than commission owed ₵${totalDue.toFixed(2)}.`,
+      });
+    }
+
+    const result = await applyRiderCommissionSettlement(
+      client,
+      req.user.id,
+      settlements,
+      'paystack',
+      reference
+    );
+    await client.query('COMMIT');
+    io.to(req.user.id).emit('wallet:updated', { balance: result.balance });
+    res.json({
+      success: true,
+      paid: result.paid,
+      balance: result.balance,
+      alreadyProcessed: result.alreadyProcessed === true,
+    });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('[rider/commission/paystack/verify]', err);
+    const message = err instanceof Error ? err.message : 'Commission payment failed';
+    res.status(500).json({ message });
   } finally {
     client.release();
   }

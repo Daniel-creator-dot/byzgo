@@ -11,6 +11,8 @@ class RiderCommissionSummary {
     required this.totalOwed,
     required this.hasOverdue,
     required this.canGoOnline,
+    required this.canPayFromWallet,
+    required this.walletBalance,
     required this.policy,
     required this.settlements,
   });
@@ -21,6 +23,8 @@ class RiderCommissionSummary {
   final double totalOwed;
   final bool hasOverdue;
   final bool canGoOnline;
+  final bool canPayFromWallet;
+  final double walletBalance;
   final String policy;
   final List<RiderCommissionSettlement> settlements;
 
@@ -33,6 +37,8 @@ class RiderCommissionSummary {
       totalOwed: parseJsonDouble(json['total_owed']) ?? 0,
       hasOverdue: json['has_overdue'] == true,
       canGoOnline: json['can_go_online'] != false,
+      canPayFromWallet: json['can_pay_from_wallet'] == true,
+      walletBalance: parseJsonDouble(json['wallet_balance']) ?? 0,
       policy: json['policy']?.toString() ?? '',
       settlements: list is List
           ? list
@@ -102,6 +108,32 @@ class RiderCommissionRepository {
     return parseJsonDouble(res.data?['balance']) ?? 0;
   }
 
+  Future<PaystackCommissionCheckout> initializePaystack({String? settlementId}) async {
+    final res = await _api.dio.post<Map<String, dynamic>>(
+      '/api/rider/commission/paystack/initialize',
+      data: {if (settlementId != null) 'settlement_id': settlementId},
+    );
+    final data = res.data ?? {};
+    final url = data['authorization_url']?.toString().trim() ?? '';
+    final reference = data['reference']?.toString().trim() ?? '';
+    if (url.isEmpty || reference.isEmpty) {
+      throw Exception('Paystack checkout URL missing from server');
+    }
+    return PaystackCommissionCheckout(
+      reference: reference,
+      authorizationUrl: url,
+      amountGhs: parseJsonDouble(data['amount']) ?? parseJsonDouble(data['total_owed']) ?? 0,
+    );
+  }
+
+  Future<double> verifyPaystack(String reference) async {
+    final res = await _api.dio.post<Map<String, dynamic>>(
+      '/api/rider/commission/paystack/verify',
+      data: {'reference': reference.trim()},
+    );
+    return parseJsonDouble(res.data?['balance']) ?? 0;
+  }
+
   static String errorMessage(Object err) {
     if (err is DioException) {
       return ApiClient.messageFromDio(err, 'Commission request failed');
@@ -114,4 +146,29 @@ class RiderCommissionRepository {
     final data = err.response?.data;
     return data is Map && data['code'] == 'COMMISSION_OVERDUE';
   }
+}
+
+class PaystackCommissionCheckout {
+  const PaystackCommissionCheckout({
+    required this.reference,
+    required this.authorizationUrl,
+    required this.amountGhs,
+  });
+
+  final String reference;
+  final String authorizationUrl;
+  final double amountGhs;
+}
+
+String formatSettlementDayLabel(String raw) {
+  final parsed = DateTime.tryParse(raw);
+  if (parsed != null) {
+    const months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    ];
+    return '${parsed.day} ${months[parsed.month - 1]} ${parsed.year}';
+  }
+  if (raw.length >= 10) return raw.substring(0, 10);
+  return raw;
 }
