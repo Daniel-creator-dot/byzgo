@@ -74,12 +74,23 @@ String displayLocationLabel(String? address, double lat, double lng) {
   return 'Selected on map';
 }
 
-double courierFeeBetween(LocationPoint pickup, LocationPoint destination, double pricePerKm) {
+double courierFeeBetween(
+  LocationPoint pickup,
+  LocationPoint destination,
+  double pricePerKm, {
+  double? minFee,
+  double? maxFee,
+}) {
   final km = haversineDistanceKm(
     pickup.lat,
     pickup.lng,
     destination.lat,
     destination.lng,
   );
-  return deliveryFeeFromDistanceKm(km, pricePerKm);
+  return deliveryFeeFromDistanceKm(
+    km,
+    pricePerKm,
+    min: minFee,
+    max: maxFee,
+  );
 }

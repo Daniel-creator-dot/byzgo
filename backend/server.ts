@@ -386,6 +386,40 @@ async function setSetting(key: string, value: string) {
   );
 }
 
+function parseOptionalPositiveAmount(raw: string | null | undefined): number | null {
+  if (raw == null || String(raw).trim() === '') return null;
+  const n = parseFloat(String(raw));
+  return Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : null;
+}
+
+async function getGlobalDeliveryBounds(): Promise<{ min: number | null; max: number | null }> {
+  const minRaw = await getSetting('delivery_min_fee');
+  const maxRaw = await getSetting('delivery_max_fee');
+  return {
+    min: parseOptionalPositiveAmount(minRaw),
+    max: parseOptionalPositiveAmount(maxRaw),
+  };
+}
+
+function applyDeliveryFeeCaps(
+  feeFromDistance: number,
+  zone: { min_price?: unknown; max_price?: unknown } | null,
+  globalBounds: { min: number | null; max: number | null }
+): number {
+  let fee = feeFromDistance;
+  const minCap =
+    zone && Number.isFinite(Number(zone.min_price)) && Number(zone.min_price) > 0
+      ? Number(zone.min_price)
+      : globalBounds.min;
+  const maxCap =
+    zone?.max_price != null && Number.isFinite(Number(zone.max_price))
+      ? Number(zone.max_price)
+      : globalBounds.max;
+  if (minCap != null) fee = Math.max(fee, minCap);
+  if (maxCap != null) fee = Math.min(fee, maxCap);
+  return Math.round(fee * 100) / 100;
+}
+
 /** One active zone per region — removes duplicate rows that break pricing. */
 async function reconcileDeliveryZones() {
   try {
@@ -430,13 +464,30 @@ function isMinutesInWindow(now: number, start: number, end: number): boolean {
 async function buildPublicPricingPayload() {
   const raw = await getSetting('delivery_price_per_km');
   const baseRate = Math.max(0.01, parseFloat(raw || '4') || 4);
+  const globalBounds = await getGlobalDeliveryBounds();
   const surge = await getSurgePricingState();
   const pricePerKm = surge.surge_active
     ? Math.round(baseRate * surge.multiplier * 100) / 100
     : baseRate;
+  const zonesResult = await pool.query(
+    `SELECT id, name, region, min_price, max_price, is_active
+     FROM delivery_zones
+     ORDER BY region, name`
+  );
+  const zones = zonesResult.rows.map((z) => ({
+    id: z.id,
+    name: z.name,
+    region: z.region,
+    min_price: Number(z.min_price),
+    max_price: z.max_price != null ? Number(z.max_price) : null,
+    is_active: z.is_active !== false,
+  }));
   return {
     price_per_km: pricePerKm,
     base_price_per_km: baseRate,
+    min_fee: globalBounds.min,
+    max_fee: globalBounds.max,
+    zones,
     surge_enabled: surge.enabled,
     surge_multiplier: surge.multiplier,
     surge_start_time: surge.start_time,
@@ -525,6 +576,7 @@ async function calculateDeliveryFeeFromCoords(
 }> {
   const distance_km = haversineDistanceKm(pickupLat, pickupLng, destLat, destLng);
   const globalRate = Math.max(0.01, parseFloat((await getSetting('delivery_price_per_km')) || '4') || 4);
+  const globalBounds = await getGlobalDeliveryBounds();
 
   let zone: any = null;
   if (destinationRegion) {
@@ -542,48 +594,30 @@ async function calculateDeliveryFeeFromCoords(
     zone = result.rows[0];
   }
 
-  if (!zone) {
-    const base = Math.round(distance_km * globalRate * 100) / 100;
-    const { fee, surge } = await applySurgeToFee(base);
-    const effectiveRate = surge.surge_active
-      ? Math.round(globalRate * surge.multiplier * 100) / 100
-      : globalRate;
-    return {
-      distance_km,
-      delivery_fee: fee,
-      price_per_km: effectiveRate,
-      zone: null,
-      base_delivery_fee: base,
-      fee_from_distance_km: base,
-      zone_min_price: null,
-      zone_max_price: null,
-      surge_active: surge.surge_active,
-      surge_multiplier: surge.multiplier,
-    };
-  }
-
-  // Admin "price per km" is global; zones only apply min/max caps (same as web/mobile UI).
-  let base = distance_km * globalRate;
-  const zoneMin = Number(zone.min_price);
-  if (Number.isFinite(zoneMin) && zoneMin > 0) {
-    base = Math.max(base, zoneMin);
-  }
-  if (zone.max_price) base = Math.min(base, Number(zone.max_price));
-  base = Math.round(base * 100) / 100;
+  const feeFromDistance = Math.round(distance_km * globalRate * 100) / 100;
+  const base = applyDeliveryFeeCaps(feeFromDistance, zone, globalBounds);
   const { fee, surge } = await applySurgeToFee(base);
   const effectiveRate = surge.surge_active
     ? Math.round(globalRate * surge.multiplier * 100) / 100
     : globalRate;
-  const feeFromDistance = Math.round(distance_km * globalRate * 100) / 100;
+  const zoneMin =
+    zone && Number.isFinite(Number(zone.min_price)) && Number(zone.min_price) > 0
+      ? Number(zone.min_price)
+      : globalBounds.min;
+  const zoneMax =
+    zone?.max_price != null && Number.isFinite(Number(zone.max_price))
+      ? Number(zone.max_price)
+      : globalBounds.max;
+
   return {
     distance_km,
     delivery_fee: fee,
     price_per_km: effectiveRate,
-    zone: zone.name,
+    zone: zone?.name ?? null,
     base_delivery_fee: base,
     fee_from_distance_km: feeFromDistance,
-    zone_min_price: Number.isFinite(zoneMin) ? zoneMin : null,
-    zone_max_price: zone.max_price != null ? Number(zone.max_price) : null,
+    zone_min_price: zoneMin,
+    zone_max_price: zoneMax,
     surge_active: surge.surge_active,
     surge_multiplier: surge.multiplier,
   };
@@ -996,6 +1030,10 @@ const initDb = async () => {
 
     await pool.query(`
       INSERT INTO system_settings (key, value) VALUES ('delivery_price_per_km', '4')
+      ON CONFLICT (key) DO NOTHING;
+      INSERT INTO system_settings (key, value) VALUES ('delivery_min_fee', '')
+      ON CONFLICT (key) DO NOTHING;
+      INSERT INTO system_settings (key, value) VALUES ('delivery_max_fee', '')
       ON CONFLICT (key) DO NOTHING;
       INSERT INTO system_settings (key, value) VALUES ('surge_enabled', 'false')
       ON CONFLICT (key) DO NOTHING;
@@ -5619,6 +5657,8 @@ app.get('/api/admin/settings', authenticateToken, async (req: any, res) => {
     const sec = await getSetting('paystack_secret_key');
     const fee = await getSetting('platform_fee_percent');
     const pricePerKm = await getSetting('delivery_price_per_km');
+    const minFee = await getSetting('delivery_min_fee');
+    const maxFee = await getSetting('delivery_max_fee');
     const maskSecret = (k: string) => {
       if (!k) return '';
       if (k.length <= 8) return '••••••••';
@@ -5635,6 +5675,8 @@ app.get('/api/admin/settings', authenticateToken, async (req: any, res) => {
       paystack_secret_configured: !!(sec || process.env.PAYSTACK_SECRET_KEY),
       platform_fee_percent: fee || '10',
       delivery_price_per_km: pricePerKm || '4',
+      delivery_min_fee: minFee ?? '',
+      delivery_max_fee: maxFee ?? '',
       surge_enabled: surge.enabled ? 'true' : 'false',
       surge_multiplier: String(surge.multiplier),
       surge_start_time: surge.start_time,
@@ -5659,6 +5701,8 @@ app.patch('/api/admin/settings', authenticateToken, async (req: any, res) => {
     paystack_secret_key,
     platform_fee_percent,
     delivery_price_per_km,
+    delivery_min_fee,
+    delivery_max_fee,
     surge_enabled,
     surge_multiplier,
     surge_start_time,
@@ -5669,6 +5713,8 @@ app.patch('/api/admin/settings', authenticateToken, async (req: any, res) => {
   } = req.body;
   const pricingTouched =
     delivery_price_per_km != null ||
+    delivery_min_fee != null ||
+    delivery_max_fee != null ||
     surge_enabled != null ||
     surge_multiplier != null ||
     surge_start_time != null ||
@@ -5702,6 +5748,24 @@ app.patch('/api/admin/settings', authenticateToken, async (req: any, res) => {
         `UPDATE delivery_zones SET price_per_km = $1 WHERE is_active = true`,
         [rate]
       );
+    }
+    if (delivery_min_fee != null) {
+      const trimmed = String(delivery_min_fee).trim();
+      if (trimmed === '') {
+        await setSetting('delivery_min_fee', '');
+      } else {
+        const min = Math.max(0.01, parseFloat(trimmed) || 0);
+        await setSetting('delivery_min_fee', String(min));
+      }
+    }
+    if (delivery_max_fee != null) {
+      const trimmed = String(delivery_max_fee).trim();
+      if (trimmed === '') {
+        await setSetting('delivery_max_fee', '');
+      } else {
+        const max = Math.max(0.01, parseFloat(trimmed) || 0);
+        await setSetting('delivery_max_fee', String(max));
+      }
     }
     if (surge_enabled != null) {
       const on =
@@ -5750,8 +5814,12 @@ app.patch('/api/admin/settings', authenticateToken, async (req: any, res) => {
         [String(sms_sender_id).trim()]
       );
     }
-    if (pricingTouched) broadcastPricingUpdated();
-    res.json({ success: true, message: 'Settings updated' });
+    let pricing: Awaited<ReturnType<typeof buildPublicPricingPayload>> | undefined;
+    if (pricingTouched) {
+      pricing = await buildPublicPricingPayload();
+      io.emit('pricing:updated', pricing);
+    }
+    res.json({ success: true, message: 'Settings updated', pricing });
   } catch (err) {
     res.status(500).json({ message: 'Failed to update settings' });
   }
@@ -5878,24 +5946,15 @@ app.post('/api/delivery-zones/calculate', async (req, res) => {
       zone = result.rows[0];
     }
     const globalRate = Math.max(0.01, parseFloat((await getSetting('delivery_price_per_km')) || '4') || 4);
+    const globalBounds = await getGlobalDeliveryBounds();
     const km = distance_km || 0;
-
-    if (!zone) {
-      const price = Math.round(km * globalRate * 100) / 100;
-      return res.json({ price, zone: null, fallback: true, price_per_km: globalRate });
-    }
-
-    let price = km * globalRate;
-    const zoneMin = Number(zone.min_price);
-    if (Number.isFinite(zoneMin) && zoneMin > 0) {
-      price = Math.max(price, zoneMin);
-    }
-    if (zone.max_price) price = Math.min(price, Number(zone.max_price));
+    const feeFromDistance = Math.round(km * globalRate * 100) / 100;
+    const price = applyDeliveryFeeCaps(feeFromDistance, zone, globalBounds);
 
     res.json({
-      price: Math.round(price * 100) / 100,
-      zone: zone.name,
-      fallback: false,
+      price,
+      zone: zone?.name ?? null,
+      fallback: !zone,
       price_per_km: globalRate,
     });
   } catch (err) {

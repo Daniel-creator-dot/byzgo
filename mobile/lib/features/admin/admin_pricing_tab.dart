@@ -1,13 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/delivery_pricing_config.dart';
 import '../../models/admin_pricing_settings.dart';
 import '../../shared/format.dart';
 import '../../shared/theme.dart';
 import 'admin_repository.dart';
+import 'admin_zones_tab.dart';
 import 'widgets/admin_hero_header.dart';
 
-/// Admin controls for delivery rate per km and surge window (Ghana time).
+/// Admin delivery pricing: global rate, min/max, surge, and regional zones.
 class AdminPricingTab extends StatefulWidget {
   const AdminPricingTab({super.key});
 
@@ -15,8 +17,13 @@ class AdminPricingTab extends StatefulWidget {
   State<AdminPricingTab> createState() => _AdminPricingTabState();
 }
 
-class _AdminPricingTabState extends State<AdminPricingTab> {
+class _AdminPricingTabState extends State<AdminPricingTab>
+    with SingleTickerProviderStateMixin {
+  late final TabController _tabs;
+
   final _rateCtrl = TextEditingController();
+  final _minFeeCtrl = TextEditingController();
+  final _maxFeeCtrl = TextEditingController();
   final _multCtrl = TextEditingController();
   final _startCtrl = TextEditingController();
   final _endCtrl = TextEditingController();
@@ -31,12 +38,16 @@ class _AdminPricingTabState extends State<AdminPricingTab> {
   @override
   void initState() {
     super.initState();
+    _tabs = TabController(length: 2, vsync: this);
     WidgetsBinding.instance.addPostFrameCallback((_) => _load());
   }
 
   @override
   void dispose() {
+    _tabs.dispose();
     _rateCtrl.dispose();
+    _minFeeCtrl.dispose();
+    _maxFeeCtrl.dispose();
     _multCtrl.dispose();
     _startCtrl.dispose();
     _endCtrl.dispose();
@@ -53,6 +64,8 @@ class _AdminPricingTabState extends State<AdminPricingTab> {
       if (!mounted) return;
       setState(() {
         _rateCtrl.text = s.deliveryPricePerKm;
+        _minFeeCtrl.text = s.deliveryMinFee;
+        _maxFeeCtrl.text = s.deliveryMaxFee;
         _multCtrl.text = s.surgeMultiplier.toStringAsFixed(2);
         _startCtrl.text = s.surgeStartTime;
         _endCtrl.text = s.surgeEndTime;
@@ -76,6 +89,26 @@ class _AdminPricingTabState extends State<AdminPricingTab> {
       _snack('Enter a valid price per km');
       return;
     }
+    final minRaw = _minFeeCtrl.text.trim();
+    if (minRaw.isNotEmpty) {
+      final min = double.tryParse(minRaw);
+      if (min == null || min <= 0) {
+        _snack('Global minimum must be a positive number or empty');
+        return;
+      }
+    }
+    final maxRaw = _maxFeeCtrl.text.trim();
+    if (maxRaw.isNotEmpty) {
+      final max = double.tryParse(maxRaw);
+      if (max == null || max <= 0) {
+        _snack('Global maximum must be a positive number or empty');
+        return;
+      }
+      if (minRaw.isNotEmpty && max < (double.tryParse(minRaw) ?? 0)) {
+        _snack('Global maximum must be ≥ minimum');
+        return;
+      }
+    }
     final mult = double.tryParse(_multCtrl.text.trim());
     if (mult == null || mult < 1) {
       _snack('Surge multiplier must be at least 1.0');
@@ -90,14 +123,17 @@ class _AdminPricingTabState extends State<AdminPricingTab> {
     try {
       final body = AdminPricingSettings(
         deliveryPricePerKm: rate.toString(),
+        deliveryMinFee: minRaw,
+        deliveryMaxFee: maxRaw,
         surgeEnabled: _surgeEnabled,
         surgeMultiplier: mult,
         surgeStartTime: _startCtrl.text.trim(),
         surgeEndTime: _endCtrl.text.trim(),
       );
       await context.read<AdminRepository>().savePricingSettings(body);
+      await context.read<DeliveryPricingConfig>().refresh();
       if (!mounted) return;
-      _snack('Pricing saved', success: true);
+      _snack('Pricing saved — live on all apps', success: true);
       await _load();
     } catch (e) {
       _snack(AdminRepository.errorMessage(e));
@@ -151,44 +187,96 @@ class _AdminPricingTabState extends State<AdminPricingTab> {
       );
     }
 
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+    return Column(
       children: [
-        AdminHeroHeader(
-          title: 'Delivery pricing',
-          subtitle: _surgeActiveNow
-              ? 'Surge ON now · ${_ghanaTime ?? 'Ghana time'}'
-              : 'Base rates · ${_ghanaTime ?? 'Ghana time (GMT)'}',
-          assetPath: 'assets/branding/hero_delivery.png',
-          trailing: _surgeActiveNow
-              ? Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: Colors.orange,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: const Text(
-                    'SURGE',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 10,
-                      fontWeight: FontWeight.w900,
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+          child: AdminHeroHeader(
+            title: 'Delivery pricing',
+            subtitle: _surgeActiveNow
+                ? 'Surge ON · ${_ghanaTime ?? 'Ghana time'}'
+                : 'Rates & caps · ${_ghanaTime ?? 'Ghana (GMT)'}',
+            assetPath: 'assets/branding/hero_delivery.png',
+            trailing: _surgeActiveNow
+                ? Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: Colors.orange,
+                      borderRadius: BorderRadius.circular(10),
                     ),
-                  ),
-                )
-              : null,
+                    child: const Text(
+                      'SURGE',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  )
+                : null,
+          ),
         ),
-        const SizedBox(height: 16),
-        _sectionTitle('Price per kilometre'),
+        TabBar(
+          controller: _tabs,
+          labelColor: BytzGoTheme.accent,
+          unselectedLabelColor: Colors.white54,
+          indicatorColor: BytzGoTheme.accent,
+          tabs: const [
+            Tab(text: 'GLOBAL RATE'),
+            Tab(text: 'ZONE MIN/MAX'),
+          ],
+        ),
+        Expanded(
+          child: TabBarView(
+            controller: _tabs,
+            children: [
+              _globalTab(),
+              const AdminZonesTab(),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _globalTab() {
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+      children: [
+        _sectionTitle('Rate per kilometre'),
         _field(
           controller: _rateCtrl,
-          label: 'Rate (₵ / km)',
+          label: 'Price (₵ / km)',
           hint: '4.00',
-          keyboard: const TextInputType.numberWithOptions(decimal: true),
           suffix: '₵/km',
         ),
         Text(
-          'Fees = distance (km) × this rate. If a delivery zone has a minimum fee (e.g. ₵8), short trips use that minimum instead of distance × rate.',
+          'All trips: fee = distance (km) × this rate, then min/max caps apply.',
+          style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 11),
+        ),
+        const SizedBox(height: 16),
+        _sectionTitle('Global fee limits'),
+        Row(
+          children: [
+            Expanded(
+              child: _field(
+                controller: _minFeeCtrl,
+                label: 'Minimum fee (₵)',
+                hint: 'Optional',
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _field(
+                controller: _maxFeeCtrl,
+                label: 'Maximum fee (₵)',
+                hint: 'Optional',
+              ),
+            ),
+          ],
+        ),
+        Text(
+          'Used when no regional zone matches, or as fallback. Leave empty for no cap.',
           style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 11),
         ),
         const SizedBox(height: 20),
@@ -213,7 +301,6 @@ class _AdminPricingTabState extends State<AdminPricingTab> {
           controller: _multCtrl,
           label: 'Surge multiplier',
           hint: '1.50',
-          keyboard: const TextInputType.numberWithOptions(decimal: true),
           suffix: '×',
         ),
         const SizedBox(height: 10),
@@ -224,7 +311,6 @@ class _AdminPricingTabState extends State<AdminPricingTab> {
                 controller: _startCtrl,
                 label: 'Start time',
                 hint: '17:00',
-                keyboard: TextInputType.datetime,
               ),
             ),
             const SizedBox(width: 10),
@@ -233,14 +319,9 @@ class _AdminPricingTabState extends State<AdminPricingTab> {
                 controller: _endCtrl,
                 label: 'End time',
                 hint: '21:00',
-                keyboard: TextInputType.datetime,
               ),
             ),
           ],
-        ),
-        Text(
-          'Overnight windows supported (e.g. 22:00 → 06:00). Times are Ghana (GMT), no daylight saving.',
-          style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 11),
         ),
         if (_surgeEnabled && _surgeActiveNow) ...[
           const SizedBox(height: 12),
@@ -257,7 +338,7 @@ class _AdminPricingTabState extends State<AdminPricingTab> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'Surge is active right now. Customers see ${formatCedis(double.tryParse(_rateCtrl.text) ?? 4)} × ${_multCtrl.text} per km.',
+                    'Surge active: ${formatCedis(double.tryParse(_rateCtrl.text) ?? 4)} × ${_multCtrl.text} per km.',
                     style: const TextStyle(color: Colors.white70, fontSize: 12),
                   ),
                 ),
@@ -275,7 +356,7 @@ class _AdminPricingTabState extends State<AdminPricingTab> {
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
           ),
           child: Text(
-            _saving ? 'Saving…' : 'Save pricing',
+            _saving ? 'Saving…' : 'Save global pricing',
             style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15),
           ),
         ),
@@ -300,14 +381,13 @@ class _AdminPricingTabState extends State<AdminPricingTab> {
     required TextEditingController controller,
     required String label,
     required String hint,
-    TextInputType? keyboard,
     String? suffix,
   }) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: TextField(
         controller: controller,
-        keyboardType: keyboard,
+        keyboardType: const TextInputType.numberWithOptions(decimal: true),
         style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
         decoration: InputDecoration(
           labelText: label,

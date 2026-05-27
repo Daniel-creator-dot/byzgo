@@ -3,6 +3,7 @@ import 'package:dio/dio.dart';
 import '../../core/api_client.dart';
 import '../../models/admin_overview.dart';
 import '../../models/admin_pricing_settings.dart';
+import '../../models/delivery_zone.dart';
 import '../../models/admin_pending_product.dart';
 import '../../models/admin_vendor.dart';
 import '../../models/rider_document.dart';
@@ -54,6 +55,42 @@ class AdminRepository {
       '/api/admin/settings',
       data: settings.toPatchBody(),
     );
+  }
+
+  Future<List<DeliveryZone>> fetchDeliveryZones() async {
+    final res = await _api.dio.get<List<dynamic>>('/api/delivery-zones');
+    final data = res.data ?? [];
+    return data
+        .whereType<Map>()
+        .map((e) => DeliveryZone.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
+  }
+
+  Future<DeliveryZone> createDeliveryZone(
+    DeliveryZone zone, {
+    required double globalRatePerKm,
+  }) async {
+    final res = await _api.dio.post<Map<String, dynamic>>(
+      '/api/delivery-zones',
+      data: zone.toCreateBody(globalRatePerKm: globalRatePerKm),
+    );
+    return DeliveryZone.fromJson(Map<String, dynamic>.from(res.data ?? {}));
+  }
+
+  Future<DeliveryZone> updateDeliveryZone(
+    String id,
+    DeliveryZone zone, {
+    required double globalRatePerKm,
+  }) async {
+    final res = await _api.dio.patch<Map<String, dynamic>>(
+      '/api/delivery-zones/$id',
+      data: zone.toUpdateBody(globalRatePerKm: globalRatePerKm),
+    );
+    return DeliveryZone.fromJson(Map<String, dynamic>.from(res.data ?? {}));
+  }
+
+  Future<void> deleteDeliveryZone(String id) async {
+    await _api.dio.delete<Map<String, dynamic>>('/api/delivery-zones/$id');
   }
 
   Future<List<AdminVendor>> fetchVendors() async {

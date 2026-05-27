@@ -124,6 +124,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
     setState(() {
       _pricePerKm = _pricingConfig!.pricePerKm;
       _surgeActive = _pricingConfig!.surgeActive;
+      _quotedFee = null;
     });
     _scheduleDeliveryQuote();
   }
@@ -132,7 +133,14 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
     if (_quotedFee != null) return _quotedFee!;
     if (_pickup == null || _destination == null) return 0;
     if (!_pickup!.hasCoords || !_destination!.hasCoords) return 0;
-    return courierFeeBetween(_pickup!, _destination!, _pricePerKm);
+    final bounds = _pricingConfig?.boundsForRegion(_session.user?.region);
+    return courierFeeBetween(
+      _pickup!,
+      _destination!,
+      _pricePerKm,
+      minFee: bounds?.min,
+      maxFee: bounds?.max,
+    );
   }
 
   double get _routeDistanceKm {

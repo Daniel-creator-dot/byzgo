@@ -37,3 +37,31 @@ export function deliveryFeeFromDistanceKm(
   }
   return Math.round(fee * 100) / 100;
 }
+
+export type DeliveryZoneRow = {
+  region: string;
+  is_active?: boolean;
+  min_price: number | string;
+  max_price?: number | string | null;
+};
+
+/** Zone min/max override global caps when a region matches. */
+export function deliveryFeeBoundsForRegion(
+  region: string | undefined,
+  zones: DeliveryZoneRow[],
+  global: { min?: number | null; max?: number | null }
+): { min?: number; max?: number | null } {
+  const zone = zones.find((z) => z.region === region && z.is_active !== false);
+  if (zone) {
+    const zMin = Number(zone.min_price);
+    const zMax = zone.max_price != null && zone.max_price !== '' ? Number(zone.max_price) : null;
+    return {
+      min: Number.isFinite(zMin) && zMin > 0 ? zMin : global.min ?? undefined,
+      max: Number.isFinite(zMax) && zMax > 0 ? zMax : global.max ?? null,
+    };
+  }
+  return {
+    min: global.min ?? undefined,
+    max: global.max ?? null,
+  };
+}

@@ -52,11 +52,14 @@ class _BytzGoAppState extends State<BytzGoApp> {
     _deliveryPricing = DeliveryPricingConfig(_api, _socket);
     _session = Session(_api, _socket);
     _tripChatUnread = TripChatUnread();
-    _session.onAuthChanged = () => PushNotificationService.instance.syncActiveRole(
-          api: _api,
-          user: _session.user,
-          session: _session,
-        );
+    _session.onAuthChanged = () async {
+      await _deliveryPricing.onAuthChanged();
+      await PushNotificationService.instance.syncActiveRole(
+        api: _api,
+        user: _session.user,
+        session: _session,
+      );
+    };
     _api.onUnauthorized = () {
       _tripChatUnread.clear();
       _session.clear();

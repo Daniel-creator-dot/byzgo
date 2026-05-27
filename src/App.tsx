@@ -43,6 +43,7 @@ import {
 import { formatCedis } from './lib/format';
 import {
   DEFAULT_DELIVERY_PRICE_PER_KM,
+  deliveryFeeBoundsForRegion,
   deliveryFeeFromDistanceKm,
   haversineDistanceKm,
 } from './lib/deliveryPricing';
@@ -225,6 +226,8 @@ function MainApp() {
   const [activeTab, setActiveTab] = useState<string>('courier');
   const [zones, setZones] = useState<any[]>([]);
   const [deliveryPricePerKm, setDeliveryPricePerKm] = useState(DEFAULT_DELIVERY_PRICE_PER_KM);
+  const [globalDeliveryMinFee, setGlobalDeliveryMinFee] = useState<number | null>(null);
+  const [globalDeliveryMaxFee, setGlobalDeliveryMaxFee] = useState<number | null>(null);
   const [cart, setCart] = useState<any[]>(() => {
     try {
       const saved = localStorage.getItem('bytzgo_cart');
@@ -243,10 +246,10 @@ function MainApp() {
     if (cart.length === 0 || !user) return 0;
     const vendorId = cart[0].vendor_id;
     const vendor = vendors.find(v => v.id === vendorId);
-    const zone = zones.find(z => z.region === user.region && z.is_active);
-    const bounds = zone
-      ? { min: Number(zone.min_price), max: zone.max_price ? Number(zone.max_price) : null }
-      : undefined;
+    const bounds = deliveryFeeBoundsForRegion(user.region, zones, {
+      min: globalDeliveryMinFee,
+      max: globalDeliveryMaxFee,
+    });
     if (!vendor?.lat || !vendor?.lng || !user.lat || !user.lng) {
       return deliveryFeeFromDistanceKm(5, deliveryPricePerKm, bounds);
     }
@@ -331,7 +334,12 @@ function MainApp() {
       // Always fetch wallet and paystack config
       const walletPromise = axios.get('/api/wallet');
       const paystackPromise = axios.get('/api/config/paystack').catch(() => ({ data: { publicKey: '' } }));
-      const pricingPromise = axios.get('/api/config/pricing').catch(() => ({ data: { price_per_km: DEFAULT_DELIVERY_PRICE_PER_KM } }));
+      const pricingPromise = axios
+        .get('/api/config/pricing', {
+          params: { _: Date.now() },
+          headers: { 'Cache-Control': 'no-cache' },
+        })
+        .catch(() => ({ data: { price_per_km: DEFAULT_DELIVERY_PRICE_PER_KM } }));
 
       // Conditional promises based on role
       const ordersPromise = axios.get('/api/orders'); // Everyone needs orders
@@ -364,6 +372,13 @@ function MainApp() {
       setPaystackKey(configRes.data.publicKey);
       const rate = Number(pricingRes.data?.price_per_km);
       setDeliveryPricePerKm(rate > 0 ? rate : DEFAULT_DELIVERY_PRICE_PER_KM);
+      const gMin = Number(pricingRes.data?.min_fee);
+      const gMax = Number(pricingRes.data?.max_fee);
+      setGlobalDeliveryMinFee(Number.isFinite(gMin) && gMin > 0 ? gMin : null);
+      setGlobalDeliveryMaxFee(Number.isFinite(gMax) && gMax > 0 ? gMax : null);
+      if (Array.isArray(pricingRes.data?.zones)) {
+        setZones(pricingRes.data.zones);
+      }
       setUser(prev => prev ? { ...prev, balance: profileRes.data.balance } : { ...storedUser, balance: profileRes.data.balance });
       setOrders(ordersRes.data);
       setProducts(productsRes.data);
@@ -692,10 +707,26 @@ function MainApp() {
       setUser(prev => prev ? { ...prev, balance: data.balance } : null);
     });
 
-    socket.on('pricing:updated', (payload: { price_per_km?: number }) => {
+    socket.on('pricing:updated', (payload: { price_per_km?: number; min_fee?: number; max_fee?: number; zones?: unknown[] }) => {
       const rate = Number(payload?.price_per_km);
       if (rate > 0) setDeliveryPricePerKm(rate);
-      axios.get('/api/delivery-zones').then((res) => setZones(res.data)).catch(() => {});
+      const pMin = Number(payload?.min_fee);
+      const pMax = Number(payload?.max_fee);
+      if (Number.isFinite(pMin)) setGlobalDeliveryMinFee(pMin > 0 ? pMin : null);
+      if (Number.isFinite(pMax)) setGlobalDeliveryMaxFee(pMax > 0 ? pMax : null);
+      if (Array.isArray(payload?.zones)) setZones(payload.zones);
+      axios
+        .get('/api/config/pricing', { params: { _: Date.now() }, headers: { 'Cache-Control': 'no-cache' } })
+        .then((res) => {
+          const r = Number(res.data?.price_per_km);
+          if (r > 0) setDeliveryPricePerKm(r);
+          const gMin = Number(res.data?.min_fee);
+          const gMax = Number(res.data?.max_fee);
+          setGlobalDeliveryMinFee(Number.isFinite(gMin) && gMin > 0 ? gMin : null);
+          setGlobalDeliveryMaxFee(Number.isFinite(gMax) && gMax > 0 ? gMax : null);
+          if (Array.isArray(res.data?.zones)) setZones(res.data.zones);
+        })
+        .catch(() => {});
     });
 
     socket.on('status:updated', (payload: { status: string; is_online?: boolean }) => {
@@ -969,6 +1000,8 @@ function MainApp() {
               }}
               zones={zones}
               deliveryPricePerKm={deliveryPricePerKm}
+              globalDeliveryMinFee={globalDeliveryMinFee}
+              globalDeliveryMaxFee={globalDeliveryMaxFee}
               subtotal={subtotal}
               deliveryFee={deliveryFee}
               total={total}
@@ -1049,7 +1082,7 @@ function MainApp() {
             )}
             <AnimatePresence mode="wait">
               {user.role === 'vendor' && (
-                <VendorView user={user} orders={orders} products={products} riderLocations={riderLocations} zones={zones} deliveryPricePerKm={deliveryPricePerKm} paystackKey={paystackKey} setPaystackKey={setPaystackKey} onPlaceOrder={async (items, totalAmt, vendorId, extra = {}) => {
+                <VendorView user={user} orders={orders} products={products} riderLocations={riderLocations} zones={zones} deliveryPricePerKm={deliveryPricePerKm} globalDeliveryMinFee={globalDeliveryMinFee} globalDeliveryMaxFee={globalDeliveryMaxFee} paystackKey={paystackKey} setPaystackKey={setPaystackKey} onPlaceOrder={async (items, totalAmt, vendorId, extra = {}) => {
                   try {
                     const vendor = vendorId ? vendors.find((v) => v.id === vendorId) : undefined;
                     const payload = vendorId
@@ -1065,7 +1098,7 @@ function MainApp() {
                 }} onUpdateStatus={updateOrderStatus} addNotification={addNotification} onBalanceUpdate={(bal) => setUser((prev) => (prev ? { ...prev, balance: bal } : prev))} onAddProduct={(p) => setProducts((prev) => { const exists = prev.find((item) => item.id === p.id); if (exists) return prev.map((item) => (item.id === p.id ? p : item)); return [...prev, p]; })} onDeleteProduct={async (id) => { await axios.delete(`/api/products/${id}`); setProducts((prev) => prev.filter((p) => p.id !== id)); }} activeTab={activeTab} setActiveTab={setActiveTab} refreshData={refreshData} onUserUpdate={(updatedUser, newToken) => { setUser(updatedUser); setToken(newToken); localStorage.setItem('user', JSON.stringify(updatedUser)); localStorage.setItem('token', newToken); }} />
               )}
               {user.role === 'admin' && (
-                <AdminView user={user} orders={orders} addNotification={addNotification} activeTab={activeTab} setActiveTab={setActiveTab} onPendingCountChange={setAdminPendingCount} onPendingRiderCountChange={setAdminPendingRiderCount} />
+                <AdminView user={user} orders={orders} addNotification={addNotification} activeTab={activeTab} setActiveTab={setActiveTab} onPendingCountChange={setAdminPendingCount} onPendingRiderCountChange={setAdminPendingRiderCount} onPricingUpdated={(rate) => { if (rate > 0) setDeliveryPricePerKm(rate); }} />
               )}
             </AnimatePresence>
           </div>
@@ -1695,7 +1728,7 @@ function productFallbackImage(item: { image_url?: string; category?: string; nam
 // Location Autocomplete Component (Ghana-only Places search)
 // REST OF THE VIEW COMPONENTS (CustomerView, VendorView, etc.) 
 // UPDATED TO USE REAL DATA FROM PROPS AND API
-function CustomerView({ user, orders, products, vendors, riderLocations, paystackKey, setPaystackKey, onPlaceOrder, addNotification, cart, setCart, isCartOpen, setIsCartOpen, activeTab, setActiveTab, zones, deliveryPricePerKm, subtotal, deliveryFee, total, refreshData, onUserUpdate }: { user: AuthUser, orders: Order[], products: any[], vendors: any[], riderLocations: { [key: string]: { lat: number, lng: number } }, paystackKey: string, setPaystackKey: (k: string) => void, onPlaceOrder: (items: any[], total: number, vendorId?: string, extra?: any) => void, addNotification: (m: string, t?: 'info' | 'success' | 'warning') => void, cart: any[], setCart: React.Dispatch<React.SetStateAction<any[]>>, isCartOpen: boolean, setIsCartOpen: (v: boolean) => void, activeTab: string, setActiveTab: (v: any) => void, zones: any[], deliveryPricePerKm: number, subtotal: number, deliveryFee: number, total: number, refreshData: () => Promise<void>, onUserUpdate: (user: AuthUser, token: string) => void }) {
+function CustomerView({ user, orders, products, vendors, riderLocations, paystackKey, setPaystackKey, onPlaceOrder, addNotification, cart, setCart, isCartOpen, setIsCartOpen, activeTab, setActiveTab, zones, deliveryPricePerKm, globalDeliveryMinFee, globalDeliveryMaxFee, subtotal, deliveryFee, total, refreshData, onUserUpdate }: { user: AuthUser, orders: Order[], products: any[], vendors: any[], riderLocations: { [key: string]: { lat: number, lng: number } }, paystackKey: string, setPaystackKey: (k: string) => void, onPlaceOrder: (items: any[], total: number, vendorId?: string, extra?: any) => void, addNotification: (m: string, t?: 'info' | 'success' | 'warning') => void, cart: any[], setCart: React.Dispatch<React.SetStateAction<any[]>>, isCartOpen: boolean, setIsCartOpen: (v: boolean) => void, activeTab: string, setActiveTab: (v: any) => void, zones: any[], deliveryPricePerKm: number, globalDeliveryMinFee: number | null, globalDeliveryMaxFee: number | null, subtotal: number, deliveryFee: number, total: number, refreshData: () => Promise<void>, onUserUpdate: (user: AuthUser, token: string) => void }) {
   const [selectedVendor, setSelectedVendor] = useState<any | null>(null);
   const [isTopUpOpen, setIsTopUpOpen] = useState(false);
   const [topUpAmount, setTopUpAmount] = useState('50');
@@ -1768,10 +1801,10 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
       courierForm.pickup.lat, courierForm.pickup.lng,
       courierForm.destination.lat, courierForm.destination.lng
     );
-    const zone = zones.find(z => z.region === user.region && z.is_active) || zones[0];
-    const bounds = zone
-      ? { min: Number(zone.min_price), max: zone.max_price ? Number(zone.max_price) : null }
-      : undefined;
+    const bounds = deliveryFeeBoundsForRegion(user.region, zones, {
+      min: globalDeliveryMinFee,
+      max: globalDeliveryMaxFee,
+    });
     return deliveryFeeFromDistanceKm(distance, deliveryPricePerKm, bounds);
   };
   const courierFee = calculateCourierFee();
@@ -2447,6 +2480,8 @@ function VendorView({
   riderLocations,
   zones,
   deliveryPricePerKm,
+  globalDeliveryMinFee,
+  globalDeliveryMaxFee,
   paystackKey,
   setPaystackKey,
   onPlaceOrder,
@@ -2466,6 +2501,8 @@ function VendorView({
   riderLocations: { [key: string]: { lat: number; lng: number } };
   zones: any[];
   deliveryPricePerKm: number;
+  globalDeliveryMinFee: number | null;
+  globalDeliveryMaxFee: number | null;
   paystackKey: string;
   setPaystackKey: (k: string) => void;
   onPlaceOrder: (items: unknown[], total: number, vendorId?: string, extra?: Record<string, unknown>) => void | Promise<void>;
@@ -2567,10 +2604,10 @@ function VendorView({
       courierForm.destination.lat,
       courierForm.destination.lng
     );
-    const zone = zones.find((z) => z.region === user.region && z.is_active) || zones[0];
-    const bounds = zone
-      ? { min: Number(zone.min_price), max: zone.max_price ? Number(zone.max_price) : null }
-      : undefined;
+    const bounds = deliveryFeeBoundsForRegion(user.region, zones, {
+      min: globalDeliveryMinFee,
+      max: globalDeliveryMaxFee,
+    });
     return deliveryFeeFromDistanceKm(distance, deliveryPricePerKm, bounds);
   };
   const courierFee = calculateCourierFee();
@@ -3470,6 +3507,7 @@ function AdminView({
   setActiveTab,
   onPendingCountChange,
   onPendingRiderCountChange,
+  onPricingUpdated,
 }: {
   user: AuthUser;
   orders: Order[];
@@ -3478,6 +3516,7 @@ function AdminView({
   setActiveTab: (v: any) => void;
   onPendingCountChange?: (count: number) => void;
   onPendingRiderCountChange?: (count: number) => void;
+  onPricingUpdated?: (rate: number) => void;
 }) {
   const [allUsers, setAllUsers] = useState<any[]>([]);
   const [adminVendors, setAdminVendors] = useState<any[]>([]);
@@ -3497,6 +3536,8 @@ function AdminView({
     paystack_secret_key: '',
     platform_fee_percent: '10',
     delivery_price_per_km: '4',
+    delivery_min_fee: '',
+    delivery_max_fee: '',
     surge_enabled: false,
     surge_multiplier: '1.5',
     surge_start_time: '17:00',
@@ -3512,7 +3553,7 @@ function AdminView({
   const [smsTestPhone, setSmsTestPhone] = useState('');
   const [smsTestLoading, setSmsTestLoading] = useState(false);
   const [editingZone, setEditingZone] = useState<any | null>(null);
-  const [zoneForm, setZoneForm] = useState({ name: '', region: '', base_price: '10', price_per_km: '2', min_price: '5', max_price: '' });
+  const [zoneForm, setZoneForm] = useState({ name: '', region: '', min_price: '5', max_price: '' });
   const [showZoneForm, setShowZoneForm] = useState(false);
   const [zoneToDelete, setZoneToDelete] = useState<any | null>(null);
 
@@ -3550,6 +3591,8 @@ function AdminView({
         paystack_secret_key: '',
         platform_fee_percent: res.data.platform_fee_percent || '10',
         delivery_price_per_km: res.data.delivery_price_per_km || '4',
+        delivery_min_fee: res.data.delivery_min_fee ?? '',
+        delivery_max_fee: res.data.delivery_max_fee ?? '',
         surge_enabled: res.data.surge_enabled === 'true' || res.data.surge_enabled === true,
         surge_multiplier: res.data.surge_multiplier || '1.5',
         surge_start_time: res.data.surge_start_time || '17:00',
@@ -3595,22 +3638,27 @@ function AdminView({
     try {
       if (editingZone) {
         const res = await axios.patch(`/api/delivery-zones/${editingZone.id}`, {
-          name: zoneForm.name, region: zoneForm.region,
-          base_price: Number(zoneForm.base_price), price_per_km: Number(zoneForm.price_per_km),
-          min_price: Number(zoneForm.min_price), max_price: zoneForm.max_price ? Number(zoneForm.max_price) : null
+          name: zoneForm.name,
+          region: zoneForm.region,
+          price_per_km: Number(settings.delivery_price_per_km) || 4,
+          min_price: Number(zoneForm.min_price),
+          max_price: zoneForm.max_price ? Number(zoneForm.max_price) : null,
         });
         setZones(zones.map(z => z.id === editingZone.id ? res.data : z));
       } else {
         const res = await axios.post('/api/delivery-zones', {
-          name: zoneForm.name, region: zoneForm.region,
-          base_price: Number(zoneForm.base_price), price_per_km: Number(zoneForm.price_per_km),
-          min_price: Number(zoneForm.min_price), max_price: zoneForm.max_price ? Number(zoneForm.max_price) : null
+          name: zoneForm.name,
+          region: zoneForm.region,
+          base_price: Number(zoneForm.min_price) || 5,
+          price_per_km: Number(settings.delivery_price_per_km) || 4,
+          min_price: Number(zoneForm.min_price),
+          max_price: zoneForm.max_price ? Number(zoneForm.max_price) : null,
         });
         setZones([...zones, res.data]);
       }
       setShowZoneForm(false);
       setEditingZone(null);
-      setZoneForm({ name: '', region: '', base_price: '10', price_per_km: '2', min_price: '5', max_price: '' });
+      setZoneForm({ name: '', region: '', min_price: '5', max_price: '' });
     } catch (err) {
       console.error('Save zone failed', err);
     }
@@ -4147,8 +4195,22 @@ function AdminView({
                e.preventDefault();
                setSettingsSaving(true);
                try {
-                 await axios.patch('/api/admin/settings', settings);
-                 addNotification('Settings saved', 'success');
+                 const res = await axios.patch('/api/admin/settings', {
+                   ...settings,
+                   delivery_min_fee: settings.delivery_min_fee?.trim() ?? '',
+                   delivery_max_fee: settings.delivery_max_fee?.trim() ?? '',
+                 });
+                 const rate = Number(res.data?.pricing?.price_per_km);
+                 if (rate > 0) onPricingUpdated?.(rate);
+                 else {
+                   const pr = await axios.get('/api/config/pricing', {
+                     params: { _: Date.now() },
+                     headers: { 'Cache-Control': 'no-cache' },
+                   });
+                   const r = Number(pr.data?.price_per_km);
+                   if (r > 0) onPricingUpdated?.(r);
+                 }
+                 addNotification('Settings saved — pricing is live on web and mobile', 'success');
                } catch (err) {
                  addNotification(getApiError(err, 'Failed to save settings'), 'warning');
                } finally {
@@ -4169,7 +4231,30 @@ function AdminView({
                placeholder="4.00"
              />
              <p className="text-[10px] text-slate-500 font-bold">
-               Courier and food delivery fees = distance (km) × this rate. Zone min/max caps still apply when set.
+               Fee = distance (km) × this rate, then clamped by global and regional min/max below.
+             </p>
+             <div className="grid grid-cols-2 gap-3">
+               <DarkInput
+                 label="Global minimum fee (₵)"
+                 type="number"
+                 step="0.01"
+                 min="0"
+                 value={settings.delivery_min_fee}
+                 onChange={(e) => setSettings({ ...settings, delivery_min_fee: e.target.value })}
+                 placeholder="Optional"
+               />
+               <DarkInput
+                 label="Global maximum fee (₵)"
+                 type="number"
+                 step="0.01"
+                 min="0"
+                 value={settings.delivery_max_fee}
+                 onChange={(e) => setSettings({ ...settings, delivery_max_fee: e.target.value })}
+                 placeholder="Optional"
+               />
+             </div>
+             <p className="text-[10px] text-slate-500 font-bold -mt-2">
+               Used when no delivery zone matches the customer region. Leave empty for no cap.
              </p>
 
              <div className="pt-4 border-t border-slate-700 space-y-3">
@@ -4262,6 +4347,12 @@ function AdminView({
          </DarkCard>
        ) : activeTab === 'zones' ? (
          <div className="space-y-6">
+           <div className="bg-slate-900/80 border border-slate-700 rounded-2xl p-4">
+             <p className="text-[10px] text-slate-400 font-bold leading-relaxed">
+               Each zone sets <strong className="text-white">minimum</strong> and <strong className="text-white">maximum</strong> delivery fees for a Ghana region.
+               The ₵/km rate is the global value from Settings ({formatCedis(Number(settings.delivery_price_per_km) || 4)}/km).
+             </p>
+           </div>
            {/* Zone Form Modal */}
            {showZoneForm && (
              <div className="bg-white rounded-[2rem] border border-slate-100 shadow-lg p-4 sm:p-8">
@@ -4281,20 +4372,12 @@ function AdminView({
                      {GHANA_REGIONS.map(r => <option key={r} value={r}>{r}</option>)}
                    </select>
                  </div>
-                 <div className="space-y-1.5">
-                   <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Base Price (?)</label>
-                   <input type="number" step="0.01" placeholder="10.00" value={zoneForm.base_price} onChange={e => setZoneForm({...zoneForm, base_price: e.target.value})} className="w-full bg-slate-50 border border-slate-100 rounded-xl py-3 px-4 font-bold text-sm focus:outline-none focus:border-brand-blue focus:ring-4 focus:ring-brand-blue/10 transition-all" />
-                 </div>
-                 <div className="space-y-1.5">
-                   <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Price per KM (?)</label>
-                   <input type="number" step="0.01" placeholder="2.00" value={zoneForm.price_per_km} onChange={e => setZoneForm({...zoneForm, price_per_km: e.target.value})} className="w-full bg-slate-50 border border-slate-100 rounded-xl py-3 px-4 font-bold text-sm focus:outline-none focus:border-brand-blue focus:ring-4 focus:ring-brand-blue/10 transition-all" />
-                 </div>
-                 <div className="space-y-1.5">
-                   <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Minimum Price (?)</label>
+                 <div className="space-y-1.5 sm:col-span-2">
+                   <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Minimum delivery fee (₵)</label>
                    <input type="number" step="0.01" placeholder="5.00" value={zoneForm.min_price} onChange={e => setZoneForm({...zoneForm, min_price: e.target.value})} className="w-full bg-slate-50 border border-slate-100 rounded-xl py-3 px-4 font-bold text-sm focus:outline-none focus:border-brand-blue focus:ring-4 focus:ring-brand-blue/10 transition-all" />
                  </div>
-                 <div className="space-y-1.5">
-                   <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Maximum Price (?) <span className="text-slate-300">? optional</span></label>
+                 <div className="space-y-1.5 sm:col-span-2">
+                   <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Maximum delivery fee (₵) <span className="text-slate-300">optional</span></label>
                    <input type="number" step="0.01" placeholder="No limit" value={zoneForm.max_price} onChange={e => setZoneForm({...zoneForm, max_price: e.target.value})} className="w-full bg-slate-50 border border-slate-100 rounded-xl py-3 px-4 font-bold text-sm focus:outline-none focus:border-brand-blue focus:ring-4 focus:ring-brand-blue/10 transition-all" />
                  </div>
                </div>
@@ -4309,7 +4392,7 @@ function AdminView({
 
            {/* Add Zone Button */}
            {!showZoneForm && (
-             <button onClick={() => { setShowZoneForm(true); setEditingZone(null); setZoneForm({ name: '', region: '', base_price: '10', price_per_km: '2', min_price: '5', max_price: '' }); }} className="w-full py-4 bg-brand-blue/5 border-2 border-dashed border-brand-blue/20 rounded-2xl text-brand-blue font-black uppercase tracking-widest text-xs hover:bg-brand-blue/10 hover:border-brand-blue/40 transition-all flex items-center justify-center gap-2">
+             <button onClick={() => { setShowZoneForm(true); setEditingZone(null); setZoneForm({ name: '', region: '', min_price: '5', max_price: '' }); }} className="w-full py-4 bg-brand-blue/5 border-2 border-dashed border-brand-blue/20 rounded-2xl text-brand-blue font-black uppercase tracking-widest text-xs hover:bg-brand-blue/10 hover:border-brand-blue/40 transition-all flex items-center justify-center gap-2">
                <MapPin size={16} /> Add Delivery Zone
              </button>
            )}
@@ -4337,25 +4420,17 @@ function AdminView({
                      </div>
                      <div className="grid grid-cols-2 gap-3 mt-4">
                        <div className="bg-slate-50 rounded-xl p-3">
-                         <span className="text-[8px] font-black uppercase tracking-widest text-slate-400 block">Base</span>
-                         <span className="font-mono font-black text-brand-blue text-sm">{formatCedis(zone.base_price)}</span>
+                         <span className="text-[8px] font-black uppercase tracking-widest text-slate-400 block">Min fee</span>
+                         <span className="font-mono font-black text-brand-blue text-sm">{formatCedis(zone.min_price)}</span>
                        </div>
                        <div className="bg-slate-50 rounded-xl p-3">
-                         <span className="text-[8px] font-black uppercase tracking-widest text-slate-400 block">Per KM</span>
-                         <span className="font-mono font-black text-brand-blue text-sm">{formatCedis(zone.price_per_km)}</span>
-                       </div>
-                       <div className="bg-slate-50 rounded-xl p-3">
-                         <span className="text-[8px] font-black uppercase tracking-widest text-slate-400 block">Min</span>
-                         <span className="font-mono font-black text-slate-600 text-sm">{formatCedis(zone.min_price)}</span>
-                       </div>
-                       <div className="bg-slate-50 rounded-xl p-3">
-                         <span className="text-[8px] font-black uppercase tracking-widest text-slate-400 block">Max</span>
+                         <span className="text-[8px] font-black uppercase tracking-widest text-slate-400 block">Max fee</span>
                          <span className="font-mono font-black text-slate-600 text-sm">{zone.max_price ? formatCedis(zone.max_price) : 'No limit'}</span>
                        </div>
                      </div>
                    </div>
                    <div className="flex gap-2 mt-4 pt-4 border-t border-slate-100">
-                     <button onClick={() => { setEditingZone(zone); setZoneForm({ name: zone.name, region: zone.region, base_price: String(zone.base_price), price_per_km: String(zone.price_per_km), min_price: String(zone.min_price), max_price: zone.max_price ? String(zone.max_price) : '' }); setShowZoneForm(true); }} className="flex-1 py-2.5 bg-slate-100 text-slate-600 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-200 transition-all flex items-center justify-center gap-1.5">
+                     <button onClick={() => { setEditingZone(zone); setZoneForm({ name: zone.name, region: zone.region, min_price: String(zone.min_price), max_price: zone.max_price ? String(zone.max_price) : '' }); setShowZoneForm(true); }} className="flex-1 py-2.5 bg-slate-100 text-slate-600 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-200 transition-all flex items-center justify-center gap-1.5">
                        <Edit3 size={12} /> Edit
                      </button>
                      <button onClick={() => setZoneToDelete(zone)} className="px-4 py-2.5 bg-red-50 text-red-500 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-red-100 transition-all flex items-center justify-center gap-1.5">
