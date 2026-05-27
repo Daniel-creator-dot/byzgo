@@ -356,6 +356,26 @@ async function setSetting(key: string, value: string) {
   );
 }
 
+/** One active zone per region — removes duplicate rows that break pricing. */
+async function reconcileDeliveryZones() {
+  try {
+    const dupes = await pool.query(`
+      DELETE FROM delivery_zones z
+      USING delivery_zones keep
+      WHERE z.region = keep.region
+        AND z.is_active = true
+        AND keep.is_active = true
+        AND z.created_at > keep.created_at
+      RETURNING z.id, z.region
+    `);
+    if (dupes.rowCount && dupes.rowCount > 0) {
+      console.log(`[zones] Removed ${dupes.rowCount} duplicate active delivery zone(s)`);
+    }
+  } catch (err) {
+    console.warn('[zones] reconcileDeliveryZones failed:', err);
+  }
+}
+
 /** Ghana (GMT) — no DST */
 function ghanaMinutesNow(): number {
   const now = new Date();
@@ -452,14 +472,14 @@ async function calculateDeliveryFeeFromCoords(
   let zone: any = null;
   if (destinationRegion) {
     const result = await pool.query(
-      'SELECT * FROM delivery_zones WHERE region = $1 AND is_active = true LIMIT 1',
+      'SELECT * FROM delivery_zones WHERE region = $1 AND is_active = true ORDER BY created_at ASC LIMIT 1',
       [destinationRegion]
     );
     zone = result.rows[0];
   }
   if (!zone && pickupRegion) {
     const result = await pool.query(
-      'SELECT * FROM delivery_zones WHERE region = $1 AND is_active = true LIMIT 1',
+      'SELECT * FROM delivery_zones WHERE region = $1 AND is_active = true ORDER BY created_at ASC LIMIT 1',
       [pickupRegion]
     );
     zone = result.rows[0];
@@ -936,6 +956,7 @@ const initDb = async () => {
       WHERE order_type = 'food' 
       AND items::text LIKE '%courier-1%'
     `);
+    await reconcileDeliveryZones();
     console.log('Database initialized successfully');
     const mediaCfg = getStorageConfig();
     if (mediaCfg.configured) {
