@@ -482,15 +482,19 @@ async function calculateDeliveryFeeFromCoords(
     };
   }
 
-  const rate = Number(zone.price_per_km) > 0 ? Number(zone.price_per_km) : globalRate;
-  let base = distance_km * rate;
+  // Admin "price per km" is global; zones only apply min/max (and optional base) caps.
+  let base = distance_km * globalRate;
+  const zoneBase = Number(zone.base_price);
+  if (Number.isFinite(zoneBase) && zoneBase > 0) {
+    base = Math.max(base, zoneBase);
+  }
   base = Math.max(base, Number(zone.min_price));
   if (zone.max_price) base = Math.min(base, Number(zone.max_price));
   base = Math.round(base * 100) / 100;
   const { fee, surge } = await applySurgeToFee(base);
   const effectiveRate = surge.surge_active
-    ? Math.round(rate * surge.multiplier * 100) / 100
-    : rate;
+    ? Math.round(globalRate * surge.multiplier * 100) / 100
+    : globalRate;
   return {
     distance_km,
     delivery_fee: fee,
@@ -3061,10 +3065,14 @@ app.post('/api/wallet/topup', authenticateToken, async (req: any, res) => {
 app.get('/api/config/pricing', async (_req, res) => {
   try {
     const raw = await getSetting('delivery_price_per_km');
-    const pricePerKm = Math.max(0.01, parseFloat(raw || '4') || 4);
+    const baseRate = Math.max(0.01, parseFloat(raw || '4') || 4);
     const surge = await getSurgePricingState();
+    const pricePerKm = surge.surge_active
+      ? Math.round(baseRate * surge.multiplier * 100) / 100
+      : baseRate;
     res.json({
       price_per_km: pricePerKm,
+      base_price_per_km: baseRate,
       surge_enabled: surge.enabled,
       surge_multiplier: surge.multiplier,
       surge_start_time: surge.start_time,
@@ -5412,6 +5420,10 @@ app.patch('/api/admin/settings', authenticateToken, async (req: any, res) => {
     if (delivery_price_per_km != null) {
       const rate = Math.max(0.01, parseFloat(String(delivery_price_per_km)) || 4);
       await setSetting('delivery_price_per_km', String(rate));
+      await pool.query(
+        `UPDATE delivery_zones SET price_per_km = $1 WHERE is_active = true`,
+        [rate]
+      );
     }
     if (surge_enabled != null) {
       const on =
@@ -5585,12 +5597,20 @@ app.post('/api/delivery-zones/calculate', async (req, res) => {
       return res.json({ price, zone: null, fallback: true, price_per_km: globalRate });
     }
 
-    const rate = Number(zone.price_per_km) > 0 ? Number(zone.price_per_km) : globalRate;
-    let price = km * rate;
+    let price = km * globalRate;
+    const zoneBase = Number(zone.base_price);
+    if (Number.isFinite(zoneBase) && zoneBase > 0) {
+      price = Math.max(price, zoneBase);
+    }
     price = Math.max(price, Number(zone.min_price));
     if (zone.max_price) price = Math.min(price, Number(zone.max_price));
-    
-    res.json({ price: Math.round(price * 100) / 100, zone: zone.name, fallback: false });
+
+    res.json({
+      price: Math.round(price * 100) / 100,
+      zone: zone.name,
+      fallback: false,
+      price_per_km: globalRate,
+    });
   } catch (err) {
     console.error('Price calculation error:', err);
     res.status(500).json({ message: 'Failed to calculate price' });
