@@ -477,30 +477,36 @@ async function calculateDeliveryFeeFromCoords(
       price_per_km: effectiveRate,
       zone: null,
       base_delivery_fee: base,
+      fee_from_distance_km: base,
+      zone_min_price: null,
+      zone_max_price: null,
       surge_active: surge.surge_active,
       surge_multiplier: surge.multiplier,
     };
   }
 
-  // Admin "price per km" is global; zones only apply min/max (and optional base) caps.
+  // Admin "price per km" is global; zones only apply min/max caps (same as web/mobile UI).
   let base = distance_km * globalRate;
-  const zoneBase = Number(zone.base_price);
-  if (Number.isFinite(zoneBase) && zoneBase > 0) {
-    base = Math.max(base, zoneBase);
+  const zoneMin = Number(zone.min_price);
+  if (Number.isFinite(zoneMin) && zoneMin > 0) {
+    base = Math.max(base, zoneMin);
   }
-  base = Math.max(base, Number(zone.min_price));
   if (zone.max_price) base = Math.min(base, Number(zone.max_price));
   base = Math.round(base * 100) / 100;
   const { fee, surge } = await applySurgeToFee(base);
   const effectiveRate = surge.surge_active
     ? Math.round(globalRate * surge.multiplier * 100) / 100
     : globalRate;
+  const feeFromDistance = Math.round(distance_km * globalRate * 100) / 100;
   return {
     distance_km,
     delivery_fee: fee,
     price_per_km: effectiveRate,
     zone: zone.name,
     base_delivery_fee: base,
+    fee_from_distance_km: feeFromDistance,
+    zone_min_price: Number.isFinite(zoneMin) ? zoneMin : null,
+    zone_max_price: zone.max_price != null ? Number(zone.max_price) : null,
     surge_active: surge.surge_active,
     surge_multiplier: surge.multiplier,
   };
@@ -5598,11 +5604,10 @@ app.post('/api/delivery-zones/calculate', async (req, res) => {
     }
 
     let price = km * globalRate;
-    const zoneBase = Number(zone.base_price);
-    if (Number.isFinite(zoneBase) && zoneBase > 0) {
-      price = Math.max(price, zoneBase);
+    const zoneMin = Number(zone.min_price);
+    if (Number.isFinite(zoneMin) && zoneMin > 0) {
+      price = Math.max(price, zoneMin);
     }
-    price = Math.max(price, Number(zone.min_price));
     if (zone.max_price) price = Math.min(price, Number(zone.max_price));
 
     res.json({

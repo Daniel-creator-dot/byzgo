@@ -275,6 +275,9 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
     if (!mounted) return;
     setState(() => _quoteLoading = true);
     try {
+      try {
+        _pricePerKm = await context.read<ConfigRepository>().fetchPricePerKm();
+      } catch (_) {}
       final region = _session.user?.region;
       final q = await _ordersRepo.calculateRouteDelivery(
         pickupLat: _pickup!.lat,

@@ -188,7 +188,7 @@ class _AdminPricingTabState extends State<AdminPricingTab> {
           suffix: '₵/km',
         ),
         Text(
-          'Courier and delivery fees = distance (km) × this rate. Zone min/max caps still apply.',
+          'Fees = distance (km) × this rate. If a delivery zone has a minimum fee (e.g. ₵8), short trips use that minimum instead of distance × rate.',
           style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 11),
         ),
         const SizedBox(height: 20),
