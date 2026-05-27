@@ -12,15 +12,15 @@ STEP 1 — One-time (if you have never installed Flutter)
 
   • Wait until it finishes. Close Terminal.
 
-STEP 2 — Open the app in Xcode
+STEP 2 — Build & run on Simulator (recommended, v1.0.13+)
   • In Finder, go to this folder:  mobile
-  • Double-click:  OPEN_IN_XCODE.command
+  • Double-click:  BUILD_IOS_SIMULATOR.command
   • If Mac says "can't be opened": right-click → Open → Open anyway
-  • Wait until Xcode opens.
+  • Wait until the app launches in the iPhone Simulator.
 
-STEP 3 — Run
-  • In Xcode, top bar: pick "iPhone 17" (or any iPhone Simulator)
-  • Click the Play ▶ button (or press Command+R)
+STEP 2b — Or open in Xcode only
+  • Double-click:  OPEN_IN_XCODE.command
+  • In Xcode: pick "iPhone 17" (or any simulator) → Play ▶ (Command+R)
 
 That's it.
 
