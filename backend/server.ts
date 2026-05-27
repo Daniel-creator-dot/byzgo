@@ -397,6 +397,33 @@ function isMinutesInWindow(now: number, start: number, end: number): boolean {
   return now >= start || now < end;
 }
 
+async function buildPublicPricingPayload() {
+  const raw = await getSetting('delivery_price_per_km');
+  const baseRate = Math.max(0.01, parseFloat(raw || '4') || 4);
+  const surge = await getSurgePricingState();
+  const pricePerKm = surge.surge_active
+    ? Math.round(baseRate * surge.multiplier * 100) / 100
+    : baseRate;
+  return {
+    price_per_km: pricePerKm,
+    base_price_per_km: baseRate,
+    surge_enabled: surge.enabled,
+    surge_multiplier: surge.multiplier,
+    surge_start_time: surge.start_time,
+    surge_end_time: surge.end_time,
+    surge_active: surge.surge_active,
+    ghana_time: surge.ghana_time,
+  };
+}
+
+function broadcastPricingUpdated() {
+  void buildPublicPricingPayload()
+    .then((payload) => {
+      io.emit('pricing:updated', payload);
+    })
+    .catch((err) => console.error('broadcastPricingUpdated failed:', err));
+}
+
 async function getSurgePricingState() {
   const enabled = (await getSetting('surge_enabled')) === 'true';
   const multiplier = Math.max(
@@ -3090,26 +3117,13 @@ app.post('/api/wallet/topup', authenticateToken, async (req: any, res) => {
 });
 
 app.get('/api/config/pricing', async (_req, res) => {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
   try {
-    const raw = await getSetting('delivery_price_per_km');
-    const baseRate = Math.max(0.01, parseFloat(raw || '4') || 4);
-    const surge = await getSurgePricingState();
-    const pricePerKm = surge.surge_active
-      ? Math.round(baseRate * surge.multiplier * 100) / 100
-      : baseRate;
-    res.json({
-      price_per_km: pricePerKm,
-      base_price_per_km: baseRate,
-      surge_enabled: surge.enabled,
-      surge_multiplier: surge.multiplier,
-      surge_start_time: surge.start_time,
-      surge_end_time: surge.end_time,
-      surge_active: surge.surge_active,
-      ghana_time: surge.ghana_time,
-    });
+    res.json(await buildPublicPricingPayload());
   } catch (err) {
     res.json({
       price_per_km: 4,
+      base_price_per_km: 4,
       surge_enabled: false,
       surge_multiplier: 1.5,
       surge_start_time: '17:00',
@@ -5422,6 +5436,12 @@ app.patch('/api/admin/settings', authenticateToken, async (req: any, res) => {
     sms_api_key,
     sms_sender_id,
   } = req.body;
+  const pricingTouched =
+    delivery_price_per_km != null ||
+    surge_enabled != null ||
+    surge_multiplier != null ||
+    surge_start_time != null ||
+    surge_end_time != null;
   try {
     if (paystack_public_key != null) {
       await pool.query(
@@ -5499,6 +5519,7 @@ app.patch('/api/admin/settings', authenticateToken, async (req: any, res) => {
         [String(sms_sender_id).trim()]
       );
     }
+    if (pricingTouched) broadcastPricingUpdated();
     res.json({ success: true, message: 'Settings updated' });
   } catch (err) {
     res.status(500).json({ message: 'Failed to update settings' });
@@ -5559,6 +5580,7 @@ app.post('/api/delivery-zones', authenticateToken, async (req: any, res) => {
       'INSERT INTO delivery_zones (name, region, base_price, price_per_km, min_price, max_price) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
       [name, region, base_price || 10, price_per_km || 2, min_price || 5, max_price || null]
     );
+    broadcastPricingUpdated();
     res.json(result.rows[0]);
   } catch (err) {
     console.error('Create zone error:', err);
@@ -5584,6 +5606,7 @@ app.patch('/api/delivery-zones/:id', authenticateToken, async (req: any, res) =>
       [name, region, base_price, price_per_km, min_price, max_price ?? null, is_active, req.params.id]
     );
     if (result.rows.length === 0) return res.status(404).json({ message: 'Zone not found' });
+    broadcastPricingUpdated();
     res.json(result.rows[0]);
   } catch (err) {
     console.error('Update zone error:', err);
@@ -5596,6 +5619,7 @@ app.delete('/api/delivery-zones/:id', authenticateToken, async (req: any, res) =
   if (req.user.role !== 'admin') return res.sendStatus(403);
   try {
     await pool.query('DELETE FROM delivery_zones WHERE id = $1', [req.params.id]);
+    broadcastPricingUpdated();
     res.json({ message: 'Zone deleted' });
   } catch (err) {
     res.status(500).json({ message: 'Failed to delete zone' });
@@ -5609,11 +5633,17 @@ app.post('/api/delivery-zones/calculate', async (req, res) => {
     // Try to find a zone matching the region
     let zone = null;
     if (destination_region) {
-      const result = await pool.query('SELECT * FROM delivery_zones WHERE region = $1 AND is_active = true LIMIT 1', [destination_region]);
+      const result = await pool.query(
+        'SELECT * FROM delivery_zones WHERE region = $1 AND is_active = true ORDER BY created_at ASC LIMIT 1',
+        [destination_region]
+      );
       zone = result.rows[0];
     }
     if (!zone && pickup_region) {
-      const result = await pool.query('SELECT * FROM delivery_zones WHERE region = $1 AND is_active = true LIMIT 1', [pickup_region]);
+      const result = await pool.query(
+        'SELECT * FROM delivery_zones WHERE region = $1 AND is_active = true ORDER BY created_at ASC LIMIT 1',
+        [pickup_region]
+      );
       zone = result.rows[0];
     }
     const globalRate = Math.max(0.01, parseFloat((await getSetting('delivery_price_per_km')) || '4') || 4);

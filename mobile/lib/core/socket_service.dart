@@ -29,6 +29,7 @@ typedef StatusUpdatedHandler = void Function({
   String? reason,
 });
 typedef VendorPromoHandler = void Function(Map<String, dynamic> promo);
+typedef PricingUpdatedHandler = void Function(Map<String, dynamic> payload);
 
 /// Real-time layer — mirrors `src/lib/socket.ts` and `App.tsx` listeners.
 class SocketService {
@@ -50,6 +51,7 @@ class SocketService {
   StatusUpdatedHandler? onStatusUpdated;
   VendorPromoHandler? onVendorPromo;
   final List<VendorPromoHandler> _vendorPromoListeners = [];
+  final List<PricingUpdatedHandler> _pricingUpdatedListeners = [];
 
   bool get isConnected => _socket?.connected ?? false;
 
@@ -86,7 +88,27 @@ class SocketService {
       ..on('product:updated', _onProductUpdated)
       ..on('pulse:guide', _onPulseGuide)
       ..on('status:updated', _onStatusUpdated)
-      ..on('vendor:promo', _onVendorPromo);
+      ..on('vendor:promo', _onVendorPromo)
+      ..on('pricing:updated', _onPricingUpdated);
+  }
+
+  void addPricingUpdatedListener(PricingUpdatedHandler listener) {
+    if (!_pricingUpdatedListeners.contains(listener)) {
+      _pricingUpdatedListeners.add(listener);
+    }
+  }
+
+  void removePricingUpdatedListener(PricingUpdatedHandler listener) {
+    _pricingUpdatedListeners.remove(listener);
+  }
+
+  void _onPricingUpdated(dynamic data) {
+    final map = _asMap(data);
+    if (map == null) return;
+    final payload = Map<String, dynamic>.from(map);
+    for (final listener in List<PricingUpdatedHandler>.from(_pricingUpdatedListeners)) {
+      listener(payload);
+    }
   }
 
   void addVendorPromoListener(VendorPromoHandler listener) {

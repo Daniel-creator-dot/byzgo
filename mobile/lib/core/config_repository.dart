@@ -13,10 +13,20 @@ class ConfigRepository {
     return res.data?['publicKey']?.toString().trim() ?? '';
   }
 
+  Future<Map<String, dynamic>> fetchPricingPayload() async {
+    final res = await _api.dio.get<Map<String, dynamic>>(
+      '/api/config/pricing',
+      options: Options(
+        headers: {'Cache-Control': 'no-cache'},
+      ),
+    );
+    return Map<String, dynamic>.from(res.data ?? {});
+  }
+
   Future<double> fetchPricePerKm() async {
     try {
-      final res = await _api.dio.get<Map<String, dynamic>>('/api/config/pricing');
-      final raw = res.data?['price_per_km'];
+      final data = await fetchPricingPayload();
+      final raw = data['price_per_km'];
       final n = double.tryParse(raw?.toString() ?? '') ?? defaultDeliveryPricePerKm;
       return n > 0 ? n : defaultDeliveryPricePerKm;
     } catch (_) {

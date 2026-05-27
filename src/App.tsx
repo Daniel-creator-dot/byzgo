@@ -708,6 +708,12 @@ function MainApp() {
       setUser(prev => prev ? { ...prev, balance: data.balance } : null);
     });
 
+    socket.on('pricing:updated', (payload: { price_per_km?: number }) => {
+      const rate = Number(payload?.price_per_km);
+      if (rate > 0) setDeliveryPricePerKm(rate);
+      axios.get('/api/delivery-zones').then((res) => setZones(res.data)).catch(() => {});
+    });
+
     socket.on('status:updated', (payload: { status: string; is_online?: boolean }) => {
       setUser(prev => (prev ? { ...prev, status: payload.status, is_online: payload.is_online ?? prev.is_online } : null));
       const stored = JSON.parse(localStorage.getItem('user') || '{}');
@@ -722,6 +728,7 @@ function MainApp() {
       socket.off('order:updated');
       socket.off('location:updated');
       socket.off('wallet:updated');
+      socket.off('pricing:updated');
       socket.off('status:updated');
     };
   }, [token, triggerIncomingRideCall]);

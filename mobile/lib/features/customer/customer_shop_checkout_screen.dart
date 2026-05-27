@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/delivery_pricing_config.dart';
 import '../../core/location_service.dart';
 import '../../core/places_service.dart';
 import '../../core/session.dart';
@@ -40,6 +41,7 @@ class CustomerShopCheckoutScreen extends StatefulWidget {
 }
 
 class _CustomerShopCheckoutScreenState extends State<CustomerShopCheckoutScreen> {
+  DeliveryPricingConfig? _pricingConfig;
   final _dropoffCtrl = TextEditingController();
   LocationPoint? _destination;
   DeliveryQuote? _quote;
@@ -57,7 +59,23 @@ class _CustomerShopCheckoutScreenState extends State<CustomerShopCheckoutScreen>
       widget.cart.values.fold<int>(0, (a, b) => a + b);
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final pricing = context.read<DeliveryPricingConfig>();
+    if (!identical(pricing, _pricingConfig)) {
+      _pricingConfig?.removeListener(_onLivePricingUpdated);
+      _pricingConfig = pricing..addListener(_onLivePricingUpdated);
+    }
+  }
+
+  void _onLivePricingUpdated() {
+    if (!mounted) return;
+    _refreshQuote();
+  }
+
+  @override
   void dispose() {
+    _pricingConfig?.removeListener(_onLivePricingUpdated);
     _dropoffCtrl.dispose();
     super.dispose();
   }

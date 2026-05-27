@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
-import '../../core/config_repository.dart';
+import '../../core/delivery_pricing_config.dart';
 import '../../core/directions_service.dart';
 import '../../core/location_service.dart';
 import '../../core/places_service.dart';
@@ -59,6 +59,7 @@ class CustomerHomeScreen extends StatefulWidget {
 }
 
 class CustomerHomeScreenState extends State<CustomerHomeScreen> {
+  DeliveryPricingConfig? _pricingConfig;
   final _pickupCtrl = TextEditingController();
   final _dropoffCtrl = TextEditingController();
   final _itemCtrl = TextEditingController(text: 'Package');
@@ -109,6 +110,22 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
   void didChangeDependencies() {
     super.didChangeDependencies();
     _socket ??= context.read<SocketService>();
+    final pricing = context.read<DeliveryPricingConfig>();
+    if (!identical(pricing, _pricingConfig)) {
+      _pricingConfig?.removeListener(_onLivePricingUpdated);
+      _pricingConfig = pricing..addListener(_onLivePricingUpdated);
+      _pricePerKm = pricing.pricePerKm;
+      _surgeActive = pricing.surgeActive;
+    }
+  }
+
+  void _onLivePricingUpdated() {
+    if (!mounted || _pricingConfig == null) return;
+    setState(() {
+      _pricePerKm = _pricingConfig!.pricePerKm;
+      _surgeActive = _pricingConfig!.surgeActive;
+    });
+    _scheduleDeliveryQuote();
   }
 
   double get _deliveryFee {
@@ -185,9 +202,8 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
 
   Future<void> _init() async {
     _wireSocket();
-    try {
-      _pricePerKm = await context.read<ConfigRepository>().fetchPricePerKm();
-    } catch (_) {}
+    _pricePerKm = context.read<DeliveryPricingConfig>().pricePerKm;
+    _surgeActive = context.read<DeliveryPricingConfig>().surgeActive;
     await _loadOrders();
     await _detectPickup();
     if (!mounted) return;
@@ -275,9 +291,6 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
     if (!mounted) return;
     setState(() => _quoteLoading = true);
     try {
-      try {
-        _pricePerKm = await context.read<ConfigRepository>().fetchPricePerKm();
-      } catch (_) {}
       final region = _session.user?.region;
       final q = await _ordersRepo.calculateRouteDelivery(
         pickupLat: _pickup!.lat,
@@ -304,6 +317,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
 
   @override
   void dispose() {
+    _pricingConfig?.removeListener(_onLivePricingUpdated);
     _quoteDebounce?.cancel();
     _nearbyPoll?.cancel();
     _etaPoll?.cancel();
