@@ -17,21 +17,26 @@ export function unlockIncomingRideAudio(): void {
 export function playIncomingRidePulse(): void {
   unlockIncomingRideAudio();
   const audioCtx = sharedCtx;
-  if (!audioCtx || audioCtx.state !== 'running') return;
+  if (!audioCtx) return;
+  if (audioCtx.state === 'suspended') {
+    void audioCtx.resume().then(() => playIncomingRidePulse());
+    return;
+  }
+  if (audioCtx.state !== 'running') return;
 
   const t = audioCtx.currentTime;
-  [523.25, 659.25, 783.99].forEach((freq, i) => {
+  [523.25, 659.25, 783.99, 1046.5].forEach((freq, i) => {
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
     osc.type = 'sine';
     osc.frequency.value = freq;
-    gain.gain.setValueAtTime(0.0001, t + i * 0.18);
-    gain.gain.exponentialRampToValueAtTime(0.4, t + i * 0.18 + 0.03);
-    gain.gain.exponentialRampToValueAtTime(0.0001, t + i * 0.18 + 0.22);
+    gain.gain.setValueAtTime(0.0001, t + i * 0.12);
+    gain.gain.exponentialRampToValueAtTime(0.55, t + i * 0.12 + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + i * 0.12 + 0.2);
     osc.connect(gain);
     gain.connect(audioCtx.destination);
-    osc.start(t + i * 0.18);
-    osc.stop(t + i * 0.18 + 0.24);
+    osc.start(t + i * 0.12);
+    osc.stop(t + i * 0.12 + 0.22);
   });
 }
 

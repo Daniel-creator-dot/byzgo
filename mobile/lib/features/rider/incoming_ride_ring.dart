@@ -1,4 +1,4 @@
-import 'dart:async';
+import 'dart:async' show Timer, unawaited;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -16,27 +16,14 @@ class IncomingRideRing {
   static Future<void> start({
     Duration maxDuration = const Duration(seconds: 15),
   }) async {
-    if (_active) return;
+    if (_active) {
+      _replayRingtone();
+      return;
+    }
     _active = true;
 
-    try {
-      if (!kIsWeb) {
-        try {
-          await FlutterRingtonePlayer().stop();
-        } catch (_) {}
-        await FlutterRingtonePlayer().play(
-          android: AndroidSounds.ringtone,
-          ios: IosSounds.bell,
-          looping: true,
-          volume: 1.0,
-          asAlarm: true,
-        );
-      }
-    } catch (e) {
-      debugPrint('IncomingRideRing: play failed ($e)');
-    }
-
-    await _hapticPulse();
+    _replayRingtone();
+    unawaited(_hapticPulse());
     _pulseTimer?.cancel();
     _pulseTimer = Timer.periodic(const Duration(milliseconds: 1400), (_) {
       if (_active) _hapticPulse();
@@ -45,6 +32,24 @@ class IncomingRideRing {
     _maxDurationTimer?.cancel();
     if (maxDuration > Duration.zero) {
       _maxDurationTimer = Timer(maxDuration, stop);
+    }
+  }
+
+  static void _replayRingtone() {
+    if (kIsWeb) return;
+    try {
+      FlutterRingtonePlayer().stop();
+    } catch (_) {}
+    try {
+      FlutterRingtonePlayer().play(
+        android: AndroidSounds.ringtone,
+        ios: IosSounds.bell,
+        looping: true,
+        volume: 1.0,
+        asAlarm: true,
+      );
+    } catch (e) {
+      debugPrint('IncomingRideRing: play failed ($e)');
     }
   }
 

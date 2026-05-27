@@ -67,8 +67,8 @@ class SocketService {
           .enableAutoConnect()
           .enableReconnection()
           .setReconnectionAttempts(999)
-          .setReconnectionDelay(1000)
-          .setReconnectionDelayMax(5000)
+          .setReconnectionDelay(400)
+          .setReconnectionDelayMax(3000)
           .build(),
     );
 

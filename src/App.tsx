@@ -293,16 +293,21 @@ function MainApp() {
     if (!u || u.role !== 'rider' || u.status !== 'active' || !isOfferableToRider(order)) return;
     if (order.expiresAt && new Date(order.expiresAt).getTime() <= Date.now()) return;
     let isNewOffer = false;
+    let isRefresh = false;
     setIncomingRideOffer((prev) => {
-      if (prev?.id === order.id) return { ...prev, ...order };
+      if (prev?.id === order.id) {
+        isRefresh = true;
+        return { ...prev, ...order };
+      }
       isNewOffer = true;
       return order;
     });
-    if (!isNewOffer) return;
-    setActiveTab('dashboard');
+    if (!isNewOffer && !isRefresh) return;
     unlockIncomingRideAudio();
     playIncomingRidePulse();
     if (navigator.vibrate) navigator.vibrate([400, 200, 400, 200, 400]);
+    if (!isNewOffer) return;
+    setActiveTab('dashboard');
     if (typeof document !== 'undefined' && document.hidden && Notification.permission === 'granted') {
       const earnings = (order as Order & { delivery_fee?: number }).delivery_fee ?? order.total;
       try {
@@ -449,7 +454,7 @@ function MainApp() {
     if (showDeviceSetup || user?.role !== 'rider' || user.status !== 'active' || !user.is_online || !token) return;
     const poll = setInterval(() => {
       axios.get<Order[]>('/api/orders').then((res) => setOrders(res.data)).catch(() => {});
-    }, 6000);
+    }, 3000);
     return () => clearInterval(poll);
   }, [user?.role, user?.status, user?.is_online, token, showDeviceSetup]);
 
@@ -597,14 +602,14 @@ function MainApp() {
 
     socket.on('ride:incoming', (order: Order) => {
       if (order.expiresAt && new Date(order.expiresAt).getTime() <= Date.now()) return;
-      setOrders(prev => {
-        const exists = prev.some(o => o.id === order.id);
-        return exists ? prev.map(o => (o.id === order.id ? { ...o, ...order } : o)) : [order, ...prev];
-      });
       const u = userRef.current;
       if (u?.role === 'rider' && u.status === 'active' && isOfferableToRider(order)) {
         triggerIncomingRideCall(order);
       }
+      setOrders(prev => {
+        const exists = prev.some(o => o.id === order.id);
+        return exists ? prev.map(o => (o.id === order.id ? { ...o, ...order } : o)) : [order, ...prev];
+      });
     });
 
     socket.on('ride:taken', ({ orderId }: { orderId: string }) => {

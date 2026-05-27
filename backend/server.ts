@@ -1614,25 +1614,17 @@ async function emitOffersToRiders(order: any, candidates: NearbyRider[], wave: n
 
   const expiresAt = new Date(Date.now() + OFFER_TTL_SEC * 1000);
   const orderPayload = { ...order };
+  const expiresIso = expiresAt.toISOString();
 
+  // Socket + in-app ring first — do not block on DB or push delivery.
   for (const { id: riderId, distanceKm } of eligible) {
-    await pool.query(
-      `INSERT INTO order_dispatch_offers (order_id, rider_id, wave, status, offered_at, expires_at)
-       VALUES ($1, $2, $3, 'offered', CURRENT_TIMESTAMP, $4)
-       ON CONFLICT (order_id, rider_id) DO UPDATE SET
-         wave = EXCLUDED.wave,
-         status = 'offered',
-         offered_at = CURRENT_TIMESTAMP,
-         expires_at = EXCLUDED.expires_at`,
-      [order.id, riderId, wave, expiresAt]
-    );
     const dist =
       Number.isFinite(distanceKm) && distanceKm >= 0
         ? Math.round(distanceKm * 10) / 10
         : null;
     const payload = {
       ...orderPayload,
-      expiresAt: expiresAt.toISOString(),
+      expiresAt: expiresIso,
       dispatchWave: wave,
       offerDistanceKm: dist,
       pickupDistanceKm: dist,
@@ -1645,7 +1637,25 @@ async function emitOffersToRiders(order: any, candidates: NearbyRider[], wave: n
     `[dispatch] order ${order.id} step ${wave}: offered to ${next.id.slice(0, 8)}… (${next.distanceKm.toFixed(1)} km)`,
   );
 
-  await sendPushToRiders(order, eligible);
+  void sendPushToRiders(order, eligible, { skipRecipientFilter: true }).catch((err) =>
+    console.warn('[push] incoming ride send failed:', err)
+  );
+
+  await Promise.all(
+    eligible.map(({ id: riderId }) =>
+      pool.query(
+        `INSERT INTO order_dispatch_offers (order_id, rider_id, wave, status, offered_at, expires_at)
+         VALUES ($1, $2, $3, 'offered', CURRENT_TIMESTAMP, $4)
+         ON CONFLICT (order_id, rider_id) DO UPDATE SET
+           wave = EXCLUDED.wave,
+           status = 'offered',
+           offered_at = CURRENT_TIMESTAMP,
+           expires_at = EXCLUDED.expires_at`,
+        [order.id, riderId, wave, expiresAt]
+      )
+    )
+  );
+
   await pool.query(
     `UPDATE orders SET dispatch_wave = $1, offer_expires_at = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3`,
     [wave, expiresAt, order.id]
@@ -1936,29 +1946,38 @@ async function sendPushToUserIds(userIds: string[], alert: PushAlert) {
   }
 }
 
-async function sendPushToRiders(order: any, riders: NearbyRider[]) {
-  const eligibleIds = await filterIncomingRideRecipientIds(
-    riders.map((r) => r.id),
-    order?.customer_id ?? null
-  );
-  const eligible = riders.filter((r) => eligibleIds.includes(r.id));
+async function sendPushToRiders(
+  order: any,
+  riders: NearbyRider[],
+  opts?: { skipRecipientFilter?: boolean }
+) {
+  let eligible = riders;
+  if (!opts?.skipRecipientFilter) {
+    const eligibleIds = await filterIncomingRideRecipientIds(
+      riders.map((r) => r.id),
+      order?.customer_id ?? null
+    );
+    eligible = riders.filter((r) => eligibleIds.includes(r.id));
+  }
   if (!eligible.length) return;
   const pickup = order.pickup_address || order.pickup || 'Pickup';
   const dropoff = order.address || 'Drop-off';
-  for (const { id, distanceKm } of eligible) {
-    const distLabel =
-      Number.isFinite(distanceKm) && distanceKm > 0 && distanceKm < 500
-        ? `${distanceKm.toFixed(1)} km to pickup · `
-        : '';
-    await sendPushToUserIds([id], {
-      title: 'New delivery job',
-      body: `${distLabel}${pickup} → ${dropoff}`,
-      type: 'incoming-ride',
-      orderId: order.id,
-      channelId: 'incoming_rides_alarm',
-      highPriority: true,
-    });
-  }
+  await Promise.all(
+    eligible.map(({ id, distanceKm }) => {
+      const distLabel =
+        Number.isFinite(distanceKm) && distanceKm > 0 && distanceKm < 500
+          ? `${distanceKm.toFixed(1)} km to pickup · `
+          : '';
+      return sendPushToUserIds([id], {
+        title: 'New delivery job',
+        body: `${distLabel}${pickup} → ${dropoff}`,
+        type: 'incoming-ride',
+        orderId: order.id,
+        channelId: 'incoming_rides_alarm',
+        highPriority: true,
+      });
+    })
+  );
 }
 
 function shopLabelForOrder(order: any): string {

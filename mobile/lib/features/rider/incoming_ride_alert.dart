@@ -1,4 +1,4 @@
-import 'dart:async';
+import 'dart:async' show Timer, unawaited;
 
 import 'package:flutter/foundation.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
@@ -41,33 +41,34 @@ class IncomingRideAlert {
 
     if (_activeOrderId == order.id) {
       if (useNotificationSound) {
-        await PushNotificationService.instance.showIncomingRide(
+        unawaited(PushNotificationService.instance.showIncomingRide(
           orderId: order.id,
           title: title,
           body: body,
           playSound: true,
-        );
+        ));
       } else {
-        await IncomingRideRing.start(maxDuration: callRingDuration);
+        unawaited(IncomingRideRing.start(maxDuration: callRingDuration));
       }
       _scheduleRingEnd(order.id, cancelNotification: useNotificationSound);
       return;
     }
 
     _activeOrderId = order.id;
-    await WakelockPlus.enable();
 
     if (useNotificationSound) {
       IncomingRideRing.stop();
-      await PushNotificationService.instance.showIncomingRide(
+      unawaited(PushNotificationService.instance.showIncomingRide(
         orderId: order.id,
         title: title,
         body: body,
         playSound: true,
-      );
+      ));
+      unawaited(WakelockPlus.enable());
     } else {
-      await PushNotificationService.instance.cancelIncomingRide(order.id);
-      await IncomingRideRing.start(maxDuration: callRingDuration);
+      unawaited(IncomingRideRing.start(maxDuration: callRingDuration));
+      unawaited(WakelockPlus.enable());
+      unawaited(PushNotificationService.instance.cancelIncomingRide(order.id));
     }
     _scheduleRingEnd(order.id, cancelNotification: useNotificationSound);
   }
@@ -117,4 +118,3 @@ class IncomingRideAlert {
   }
 }
 
-void unawaited(Future<void> f) {}

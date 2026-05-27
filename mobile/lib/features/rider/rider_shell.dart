@@ -181,8 +181,9 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    PushNotificationService.instance.onIncomingRidePush = (_) {
-      if (_isOnline && mounted) _refreshAll(silent: true);
+    PushNotificationService.instance.onIncomingRidePush = (data) {
+      if (!_isOnline || !mounted) return;
+      unawaited(_handleIncomingRidePush(data));
     };
     _isOnline = _user.isOnline == true;
     _profilePhone.text = _user.phone ?? '';
@@ -237,13 +238,53 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
 
   void _presentIncoming(Order order) {
     if (!mounted || !_isOnline || !isOfferableOrder(order)) return;
+    final bg = _lifecycle != AppLifecycleState.resumed;
+    unawaited(IncomingRideAlert.raise(order, useNotificationSound: bg));
     setState(() {
       _incoming = order;
       _tab = _RiderTab.drive;
       _driveSheet = _DriveSheet.requests;
     });
-    final bg = _lifecycle != AppLifecycleState.resumed;
-    unawaited(IncomingRideAlert.raise(order, useNotificationSound: bg));
+  }
+
+  Future<void> _handleIncomingRidePush(Map<String, String> data) async {
+    final orderId = data['orderId']?.trim();
+    if (orderId != null && orderId.isNotEmpty) {
+      for (final o in _orders) {
+        if (o.id == orderId && isOfferableOrder(o)) {
+          if (!_alertedOfferIds.contains(o.id)) {
+            _alertedOfferIds.add(o.id);
+            _presentIncoming(o);
+          } else {
+            unawaited(IncomingRideAlert.raise(
+              o,
+              useNotificationSound: _lifecycle != AppLifecycleState.resumed,
+            ));
+          }
+          return;
+        }
+      }
+    }
+    await _refreshOrdersForIncoming(orderId: orderId);
+  }
+
+  Future<void> _refreshOrdersForIncoming({String? orderId}) async {
+    try {
+      final orders = await _ordersRepo.fetchOrders();
+      if (!mounted) return;
+      setState(() => _orders = orders);
+      _trackOffers(orders);
+      if (orderId == null || orderId.isEmpty) return;
+      for (final o in orders) {
+        if (o.id == orderId && isOfferableOrder(o) && !_alertedOfferIds.contains(o.id)) {
+          _alertedOfferIds.add(o.id);
+          _presentIncoming(o);
+          break;
+        }
+      }
+    } catch (_) {
+      /* backup poll will retry */
+    }
   }
 
   void _trackOffers(List<Order> orders) {
@@ -498,8 +539,8 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
 
   void _startPolling() {
     _pollTimer?.cancel();
-    _pollTimer = Timer.periodic(const Duration(seconds: 15), (_) {
-      if (_isOnline && mounted) _refreshAll(silent: true);
+    _pollTimer = Timer.periodic(const Duration(seconds: 4), (_) {
+      if (_isOnline && mounted) _refreshOrdersForIncoming();
     });
   }
 
