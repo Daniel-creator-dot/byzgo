@@ -124,6 +124,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
     setState(() {
       _pricePerKm = _pricingConfig!.pricePerKm;
       _surgeActive = _pricingConfig!.surgeActive;
+      _quotedFee = null;
     });
     _scheduleDeliveryQuote();
   }

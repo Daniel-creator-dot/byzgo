@@ -1,4 +1,4 @@
-import 'dart:async';
+import 'dart:async' show Timer, unawaited;
 
 import 'package:flutter/widgets.dart';
 
@@ -31,33 +31,45 @@ class DeliveryPricingConfig extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<void> start() async {
     WidgetsBinding.instance.addObserver(this);
-    _socketHandler = (data) => _applyPayload(data);
+    _socketHandler = (data) {
+      _applyPayload(Map<String, dynamic>.from(data));
+      // Confirm rate from API (socket can race with DB write on some networks).
+      unawaited(refresh());
+    };
     _socket.addPricingUpdatedListener(_socketHandler!);
+    _socket.ensurePricingFeedConnected();
     await refresh();
     _pollTimer?.cancel();
     _pollTimer = Timer.periodic(
-      const Duration(seconds: 30),
-      (_) => refresh(silent: true),
+      const Duration(seconds: 10),
+      (_) => refresh(),
     );
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      refresh(silent: true);
+      _socket.ensurePricingFeedConnected();
+      refresh();
     }
   }
 
-  Future<void> refresh({bool silent = false}) async {
+  Future<void> refresh() async {
     try {
       final data = await ConfigRepository(_api).fetchPricingPayload();
-      _applyPayload(data, notify: !silent);
+      _applyPayload(data);
     } catch (e) {
       debugPrint('[pricing] refresh failed: $e');
     }
   }
 
-  void _applyPayload(Map<String, dynamic> data, {bool notify = true}) {
+  /// Reconnect pricing socket after logout (session socket is torn down).
+  Future<void> onAuthChanged() async {
+    _socket.ensurePricingFeedConnected();
+    await refresh();
+  }
+
+  void _applyPayload(Map<String, dynamic> data) {
     final rate =
         double.tryParse(data['price_per_km']?.toString() ?? '') ??
             defaultDeliveryPricePerKm;
@@ -79,7 +91,7 @@ class DeliveryPricingConfig extends ChangeNotifier with WidgetsBindingObserver {
     _surgeActive = surge;
     _surgeMultiplier = mult > 0 ? mult : 1.5;
 
-    if (changed && notify) {
+    if (changed) {
       debugPrint('[pricing] updated: ₵$_pricePerKm/km surge=$_surgeActive');
       notifyListeners();
     }
