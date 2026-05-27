@@ -434,6 +434,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
                 ? 'Going to ${customerShopLabel(order)} to pick up your order'
                 : 'Your biker is on the way',
             orderId: order.id,
+            highPriority: true,
           ));
         } else if (order.status == 'picked_up' && prev?.status != 'picked_up') {
           final shop = customerOrderHasShopPickup(order);

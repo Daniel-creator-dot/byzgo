@@ -3602,6 +3602,15 @@ app.get('/api/maps/reverse-geocode', authenticateToken, async (req: any, res) =>
   }
 });
 
+/** Public Maps SDK key for mobile/web clients (restrict by app bundle in Google Cloud). */
+app.get('/api/config/maps', async (_req, res) => {
+  const apiKey = mapsApiKey();
+  if (!apiKey || apiKey.length < 20) {
+    return res.json({ apiKey: '', configured: false });
+  }
+  res.json({ apiKey, configured: true, keyHint: `…${apiKey.slice(-6)}` });
+});
+
 app.get('/api/config/maps-health', async (_req, res) => {
   const key = mapsApiKey();
   if (!key) {

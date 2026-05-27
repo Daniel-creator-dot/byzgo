@@ -4,6 +4,9 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:provider/provider.dart';
+
+import '../../core/maps_runtime_config.dart';
 
 import '../../core/env.dart';
 import '../../models/location_point.dart';
@@ -106,6 +109,7 @@ class RideGoogleMapState extends State<RideGoogleMap>
 
   @override
   Widget build(BuildContext context) {
+    context.watch<MapsRuntimeConfig>();
     if (!_useNativeMap) {
       final center = widget.pickup;
       return Stack(
@@ -175,7 +179,7 @@ class RideGoogleMapState extends State<RideGoogleMap>
               child: const Padding(
                 padding: EdgeInsets.all(10),
                 child: Text(
-                  'Maps key missing in Dart — run: .\\scripts\\sync_maps_key.ps1',
+                  'Maps unavailable — update the app or ask admin to configure Google Maps on the server.',
                   style: TextStyle(color: Colors.white, fontSize: 12),
                 ),
               ),

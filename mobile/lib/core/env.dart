@@ -30,8 +30,18 @@ class Env {
   static bool get isGoogleSignInEnabled =>
       googleWebClientId.trim().contains('.apps.googleusercontent.com');
 
-  /// Google Maps key — dart-define, then [MapsKey.resolved] from sync script.
+  static String? _runtimeMapsApiKey;
+
+  /// Set after [/api/config/maps] when the APK was built without a baked-in key.
+  static void setRuntimeMapsApiKey(String? key) {
+    final t = key?.trim() ?? '';
+    _runtimeMapsApiKey = t.isNotEmpty ? t : null;
+  }
+
+  /// Google Maps key — dart-define, sync script, then runtime config from API.
   static String get googleMapsApiKey {
+    final runtime = _runtimeMapsApiKey;
+    if (runtime != null && runtime.isNotEmpty) return runtime;
     const fromDefine = String.fromEnvironment('GOOGLE_MAPS_API_KEY', defaultValue: '');
     if (fromDefine.trim().isNotEmpty) return fromDefine.trim();
     return MapsKey.resolved.trim();

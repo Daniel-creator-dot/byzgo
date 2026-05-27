@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import 'core/api_client.dart';
 import 'core/config_repository.dart';
 import 'core/delivery_pricing_config.dart';
+import 'core/maps_runtime_config.dart';
 import 'core/directions_service.dart';
 import 'core/location_service.dart';
 import 'core/places_service.dart';
@@ -40,6 +41,7 @@ class _BytzGoAppState extends State<BytzGoApp> {
   late final Session _session;
   late final TripChatUnread _tripChatUnread;
   late final DeliveryPricingConfig _deliveryPricing;
+  late final MapsRuntimeConfig _mapsRuntime;
   late final GoRouter _router;
   bool _splashDone = false;
 
@@ -50,6 +52,7 @@ class _BytzGoAppState extends State<BytzGoApp> {
     _socket = SocketService();
     _api = ApiClient();
     _deliveryPricing = DeliveryPricingConfig(_api, _socket);
+    _mapsRuntime = MapsRuntimeConfig(_api);
     _session = Session(_api, _socket);
     _tripChatUnread = TripChatUnread();
     _session.onAuthChanged = () async {
@@ -88,6 +91,7 @@ class _BytzGoAppState extends State<BytzGoApp> {
       await _session.refreshAuthFromServer();
     }
     await _deliveryPricing.start();
+    await _mapsRuntime.ensureLoaded();
     await PushNotificationService.instance.syncActiveRole(
       api: _api,
       user: _session.user,
@@ -118,6 +122,7 @@ class _BytzGoAppState extends State<BytzGoApp> {
         ChangeNotifierProvider<Session>.value(value: _session),
         ChangeNotifierProvider<TripChatUnread>.value(value: _tripChatUnread),
         ChangeNotifierProvider<DeliveryPricingConfig>.value(value: _deliveryPricing),
+        ChangeNotifierProvider<MapsRuntimeConfig>.value(value: _mapsRuntime),
         Provider(create: (ctx) => AuthRepository(ctx.read<ApiClient>())),
         Provider(create: (ctx) => RiderDocumentsRepository(ctx.read<ApiClient>())),
         Provider(create: (ctx) => AdminRepository(ctx.read<ApiClient>())),
