@@ -1,0 +1,2 @@
+# Copy to gradle.properties.local (gitignored) on Windows if Gradle cannot find Java:
+# org.gradle.java.home=C:\\Program Files\\Android\\Android Studio\\jbr

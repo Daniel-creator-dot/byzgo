@@ -27,8 +27,8 @@ class Env {
     return url;
   }
 
-  static bool get isGoogleSignInEnabled =>
-      googleWebClientId.trim().contains('.apps.googleusercontent.com');
+  /// Google Sign-In disabled in product until re-enabled explicitly.
+  static bool get isGoogleSignInEnabled => false;
 
   /// Google Maps key — dart-define, then [MapsKey.resolved] from sync script.
   static String get googleMapsApiKey {

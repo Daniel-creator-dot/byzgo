@@ -3,6 +3,7 @@ import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
+import helmet from 'helmet';
 import { Pool } from 'pg';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
@@ -133,14 +134,43 @@ try {
 
 const app = express();
 const httpServer = createServer(app);
+
+/** Google Sign-In API — off by default; set GOOGLE_SIGN_IN_ENABLED=true to re-enable. */
+const GOOGLE_SIGN_IN_ENABLED = process.env.GOOGLE_SIGN_IN_ENABLED === 'true';
+
+const corsAllowedOrigins = (process.env.CORS_ORIGINS || process.env.APP_URL || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+
 const io = new Server(httpServer, {
   cors: {
-    origin: '*',
-    methods: ['GET', 'POST', 'PATCH']
-  }
+    origin: corsAllowedOrigins.length ? corsAllowedOrigins : '*',
+    methods: ['GET', 'POST', 'PATCH'],
+  },
 });
 
-app.use(cors());
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+    contentSecurityPolicy: false,
+  })
+);
+if (corsAllowedOrigins.length) {
+  app.use(
+    cors({
+      origin(origin, cb) {
+        if (!origin || corsAllowedOrigins.includes(origin)) {
+          cb(null, true);
+        } else {
+          cb(new Error('Not allowed by CORS'));
+        }
+      },
+    })
+  );
+} else {
+  app.use(cors());
+}
 // Product photos are stored as data URLs in JSON — need headroom beyond default 100kb.
 app.use(express.json({ limit: '12mb' }));
 app.use(express.urlencoded({ extended: true, limit: '12mb' }));
@@ -2592,8 +2622,13 @@ app.post('/api/auth/reset-password', async (req, res) => {
   }
 });
 
-// Google Auth
+// Google Auth (disabled unless GOOGLE_SIGN_IN_ENABLED=true)
 app.post('/api/auth/google', async (req, res) => {
+  if (!GOOGLE_SIGN_IN_ENABLED) {
+    return res.status(403).json({
+      message: 'Google sign-in is disabled. Sign in with your phone or email and password.',
+    });
+  }
   const { credential, role } = req.body;
   try {
     const payload = await verifyGoogleIdToken(credential);

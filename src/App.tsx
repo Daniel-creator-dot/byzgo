@@ -10,8 +10,6 @@ import { twMerge } from 'tailwind-merge';
 import { Map, Marker, useMap, useMapsLibrary } from '@vis.gl/react-google-maps';
 import { MapsProvider } from './components/MapsProvider';
 import { Modal, ConfirmationModal, LoadingIndicator } from './components/UI';
-import { auth, googleProvider } from './lib/firebase';
-import { signInWithPopup, signInWithRedirect, getRedirectResult } from 'firebase/auth';
 import { supabase } from './lib/supabase';
 import {
   subscribeRiderPush,
@@ -489,7 +487,8 @@ function MainApp() {
     const interceptor = axios.interceptors.response.use(
       (response) => response,
       (error) => {
-        if (error.response && (error.response.status === 401 || error.response.status === 403)) {
+        // Only 401 indicates invalid/expired credentials; 403 is often role or feature gate.
+        if (error.response?.status === 401) {
           console.warn('Session expired or unauthorized. Logging out.');
           handleLogout();
         }
@@ -530,26 +529,6 @@ function MainApp() {
           return;
         }
 
-        // 2. Check Firebase Redirect result
-        const result = await getRedirectResult(auth);
-        if (result) {
-          const idToken = await result.user.getIdToken();
-          const savedRole = localStorage.getItem('google_login_role') || 'customer';
-          const res = await axios.post('/api/auth/google', {
-            credential: idToken,
-            role: savedRole
-          });
-          localStorage.removeItem('google_login_role');
-          
-          const expected = getExpectedRole();
-          if (res.data.user.role !== expected) {
-            console.warn(`Role mismatch: got ${res.data.user.role}, expected ${expected}`);
-            return;
-          }
-          setUser(res.data.user);
-          setToken(res.data.token);
-          localStorage.setItem('user', JSON.stringify(res.data.user));
-        }
       } catch (err) {
         console.error('Redirect result failed', err);
       } finally {
@@ -588,7 +567,7 @@ function MainApp() {
         joinSocketRoom();
       } catch (err: any) {
         console.error('Initialization failed', err);
-        if (err.response && (err.response.status === 401 || err.response.status === 403)) {
+        if (err.response?.status === 401) {
           handleLogout();
         }
       } finally {
@@ -1292,42 +1271,6 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
     }
   };
 
-  const finishGoogleLogin = async (idToken: string) => {
-    const res = await axios.post('/api/auth/google', {
-      credential: idToken,
-      role,
-    });
-    const accepted = onLogin(res.data.user, res.data.token);
-    if (accepted === false) {
-      setError(loginRejectedMessage(res.data.user.role as Role, forcedRole || role));
-    }
-  };
-
-  const handleGoogleSignIn = async () => {
-    setLoading(true);
-    setError('');
-    try {
-      localStorage.setItem('google_login_role', role);
-      let result;
-      try {
-        result = await signInWithPopup(auth, googleProvider);
-      } catch (popupErr: unknown) {
-        const code = (popupErr as { code?: string }).code;
-        if (code === 'auth/popup-blocked') {
-          await signInWithRedirect(auth, googleProvider);
-          return;
-        }
-        throw popupErr;
-      }
-      await finishGoogleLogin(await result.user.getIdToken());
-    } catch (err: unknown) {
-      console.error('Google sign-in failed:', err);
-      setError(mapAuthError(err, 'Google sign-in failed. Try email and password instead.'));
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const heroImage =
     forcedRole === 'rider'
       ? '/branding/hero_rider.png'
@@ -1378,7 +1321,7 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
             <motion.div className="mt-4 mx-auto max-w-sm p-3 rounded-2xl bg-black/50 backdrop-blur-md text-left border border-white/10">
               <p className="text-[10px] font-black uppercase tracking-widest text-brand-green mb-1">Rider sign-in</p>
               <p className="text-xs text-slate-200 leading-relaxed">
-                Use a <strong className="text-white">rider</strong> account here. A Google account registered as customer must use the home app, or tap Join to register as rider.
+                Use a <strong className="text-white">rider</strong> account here. Sign in with the email and password you registered with.
               </p>
               <p className="text-[10px] text-slate-400 mt-2 font-mono">Demo: rider@bytzgo.net / Rider@2026</p>
             </motion.div>
@@ -1646,37 +1589,6 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
                 </button>
               </form>
 
-              {forcedRole !== 'admin' && (
-              <div className="mt-6">
-                <div className="flex items-center gap-4 mb-5">
-                  <div className="flex-1 h-px bg-slate-200"></div>
-                  <span className="text-[10px] font-black uppercase tracking-widest text-slate-300">or</span>
-                  <div className="flex-1 h-px bg-slate-200"></div>
-                </div>
-                <div className="flex justify-center">
-                  <button
-                    type="button"
-                    onClick={handleGoogleSignIn}
-                    className="w-full max-w-[320px] py-4 bg-white border border-slate-200 rounded-full font-black uppercase tracking-widest text-[10px] flex items-center justify-center gap-3 hover:bg-slate-50 transition-all shadow-sm disabled:opacity-50"
-                    disabled={loading}
-                  >
-                    {loading ? (
-                      <LoadingIndicator size="sm" variant="white" />
-                    ) : (
-                      <>
-                        <svg width="18" height="18" viewBox="0 0 24 24">
-                          <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
-                          <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
-                          <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" fill="#FBBC05"/>
-                          <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
-                        </svg>
-                        {isLogin ? 'Sign in with Google' : 'Sign up with Google'}
-                      </>
-                    )}
-                  </button>
-                </div>
-              </div>
-              )}
             </>
           )}
         </motion.div>
@@ -3382,7 +3294,7 @@ function IncomingRideCallModal({
       if (ringStopRef.current) return;
       playIncomingRidePulse();
       if (navigator.vibrate) navigator.vibrate([300, 150, 300]);
-    }, 1400);
+    }, 1000);
 
     const countdown = setInterval(() => {
       setSecondsLeft(prev => {

@@ -35,7 +35,6 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
   _AuthMode _mode = _AuthMode.signIn;
   AppRole _signupRole = AppRole.customer;
   bool _loading = false;
-  bool _googleLoading = false;
   bool _obscure = true;
   String? _error;
   late final AnimationController _heroAnim;
@@ -150,30 +149,6 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
       setState(() => _error = AuthRepository.errorMessage(e));
     } finally {
       if (mounted) setState(() => _loading = false);
-    }
-  }
-
-  Future<void> _submitGoogle() async {
-    setState(() {
-      _googleLoading = true;
-      _error = null;
-    });
-    try {
-      final result = await context.read<AuthRepository>().signInWithGoogle();
-      await context.read<Session>().setSession(
-        token: result.token,
-        user: result.user,
-      );
-      if (!mounted) return;
-      context.go(_homePathFor(result.user.role));
-    } catch (e) {
-      final msg = AuthRepository.errorMessage(e);
-      if (msg.toLowerCase().contains('cancel')) {
-        return;
-      }
-      setState(() => _error = msg);
-    } finally {
-      if (mounted) setState(() => _googleLoading = false);
     }
   }
 
@@ -423,8 +398,6 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
               const SizedBox(height: 6),
               AuthLoginExtras(
                 showGoogle: Env.isGoogleSignInEnabled,
-                onGoogle: _loading ? null : _submitGoogle,
-                googleLoading: _googleLoading,
               ),
             ],
             const SizedBox(height: 8),

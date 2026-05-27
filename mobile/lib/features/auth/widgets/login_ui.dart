@@ -491,7 +491,7 @@ class AuthLoginExtras extends StatelessWidget {
   const AuthLoginExtras({
     super.key,
     required this.showGoogle,
-    required this.onGoogle,
+    this.onGoogle,
     this.googleLoading = false,
   });
 

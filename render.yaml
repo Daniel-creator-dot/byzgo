@@ -42,6 +42,8 @@ services:
         value: 645977332644-4gjjf08268b3irafs4bh8b7guct1i1jb.apps.googleusercontent.com
       - key: APP_URL
         value: https://www.bytzgo.net
+      - key: GOOGLE_SIGN_IN_ENABLED
+        value: "false"
       - key: PAYSTACK_CALLBACK_URL
         value: https://www.bytzgo.net
       - key: SMS_API_KEY
