@@ -128,7 +128,7 @@ function updateIosInfoPlist(key) {
   if (!fs.existsSync(infoPath)) return;
   let xml = fs.readFileSync(infoPath, 'utf8');
   if (!xml.includes('<key>GMSApiKey</key>')) return;
-  xml = xml.replace(/(<key>GMSApiKey<\/key>\s*<string>)[^<]*(</string>)/, `$1${key}$2`);
+  xml = xml.replace(/(<key>GMSApiKey<\/key>\s*<string>)[^<]*(<\/string>)/, `$1${key}$2`);
   fs.writeFileSync(infoPath, xml, 'utf8');
   console.log('Updated ios/Runner/Info.plist GMSApiKey');
 }
