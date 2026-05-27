@@ -16,6 +16,7 @@ import '../../models/trip_message.dart';
 import '../../features/auth/auth_repository.dart';
 import '../../features/orders/orders_repository.dart';
 import '../../features/wallet/wallet_repository.dart';
+import 'rider_commission_repository.dart';
 import '../../models/auth_user.dart';
 import '../../models/location_point.dart';
 import '../../models/order.dart';
@@ -106,6 +107,8 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
   String? _walletMsg;
   bool _walletOk = false;
   String? _profileMsg;
+  RiderCommissionSummary? _commission;
+  bool _commissionPaying = false;
 
   SocketService get _socket => context.read<SocketService>();
   Session get _session => context.read<Session>();
@@ -113,6 +116,8 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
   OrdersRepository get _ordersRepo => context.read<OrdersRepository>();
   DirectionsService get _directions => context.read<DirectionsService>();
   WalletRepository get _wallet => context.read<WalletRepository>();
+  RiderCommissionRepository get _commissionRepo =>
+      context.read<RiderCommissionRepository>();
   LocationService get _location => context.read<LocationService>();
 
   AuthUser get _user => _session.user!;
@@ -183,6 +188,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
       if (!mounted) return;
       _wireSocket();
       _refreshAll();
+      unawaited(_loadCommission());
       _startLocationStream();
       if (_isOnline) {
         _startPolling();
@@ -390,6 +396,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
       _trackOffers(orders);
       _syncOfferTimer();
       _syncNavPoll();
+      unawaited(_loadCommission());
     } catch (e) {
       if (!silent) _snack(OrdersRepository.errorMessage(e));
     } finally {
@@ -494,9 +501,37 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
         _snack('You\'re offline');
       }
     } catch (e) {
-      _snack(AuthRepository.errorMessage(e));
+      if (RiderCommissionRepository.isCommissionOverdueError(e)) {
+        _snack(RiderCommissionRepository.errorMessage(e));
+        setState(() => _tab = _RiderTab.wallet);
+        unawaited(_loadCommission());
+      } else {
+        _snack(AuthRepository.errorMessage(e));
+      }
     } finally {
       if (mounted) setState(() => _statusLoading = false);
+    }
+  }
+
+  Future<void> _loadCommission() async {
+    try {
+      final summary = await _commissionRepo.fetchSummary();
+      if (mounted) setState(() => _commission = summary);
+    } catch (_) {}
+  }
+
+  Future<void> _payCommission() async {
+    setState(() => _commissionPaying = true);
+    try {
+      final balance = await _commissionRepo.payCommission();
+      _session.patchBalance(balance);
+      await _loadCommission();
+      if (!mounted) return;
+      _snack('Commission paid — you can go online', success: true);
+    } catch (e) {
+      _snack(RiderCommissionRepository.errorMessage(e));
+    } finally {
+      if (mounted) setState(() => _commissionPaying = false);
     }
   }
 
@@ -887,6 +922,49 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
                 ),
               ),
             ),
+          if (_commission != null &&
+              (_commission!.hasOverdue || _commission!.totalOwed > 0.01)) ...[
+            const SizedBox(height: 8),
+            Material(
+              color: (_commission!.hasOverdue ? Colors.redAccent : BytzGoTheme.warning)
+                  .withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(12),
+              child: InkWell(
+                onTap: () {
+                  setState(() => _tab = _RiderTab.wallet);
+                  unawaited(_loadCommission());
+                },
+                borderRadius: BorderRadius.circular(12),
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Row(
+                    children: [
+                      Icon(
+                        _commission!.hasOverdue ? Icons.warning_amber : Icons.percent,
+                        color: _commission!.hasOverdue ? Colors.redAccent : BytzGoTheme.warning,
+                        size: 22,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          _commission!.hasOverdue
+                              ? 'Commission overdue — pay ${formatCedis(_commission!.totalOwed)} in Wallet before 8:00 AM rule'
+                              : 'Commission due: ${formatCedis(_commission!.totalOwed)} · tap Wallet to pay',
+                          style: TextStyle(
+                            color: _commission!.hasOverdue
+                                ? Colors.redAccent
+                                : BytzGoTheme.warning,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
           const SizedBox(height: 10),
           Row(
             children: [
@@ -1838,9 +1916,92 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
   }
 
   Widget _buildWalletTab(AuthUser user) {
+    final comm = _commission;
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        if (comm != null) ...[
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(16),
+              color: const Color(0xFF0F172A),
+              border: Border.all(
+                color: comm.hasOverdue
+                    ? Colors.redAccent.withValues(alpha: 0.5)
+                    : const Color(0xFF1E293B),
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'TRIP COMMISSION',
+                  style: TextStyle(
+                    color: Colors.white54,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 1,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  comm.policy,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.7),
+                    fontSize: 11,
+                    height: 1.35,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  'Owed: ${formatCedis(comm.totalOwed)}',
+                  style: TextStyle(
+                    color: comm.hasOverdue ? Colors.redAccent : BytzGoTheme.accent,
+                    fontWeight: FontWeight.w900,
+                    fontSize: 18,
+                  ),
+                ),
+                if (comm.settlements.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  ...comm.settlements.take(5).map(
+                        (s) => Padding(
+                          padding: const EdgeInsets.only(bottom: 4),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(
+                                s.settlementDate,
+                                style: TextStyle(
+                                  color: Colors.white.withValues(alpha: 0.45),
+                                  fontSize: 11,
+                                ),
+                              ),
+                              Text(
+                                formatCedis(s.amountOwed),
+                                style: TextStyle(
+                                  color: s.isOverdue ? Colors.redAccent : Colors.white70,
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                ],
+                if (comm.totalOwed > 0.01) ...[
+                  const SizedBox(height: 12),
+                  RidePrimaryButton(
+                    label: _commissionPaying ? 'Paying…' : 'Pay commission from wallet',
+                    onPressed: _commissionPaying ? null : _payCommission,
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+        ],
         Container(
           padding: const EdgeInsets.all(24),
           decoration: BoxDecoration(

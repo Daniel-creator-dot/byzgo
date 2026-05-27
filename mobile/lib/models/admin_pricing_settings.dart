@@ -9,6 +9,9 @@ class AdminPricingSettings {
     required this.surgeMultiplier,
     required this.surgeStartTime,
     required this.surgeEndTime,
+    this.commissionPercent = '10',
+    this.commissionInsurancePercent = '3',
+    this.commissionPlatformPercent = '7',
     this.surgeActiveNow = false,
     this.ghanaTime,
   });
@@ -16,6 +19,9 @@ class AdminPricingSettings {
   final String deliveryPricePerKm;
   final String deliveryMinFee;
   final String deliveryMaxFee;
+  final String commissionPercent;
+  final String commissionInsurancePercent;
+  final String commissionPlatformPercent;
   final bool surgeEnabled;
   final double surgeMultiplier;
   final String surgeStartTime;
@@ -34,6 +40,11 @@ class AdminPricingSettings {
           json['delivery_price_per_km']?.toString() ?? '4',
       deliveryMinFee: json['delivery_min_fee']?.toString() ?? '',
       deliveryMaxFee: json['delivery_max_fee']?.toString() ?? '',
+      commissionPercent: json['commission_percent']?.toString() ?? '10',
+      commissionInsurancePercent:
+          json['commission_insurance_percent']?.toString() ?? '3',
+      commissionPlatformPercent:
+          json['commission_platform_percent']?.toString() ?? '7',
       surgeEnabled: enabled,
       surgeMultiplier: parseJsonDouble(json['surge_multiplier']) ?? 1.5,
       surgeStartTime: json['surge_start_time']?.toString() ?? '17:00',
@@ -47,6 +58,9 @@ class AdminPricingSettings {
         'delivery_price_per_km': deliveryPricePerKm,
         'delivery_min_fee': deliveryMinFee.trim(),
         'delivery_max_fee': deliveryMaxFee.trim(),
+        'commission_percent': commissionPercent,
+        'commission_insurance_percent': commissionInsurancePercent,
+        'commission_platform_percent': commissionPlatformPercent,
         'surge_enabled': surgeEnabled,
         'surge_multiplier': surgeMultiplier,
         'surge_start_time': surgeStartTime,

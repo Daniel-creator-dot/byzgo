@@ -24,6 +24,9 @@ class _AdminPricingTabState extends State<AdminPricingTab>
   final _rateCtrl = TextEditingController();
   final _minFeeCtrl = TextEditingController();
   final _maxFeeCtrl = TextEditingController();
+  final _commissionCtrl = TextEditingController();
+  final _insuranceCtrl = TextEditingController();
+  final _platformCtrl = TextEditingController();
   final _multCtrl = TextEditingController();
   final _startCtrl = TextEditingController();
   final _endCtrl = TextEditingController();
@@ -48,6 +51,9 @@ class _AdminPricingTabState extends State<AdminPricingTab>
     _rateCtrl.dispose();
     _minFeeCtrl.dispose();
     _maxFeeCtrl.dispose();
+    _commissionCtrl.dispose();
+    _insuranceCtrl.dispose();
+    _platformCtrl.dispose();
     _multCtrl.dispose();
     _startCtrl.dispose();
     _endCtrl.dispose();
@@ -66,6 +72,9 @@ class _AdminPricingTabState extends State<AdminPricingTab>
         _rateCtrl.text = s.deliveryPricePerKm;
         _minFeeCtrl.text = s.deliveryMinFee;
         _maxFeeCtrl.text = s.deliveryMaxFee;
+        _commissionCtrl.text = s.commissionPercent;
+        _insuranceCtrl.text = s.commissionInsurancePercent;
+        _platformCtrl.text = s.commissionPlatformPercent;
         _multCtrl.text = s.surgeMultiplier.toStringAsFixed(2);
         _startCtrl.text = s.surgeStartTime;
         _endCtrl.text = s.surgeEndTime;
@@ -118,6 +127,21 @@ class _AdminPricingTabState extends State<AdminPricingTab>
       _snack('Use HH:MM for surge times (e.g. 17:00)');
       return;
     }
+    final commPct = double.tryParse(_commissionCtrl.text.trim());
+    final insPct = double.tryParse(_insuranceCtrl.text.trim());
+    final platPct = double.tryParse(_platformCtrl.text.trim());
+    if (commPct == null || commPct < 0 || commPct > 100) {
+      _snack('Trip commission % must be 0–100');
+      return;
+    }
+    if (insPct == null || insPct < 0 || insPct > 100) {
+      _snack('Insurance % must be 0–100');
+      return;
+    }
+    if (platPct == null || platPct < 0 || platPct > 100) {
+      _snack('BytzGo platform % must be 0–100');
+      return;
+    }
 
     setState(() => _saving = true);
     try {
@@ -125,6 +149,9 @@ class _AdminPricingTabState extends State<AdminPricingTab>
         deliveryPricePerKm: rate.toString(),
         deliveryMinFee: minRaw,
         deliveryMaxFee: maxRaw,
+        commissionPercent: commPct.toString(),
+        commissionInsurancePercent: insPct.toString(),
+        commissionPlatformPercent: platPct.toString(),
         surgeEnabled: _surgeEnabled,
         surgeMultiplier: mult,
         surgeStartTime: _startCtrl.text.trim(),
@@ -277,6 +304,39 @@ class _AdminPricingTabState extends State<AdminPricingTab>
         ),
         Text(
           'Used when no regional zone matches, or as fallback. Leave empty for no cap.',
+          style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 11),
+        ),
+        const SizedBox(height: 20),
+        _sectionTitle('Trip commission (per delivery)'),
+        _field(
+          controller: _commissionCtrl,
+          label: 'Total commission %',
+          hint: '10',
+          suffix: '%',
+        ),
+        Row(
+          children: [
+            Expanded(
+              child: _field(
+                controller: _insuranceCtrl,
+                label: 'Driver insurance %',
+                hint: '3',
+                suffix: '%',
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _field(
+                controller: _platformCtrl,
+                label: 'BytzGo %',
+                hint: '7',
+                suffix: '%',
+              ),
+            ),
+          ],
+        ),
+        Text(
+          'Cash trips: riders pay total commission from wallet by 8:00 AM Ghana time the next day or cannot go online. Insurance share is tracked for payouts.',
           style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 11),
         ),
         const SizedBox(height: 20),

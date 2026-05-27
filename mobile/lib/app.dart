@@ -15,6 +15,7 @@ import 'core/trip_chat_unread.dart';
 import 'features/admin/admin_repository.dart';
 import 'features/auth/auth_repository.dart';
 import 'features/orders/orders_repository.dart';
+import 'features/rider/rider_commission_repository.dart';
 import 'features/rider/rider_documents_repository.dart';
 import 'features/vendor/vendor_repository.dart';
 import 'features/riders/riders_repository.dart';
@@ -124,6 +125,7 @@ class _BytzGoAppState extends State<BytzGoApp> {
         Provider(create: (ctx) => VendorRepository(ctx.read<ApiClient>())),
         Provider(create: (ctx) => RidersRepository(ctx.read<ApiClient>())),
         Provider(create: (ctx) => WalletRepository(ctx.read<ApiClient>())),
+        Provider(create: (ctx) => RiderCommissionRepository(ctx.read<ApiClient>())),
         Provider(create: (ctx) => SupportRepository(ctx.read<ApiClient>())),
         Provider(create: (ctx) => ConfigRepository(ctx.read<ApiClient>())),
         Provider(create: (_) => LocationService()),
