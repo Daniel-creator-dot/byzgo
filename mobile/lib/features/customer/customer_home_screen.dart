@@ -143,8 +143,16 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
           type == 'food' ||
           customerOrderHasShopPickup(o) ||
           (o.pickup != null && o.pickup!.trim().isNotEmpty);
+    }).toList();
+    if (list.isEmpty) return null;
+    list.sort((a, b) {
+      try {
+        return DateTime.parse(b.createdAt).compareTo(DateTime.parse(a.createdAt));
+      } catch (_) {
+        return b.id.compareTo(a.id);
+      }
     });
-    return list.isEmpty ? null : list.first;
+    return list.first;
   }
 
   /// After marketplace checkout — show trip on map and in lists.
@@ -353,6 +361,8 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
     socket.onOrderUpdated = (order) {
       if (!mounted) return;
       final prev = _orders.where((o) => o.id == order.id).firstOrNull;
+      final wasCancelled =
+          order.status == 'cancelled' && prev?.status != 'cancelled';
       setState(() {
         final i = _orders.indexWhere((o) => o.id == order.id);
         if (i >= 0) {
@@ -360,7 +370,23 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
         } else {
           _orders = [order, ..._orders];
         }
+        if (order.status == 'cancelled') {
+          _riderPosition = null;
+          _nearbyRiders = [];
+          _etaPhrase = null;
+          _routePoints = [];
+          _etaMinutes = null;
+          _etaDistanceText = null;
+          _etaExpiresAt = null;
+        }
       });
+      if (wasCancelled && order.customerId == _session.user?.id) {
+        _etaPoll?.cancel();
+        _etaPoll = null;
+        _nearbyPoll?.cancel();
+        _nearbyPoll = null;
+        _snack('Delivery request cancelled', success: true);
+      }
       if (order.customerId == _session.user?.id) {
         if (order.status == 'delivered' && prev?.status != 'delivered') {
           unawaited(PushNotificationService.instance.showTripAlert(
@@ -600,6 +626,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
   }
 
   void _replaceOrder(Order order) {
+    final wasCancelled = order.status == 'cancelled';
     setState(() {
       final i = _orders.indexWhere((o) => o.id == order.id);
       if (i >= 0) {
@@ -607,17 +634,27 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
       } else {
         _orders = [order, ..._orders];
       }
-      if (order.status == 'cancelled') {
+      if (wasCancelled) {
         _riderPosition = null;
         _nearbyRiders = [];
+        _etaPhrase = null;
+        _routePoints = [];
+        _etaMinutes = null;
+        _etaDistanceText = null;
+        _etaExpiresAt = null;
+        _trackingPickupLabel = null;
+        _trackingDropoffLabel = null;
       }
     });
     _syncNearbyPoll();
     _syncEtaPoll(order);
-    if (order.status == 'cancelled') {
+    if (wasCancelled) {
       _etaPoll?.cancel();
       _etaPoll = null;
+      _nearbyPoll?.cancel();
+      _nearbyPoll = null;
       _snack('Delivery request cancelled', success: true);
+      unawaited(_loadOrders());
     }
   }
 

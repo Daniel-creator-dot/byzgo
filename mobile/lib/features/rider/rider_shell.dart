@@ -320,17 +320,22 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
       _alertedOfferIds.add(order.id);
       _presentIncoming(order);
     };
-    _socket.onRideTaken = (orderId) {
+    _socket.onRideTaken = (orderId, {String? reason}) {
       if (!mounted) return;
       final wasIncoming = _incoming?.id == orderId;
       if (wasIncoming) unawaited(IncomingRideAlert.dismiss(orderId: orderId));
       setState(() {
         if (wasIncoming) _incoming = null;
+        _alertedOfferIds.remove(orderId);
         _orders = _orders
             .where((o) => o.id != orderId || o.riderId == _user.id)
             .toList();
       });
-      if (wasIncoming) _snack('Another rider took this job');
+      if (wasIncoming) {
+        _snack(reason == 'cancelled'
+            ? 'Customer cancelled this request'
+            : 'Another rider took this job');
+      }
     };
     _socket.onOrderUpdated = (order) {
       if (!mounted) return;
@@ -340,6 +345,9 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
             if (o.id != order.id) o,
           order,
         ];
+        if (order.status == 'cancelled') {
+          _alertedOfferIds.remove(order.id);
+        }
         if (_incoming?.id == order.id && !isOfferableOrder(order)) {
           unawaited(IncomingRideAlert.dismiss(orderId: order.id));
           _incoming = null;
@@ -1432,7 +1440,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
                 children: [
                   Text('Radar scanning', style: BytzGoTheme.sheetTitle(14)),
                   Text(
-                    'Map stays visible — customer pickups appear as green & blue pins',
+                    'Stay on Drive — when a customer requests nearby, you\'ll get a popup to Accept or Decline',
                     style: BytzGoTheme.sheetBody(12),
                   ),
                 ],

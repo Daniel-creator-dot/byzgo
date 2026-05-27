@@ -10,6 +10,7 @@ import 'json_parse.dart';
 
 typedef OrderHandler = void Function(Order order);
 typedef OrderIdHandler = void Function(String orderId);
+typedef RideTakenHandler = void Function(String orderId, {String? reason});
 typedef WalletHandler = void Function(double balance);
 typedef LocationHandler = void Function(String riderId, double lat, double lng);
 typedef OrderMessageHandler = void Function(String orderId, TripMessage message);
@@ -35,7 +36,7 @@ class SocketService {
   String? _userId;
 
   OrderHandler? onRideIncoming;
-  OrderIdHandler? onRideTaken;
+  RideTakenHandler? onRideTaken;
   OrderHandler? onOrderNew;
   OrderHandler? onOrderUpdated;
   WalletHandler? onWalletUpdated;
@@ -135,7 +136,10 @@ class SocketService {
   void _onRideTaken(dynamic data) {
     final map = _asMap(data);
     if (map == null || map['orderId'] == null) return;
-    onRideTaken?.call(map['orderId'].toString());
+    onRideTaken?.call(
+      map['orderId'].toString(),
+      reason: map['reason']?.toString(),
+    );
   }
 
   void _onOrderNew(dynamic data) {

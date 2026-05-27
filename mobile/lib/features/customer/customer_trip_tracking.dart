@@ -64,6 +64,9 @@ class CustomerDeliveryTracker extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (order.status == 'cancelled') {
+      return const _CancelledTripBanner();
+    }
     final dist = _riderDistanceKm;
     final hasRider = order.riderId != null && !searching;
 
@@ -1223,6 +1226,34 @@ class _CustomerCancelRequestButtonState extends State<CustomerCancelRequestButto
         foregroundColor: BytzGoTheme.danger,
         side: BorderSide(color: BytzGoTheme.danger.withValues(alpha: 0.45)),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      ),
+    );
+  }
+}
+
+class _CancelledTripBanner extends StatelessWidget {
+  const _CancelledTripBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: BytzGoTheme.sheetMuted.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: BytzGoTheme.sheetMuted.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.cancel_outlined, color: BytzGoTheme.sheetMuted),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              'This trip was cancelled. Pull down to refresh or book a new ride.',
+              style: BytzGoTheme.sheetBody(13),
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -1727,6 +1727,20 @@ async function notifyRideTaken(orderId: string, winnerRiderId: string) {
   }
 }
 
+/** Customer cancelled before a rider accepted — dismiss incoming UI for offered riders. */
+async function notifyRideCancelled(orderId: string) {
+  clearDispatchTimer(orderId);
+  const offers = await pool.query(
+    `SELECT DISTINCT rider_id FROM order_dispatch_offers WHERE order_id = $1`,
+    [orderId]
+  );
+  for (const row of offers.rows) {
+    if (row.rider_id) {
+      io.to(row.rider_id).emit('ride:taken', { orderId, reason: 'cancelled' });
+    }
+  }
+}
+
 type PushAlert = {
   title: string;
   body: string;
@@ -4811,6 +4825,8 @@ app.post('/api/orders/:id/cancel', authenticateToken, async (req: any, res) => {
 
     if (prevRiderId) {
       await notifyRideTaken(orderId, prevRiderId);
+    } else {
+      await notifyRideCancelled(orderId);
     }
 
     clearDispatchTimer(orderId);

@@ -158,6 +158,7 @@ String customerTripSubline(Order order, {String? etaPhrase}) {
 }
 
 int _tripProgressIndex(Order order) {
+  if (order.status == 'cancelled') return -1;
   if (order.status == 'delivered') return 5;
   if (order.status == 'arrived') return 4;
   if (order.status == 'picked_up') return 3;
@@ -170,6 +171,11 @@ int _tripProgressIndex(Order order) {
 }
 
 List<CustomerTripStep> customerTripSteps(Order order) {
+  if (order.status == 'cancelled') {
+    return const [
+      CustomerTripStep(label: 'Cancelled', active: true, current: true),
+    ];
+  }
   final idx = _tripProgressIndex(order);
   final shop = customerOrderHasShopPickup(order);
   final labels = [

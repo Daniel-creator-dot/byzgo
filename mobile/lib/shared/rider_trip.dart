@@ -166,7 +166,15 @@ int activeTripStep(Order order) {
 }
 
 bool isOfferableOrder(Order order) {
-  if (order.status != 'ready' || order.riderId != null) return false;
+  if (order.riderId != null) return false;
+  if (const {'cancelled', 'delivered', 'picked_up', 'arrived'}.contains(order.status)) {
+    return false;
+  }
+  final offerableStatus = order.status == 'ready' ||
+      (order.status == 'pending' &&
+          order.vendorId.trim().isNotEmpty &&
+          (order.orderType == 'food' || order.orderType == 'courier'));
+  if (!offerableStatus) return false;
   if (order.expiresAt == null) return true;
   try {
     return DateTime.parse(order.expiresAt!).isAfter(DateTime.now());
