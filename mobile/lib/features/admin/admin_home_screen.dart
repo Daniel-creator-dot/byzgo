@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/session.dart';
@@ -50,6 +51,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
   List<Order> _orders = [];
   bool _ordersLoading = false;
   Map<String, dynamic>? _revenue;
+  String _appVersion = '';
 
   @override
   void initState() {
@@ -63,8 +65,19 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
       _loadPendingCount();
       _loadPendingVendorCount();
       _loadOpenSupportCount();
+      _loadAppVersion();
     });
   }
+
+  Future<void> _loadAppVersion() async {
+    try {
+      final info = await PackageInfo.fromPlatform();
+      if (!mounted) return;
+      setState(() => _appVersion = 'v${info.version}+${info.buildNumber}');
+    } catch (_) {}
+  }
+
+  void _openPricingTab() => setState(() => _tab = _AdminTab.pricing);
 
   Future<void> _loadOpenSupportCount() async {
     try {
@@ -234,6 +247,15 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
                     fontSize: 16,
                   ),
                 ),
+                if (_appVersion.isNotEmpty)
+                  Text(
+                    _appVersion,
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.45),
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
               ],
             ),
           ),
@@ -325,6 +347,11 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
           ),
         ),
         const SizedBox(height: 12),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: _pricingShortcutCard(),
+        ),
+        const SizedBox(height: 10),
         SizedBox(
           height: 100,
           child: ListView(
@@ -811,6 +838,58 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
     );
   }
 
+  Widget _pricingShortcutCard() {
+    return Material(
+      color: BytzGoTheme.accent.withValues(alpha: 0.14),
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        onTap: _openPricingTab,
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: BytzGoTheme.accent.withValues(alpha: 0.45)),
+          ),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: BytzGoTheme.accent.withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(Icons.payments_outlined, color: BytzGoTheme.accent, size: 26),
+              ),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Delivery pricing',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w900,
+                        fontSize: 14,
+                      ),
+                    ),
+                    SizedBox(height: 2),
+                    Text(
+                      '₵/km · global min/max · regional zones · surge',
+                      style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w600),
+                    ),
+                  ],
+                ),
+              ),
+              const Icon(Icons.chevron_right, color: BytzGoTheme.accent),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _bottomNav() {
     return Container(
       decoration: const BoxDecoration(
@@ -819,17 +898,17 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
       ),
       child: SafeArea(
         top: false,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 6),
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
           child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
               _navItem(_AdminTab.live, Icons.radar, 'Live'),
               _navItem(_AdminTab.drivers, Icons.verified_user, 'Drivers', badge: _pendingDrivers),
               _navItem(_AdminTab.stores, Icons.storefront, 'Stores', badge: _storesBadgeCount),
               _navItem(_AdminTab.orders, Icons.list_alt, 'Orders'),
               _navItem(_AdminTab.support, Icons.support_agent, 'Support', badge: _openSupport),
-              _navItem(_AdminTab.pricing, Icons.payments_outlined, 'Pricing'),
+              _navItem(_AdminTab.pricing, Icons.payments_outlined, 'Pricing', highlight: true),
               _navItem(_AdminTab.insights, Icons.insights, 'Insights'),
             ],
           ),
@@ -838,7 +917,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
     );
   }
 
-  Widget _navItem(_AdminTab tab, IconData icon, String label, {int badge = 0}) {
+  Widget _navItem(_AdminTab tab, IconData icon, String label, {int badge = 0, bool highlight = false}) {
     final active = _tab == tab;
     return InkWell(
       onTap: () {
@@ -857,7 +936,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
         if (tab == _AdminTab.insights) _loadRevenue();
       },
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -866,9 +945,26 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
               children: [
                 Icon(
                   icon,
-                  color: active ? BytzGoTheme.accent : Colors.white38,
+                  color: active
+                      ? BytzGoTheme.accent
+                      : highlight
+                          ? Colors.white70
+                          : Colors.white38,
                   size: 24,
                 ),
+                if (highlight && !active)
+                  Positioned(
+                    right: -2,
+                    top: -2,
+                    child: Container(
+                      width: 8,
+                      height: 8,
+                      decoration: const BoxDecoration(
+                        color: BytzGoTheme.accent,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                  ),
                 if (badge > 0)
                   Positioned(
                     right: -6,

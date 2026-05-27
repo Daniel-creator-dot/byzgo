@@ -222,8 +222,8 @@ class _AdminPricingTabState extends State<AdminPricingTab>
           unselectedLabelColor: Colors.white54,
           indicatorColor: BytzGoTheme.accent,
           tabs: const [
-            Tab(text: 'GLOBAL'),
-            Tab(text: 'ZONES'),
+            Tab(text: 'GLOBAL RATE'),
+            Tab(text: 'ZONE MIN/MAX'),
           ],
         ),
         Expanded(
