@@ -495,6 +495,14 @@ async function riderHasOverdueCommission(riderId: string): Promise<boolean> {
 
 async function recordTripCommission(order: any) {
   if (!order?.rider_id) return;
+  try {
+    await recordTripCommissionInner(order);
+  } catch (err) {
+    console.error('[recordTripCommission] failed (delivery still complete):', err);
+  }
+}
+
+async function recordTripCommissionInner(order: any) {
   const settings = await getCommissionSettings();
   const total = parseFloat(order.total);
   if (!Number.isFinite(total) || total <= 0) return;
@@ -3218,19 +3226,28 @@ app.get('/api/rider/stats', authenticateToken, async (req: any, res) => {
       [riderId]
     );
 
-    const offersRes = await pool.query(
-      `SELECT
-         COUNT(*)::int AS offers_received,
-         COUNT(*) FILTER (WHERE status = 'accepted')::int AS offers_accepted,
-         COUNT(*) FILTER (WHERE status = 'declined')::int AS offers_declined
-       FROM order_dispatch_offers
-       WHERE rider_id = $1
-         AND created_at >= CURRENT_TIMESTAMP - INTERVAL '30 days'`,
-      [riderId]
-    );
+    let offers: Record<string, number> = {
+      offers_received: 0,
+      offers_accepted: 0,
+      offers_declined: 0,
+    };
+    try {
+      const offersRes = await pool.query(
+        `SELECT
+           COUNT(*)::int AS offers_received,
+           COUNT(*) FILTER (WHERE status = 'accepted')::int AS offers_accepted,
+           COUNT(*) FILTER (WHERE status = 'declined')::int AS offers_declined
+         FROM order_dispatch_offers
+         WHERE rider_id = $1
+           AND created_at >= CURRENT_TIMESTAMP - INTERVAL '30 days'`,
+        [riderId]
+      );
+      offers = offersRes.rows[0] || offers;
+    } catch (offersErr) {
+      console.warn('[rider/stats] dispatch offers unavailable:', offersErr);
+    }
 
     const trips = tripsRes.rows[0] || {};
-    const offers = offersRes.rows[0] || {};
     const offersReceived = offers.offers_received ?? 0;
     const offersAccepted = offers.offers_accepted ?? 0;
     const acceptanceRate =
@@ -4901,12 +4918,21 @@ app.get('/api/orders', authenticateToken, async (req: any, res) => {
     const result = await pool.query(query, params);
     const rows = await Promise.all(
       result.rows.map(async (o: any) => {
-        const row = await sanitizeOrderForRole(o, req.user.role, req.user.id);
-        if (req.user.role === 'rider' && o.rider_offer_expires_at) {
-          row.expiresAt = new Date(o.rider_offer_expires_at).toISOString();
-          row.dispatchWave = o.rider_offer_wave;
+        try {
+          const row = await sanitizeOrderForRole(o, req.user.role, req.user.id);
+          if (req.user.role === 'rider' && o.rider_offer_expires_at) {
+            row.expiresAt = new Date(o.rider_offer_expires_at).toISOString();
+            row.dispatchWave = o.rider_offer_wave;
+          }
+          return row;
+        } catch (rowErr) {
+          console.error('[orders] sanitize failed for', o?.id, rowErr);
+          const fallback = { ...o };
+          delete fallback.delivery_code;
+          delete fallback.customer_phone;
+          delete fallback.rider_phone;
+          return fallback;
         }
-        return row;
       })
     );
     res.json(rows);
@@ -5446,8 +5472,37 @@ app.post('/api/orders/:id/complete-delivery', authenticateToken, async (req: any
     } catch (settleErr) {
       console.error('[complete-delivery] settlement failed (order still delivered):', settleErr);
     }
-    broadcastOrderUpdated(delivered);
-    res.json(await sanitizeOrderForRole(delivered, 'rider', req.user.id));
+    void broadcastOrderUpdated(delivered).catch((broadcastErr) => {
+      console.error('[complete-delivery] broadcast failed:', broadcastErr);
+    });
+
+    let payload = delivered;
+    try {
+      const loaded = await loadOrderWithContacts(orderId);
+      if (loaded) payload = loaded;
+    } catch (loadErr) {
+      console.warn('[complete-delivery] load contacts failed:', loadErr);
+    }
+
+    try {
+      return res.json(await sanitizeOrderForRole(payload, 'rider', req.user.id));
+    } catch (sanitizeErr) {
+      console.error('[complete-delivery] sanitize failed:', sanitizeErr);
+      return res.json({
+        id: payload.id,
+        customer_id: payload.customer_id,
+        vendor_id: payload.vendor_id,
+        rider_id: payload.rider_id,
+        items: payload.items,
+        total: payload.total,
+        status: payload.status,
+        address: payload.address,
+        created_at: payload.created_at,
+        updated_at: payload.updated_at,
+        payment_status: payload.payment_status,
+        delivery_fee: payload.delivery_fee,
+      });
+    }
   } catch (err) {
     console.error('Complete delivery error:', err);
     res.status(500).json({ message: 'Server error' });

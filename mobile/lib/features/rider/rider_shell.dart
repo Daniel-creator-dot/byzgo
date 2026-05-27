@@ -433,34 +433,50 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
 
   Future<void> _refreshAll({bool silent = false}) async {
     if (!silent) setState(() => _refreshing = true);
+    Object? ordersErr;
+    List<Order>? orders;
+    List<Vendor>? vendors;
+    RiderStats? stats;
     try {
-      final results = await Future.wait([
-        _ordersRepo.fetchOrders(),
-        _ordersRepo.fetchVendors(region: _user.region),
-        _riderStatsRepo.fetchStats(),
-      ]);
-      final orders = results[0] as List<Order>;
-      final vendors = results[1] as List<Vendor>;
-      final stats = results[2] as RiderStats;
-      if (!mounted) return;
+      orders = await _ordersRepo.fetchOrders();
+    } catch (e) {
+      ordersErr = e;
+    }
+    try {
+      vendors = await _ordersRepo.fetchVendors(region: _user.region);
+    } catch (_) {
+      /* keep previous vendor list */
+    }
+    try {
+      stats = await _riderStatsRepo.fetchStats();
+    } catch (_) {
+      /* keep previous stats */
+    }
+    if (!mounted) {
+      if (!silent) setState(() => _refreshing = false);
+      return;
+    }
+    if (orders != null || vendors != null || stats != null) {
       setState(() {
-        _orders = orders;
-        _vendors = vendors;
-        _riderStats = stats;
+        if (orders != null) _orders = orders;
+        if (vendors != null) _vendors = vendors;
+        if (stats != null) _riderStats = stats;
       });
-      _driveMapKey.currentState?.fitAllMarkers();
-      _trackOffers(orders);
-      _syncOfferTimer();
-      _syncNavPoll();
+      if (orders != null) {
+        _driveMapKey.currentState?.fitAllMarkers();
+        _trackOffers(orders);
+        _syncOfferTimer();
+        _syncNavPoll();
+      }
       unawaited(_loadCommission());
       if (_tab == _RiderTab.wallet) {
         unawaited(_loadWalletTransactions(silent: true));
       }
-    } catch (e) {
-      if (!silent) _snack(OrdersRepository.errorMessage(e));
-    } finally {
-      if (mounted && !silent) setState(() => _refreshing = false);
     }
+    if (!silent && ordersErr != null) {
+      _snack(OrdersRepository.errorMessage(ordersErr));
+    }
+    if (mounted && !silent) setState(() => _refreshing = false);
   }
 
   Future<void> _loadWalletTransactions({bool silent = false}) async {
@@ -1976,7 +1992,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
               orders: _ordersRepo,
               onCompleted: () {
                 _snack('Delivery completed', success: true);
-                _refreshAll();
+                _refreshAll(silent: true);
               },
             );
         bg = BytzGoTheme.accent;
