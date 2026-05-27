@@ -3,6 +3,8 @@ import '../core/json_parse.dart';
 class AdminPricingSettings {
   const AdminPricingSettings({
     required this.deliveryPricePerKm,
+    required this.deliveryMinFee,
+    required this.deliveryMaxFee,
     required this.surgeEnabled,
     required this.surgeMultiplier,
     required this.surgeStartTime,
@@ -12,6 +14,8 @@ class AdminPricingSettings {
   });
 
   final String deliveryPricePerKm;
+  final String deliveryMinFee;
+  final String deliveryMaxFee;
   final bool surgeEnabled;
   final double surgeMultiplier;
   final String surgeStartTime;
@@ -28,6 +32,8 @@ class AdminPricingSettings {
     return AdminPricingSettings(
       deliveryPricePerKm:
           json['delivery_price_per_km']?.toString() ?? '4',
+      deliveryMinFee: json['delivery_min_fee']?.toString() ?? '',
+      deliveryMaxFee: json['delivery_max_fee']?.toString() ?? '',
       surgeEnabled: enabled,
       surgeMultiplier: parseJsonDouble(json['surge_multiplier']) ?? 1.5,
       surgeStartTime: json['surge_start_time']?.toString() ?? '17:00',
@@ -39,6 +45,8 @@ class AdminPricingSettings {
 
   Map<String, dynamic> toPatchBody() => {
         'delivery_price_per_km': deliveryPricePerKm,
+        'delivery_min_fee': deliveryMinFee.trim(),
+        'delivery_max_fee': deliveryMaxFee.trim(),
         'surge_enabled': surgeEnabled,
         'surge_multiplier': surgeMultiplier,
         'surge_start_time': surgeStartTime,
