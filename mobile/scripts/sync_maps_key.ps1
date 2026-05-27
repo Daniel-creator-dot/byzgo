@@ -81,6 +81,16 @@ $plistXml = @"
 [System.IO.File]::WriteAllText($mapsPlist, $plistXml)
 Write-Host "Updated ios/Runner/MapsConfig.plist"
 
+$infoPlist = Join-Path $mobileRoot "ios\Runner\Info.plist"
+if (Test-Path $infoPlist) {
+    $xml = Get-Content $infoPlist -Raw
+    if ($xml -match '<key>GMSApiKey</key>') {
+        $xml = $xml -replace '(<key>GMSApiKey</key>\s*<string>)[^<]*(</string>)', "`${1}$key`${2}"
+        [System.IO.File]::WriteAllText($infoPlist, $xml)
+        Write-Host "Updated ios/Runner/Info.plist GMSApiKey"
+    }
+}
+
 # Dart maps_key.dart
 $mapsKeyDart = Join-Path $mobileRoot "lib\core\maps_key.dart"
 $dartContent = @"

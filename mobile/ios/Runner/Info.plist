@@ -34,10 +34,26 @@
 	</array>
 	<key>GMSApiKey</key>
 	<string></string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.googleusercontent.apps.645977332644-7r6hmbj6sklvrv96l2i312c34i1kgn4u</string>
+			</array>
+		</dict>
+	</array>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
+		<string>remote-notification</string>
+	</array>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>BytzGo needs your location for pickup and delivery tracking.</string>
-	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>BytzGo uses location while delivering orders.</string>
+	<string>BytzGo needs your location to set pickup and drop-off points and track deliveries.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>BytzGo uses the camera for profile photos, shop images, and rider verification documents.</string>
 	<key>NSPhotoLibraryUsageDescription</key>

@@ -147,9 +147,10 @@ class AuthRepository {
     } on PlatformException catch (e) {
       if (e.code == 'sign_in_failed' && (e.message?.contains(': 10') ?? false)) {
         throw Exception(
-          'Google Sign-In is not registered for this Android app. '
-          'In Firebase (project bytzgo-9bd89), add your debug SHA-1 for package net.bytzgo.app. '
-          'On PC run: mobile/scripts/print_google_signin_android.ps1',
+          'Google Sign-In is not set up for this device. '
+          'Android: add SHA-1 for net.bytzgo.app in Firebase (bytzgo-9bd89). '
+          'iOS: add bundle com.bytzgo.bytzgoMobile and URL scheme from GoogleService-Info.plist. '
+          'See docs/APP_STORE.md.',
         );
       }
       rethrow;

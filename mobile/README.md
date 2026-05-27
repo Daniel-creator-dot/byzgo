@@ -29,6 +29,16 @@ Cross-platform iOS and Android client for **BytzGo** — **Bolt / Uber–style**
 3. Backend: `npm run backend` from repo root (port **3000**)
 4. Env: root `.env.example` and `backend/.env`
 
+## App Store (iOS)
+
+Full checklist: [`docs/APP_STORE.md`](../docs/APP_STORE.md)
+
+```bash
+cd mobile
+./scripts/validate_app_store.sh    # pre-flight
+./scripts/build_ios_ipa.sh       # macOS: release IPA
+```
+
 ## Open in Xcode (iOS)
 
 The iOS app lives under `mobile/ios/`. On a **Mac** with [Xcode](https://developer.apple.com/xcode/) and [Flutter](https://docs.flutter.dev/get-started/install/macos) installed, run everything in one step:

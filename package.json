@@ -27,6 +27,8 @@
     "flutter:build:apk": "powershell -ExecutionPolicy Bypass -File mobile/scripts/build_apk.ps1",
     "release:android": "npm run flutter:build:apk && node scripts/copy-apk-to-public.mjs",
     "flutter:build:aab": "powershell -ExecutionPolicy Bypass -File mobile/scripts/build_aab.ps1",
+    "flutter:validate:ios": "bash mobile/scripts/validate_app_store.sh",
+    "flutter:build:ipa": "bash mobile/scripts/build_ios_ipa.sh",
     "play:setup": "powershell -ExecutionPolicy Bypass -File mobile/scripts/setup_play_store.ps1",
     "play:validate": "powershell -ExecutionPolicy Bypass -File mobile/scripts/validate_play_release.ps1",
     "setup:firebase:android": "npm --prefix backend run setup:firebase:android",

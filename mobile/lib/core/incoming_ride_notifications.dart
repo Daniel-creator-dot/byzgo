@@ -34,6 +34,29 @@ const AndroidNotificationChannel kSupportChannel = AndroidNotificationChannel(
 int incomingRideNotificationId(String orderId) =>
     orderId.hashCode & 0x7fffffff;
 
+const DarwinNotificationDetails _darwinIncomingRide = DarwinNotificationDetails(
+  presentAlert: true,
+  presentBadge: true,
+  presentSound: true,
+  interruptionLevel: InterruptionLevel.timeSensitive,
+);
+
+const DarwinNotificationDetails _darwinTripAlert = DarwinNotificationDetails(
+  presentAlert: true,
+  presentBadge: true,
+  presentSound: true,
+);
+
+NotificationDetails platformTripNotificationDetails({
+  required AndroidNotificationDetails android,
+  bool incomingRide = false,
+}) {
+  return NotificationDetails(
+    android: android,
+    iOS: incomingRide ? _darwinIncomingRide : _darwinTripAlert,
+  );
+}
+
 AndroidNotificationDetails incomingRideAndroidDetails({
   bool fullScreen = true,
   bool ongoing = true,

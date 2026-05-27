@@ -47,6 +47,25 @@ WEB_SIZES = {
     "icons/Icon-maskable-512.png": 512,
 }
 
+# iOS App Store / Xcode asset catalog (filename → pixel size)
+IOS_ICON_SIZES = {
+    "Icon-App-20x20@1x.png": 20,
+    "Icon-App-20x20@2x.png": 40,
+    "Icon-App-20x20@3x.png": 60,
+    "Icon-App-29x29@1x.png": 29,
+    "Icon-App-29x29@2x.png": 58,
+    "Icon-App-29x29@3x.png": 87,
+    "Icon-App-40x40@1x.png": 40,
+    "Icon-App-40x40@2x.png": 80,
+    "Icon-App-40x40@3x.png": 120,
+    "Icon-App-60x60@2x.png": 120,
+    "Icon-App-60x60@3x.png": 180,
+    "Icon-App-76x76@1x.png": 76,
+    "Icon-App-76x76@2x.png": 152,
+    "Icon-App-83.5x83.5@2x.png": 167,
+    "Icon-App-1024x1024@1x.png": 1024,
+}
+
 
 def squircle_mask(size: int, corner_ratio: float = 0.22) -> Image.Image:
     """Smooth rounded-rect mask (iOS-style squircle approximation)."""
@@ -187,6 +206,11 @@ def main() -> int:
     # In-app wordmark (keeps square proportions from source)
     save_png(src.resize((1024, 1024), Image.Resampling.LANCZOS), branding / "app_logo.png")
     save_png(build_icon(src, 512, padding=0.04), branding / "preloader.png")
+
+    ios_dir = ROOT / "ios" / "Runner" / "Assets.xcassets" / "AppIcon.appiconset"
+    ios_dir.mkdir(parents=True, exist_ok=True)
+    for filename, px in IOS_ICON_SIZES.items():
+        save_png(build_icon(src, px, padding=0.05), ios_dir / filename)
 
     print(f"Generated icons from {source_path}")
     print(f"  Master: {branding / 'app_icon.png'}")

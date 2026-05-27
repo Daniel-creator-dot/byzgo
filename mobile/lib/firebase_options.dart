@@ -33,7 +33,7 @@ class DefaultFirebaseOptions {
     messagingSenderId: '645977332644',
     projectId: 'bytzgo-9bd89',
     storageBucket: 'bytzgo-9bd89.firebasestorage.app',
-    iosBundleId: 'com.example.bytzgo',
+    iosBundleId: 'com.bytzgo.bytzgoMobile',
   );
 
   static const FirebaseOptions web = FirebaseOptions(
