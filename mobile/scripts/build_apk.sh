@@ -21,12 +21,19 @@ fi
 API_URL="${API_URL:-https://www.bytzgo.net}"
 API_URL="${API_URL%/}"
 
+if [[ -x "$(command -v node)" ]] && [[ -f "$MOBILE_ROOT/scripts/sync_maps_key.mjs" ]]; then
+  node "$MOBILE_ROOT/scripts/sync_maps_key.mjs" || true
+fi
+
 MAPS_KEY="$(read_env GOOGLE_MAPS_API_KEY)"
 if [[ -z "$MAPS_KEY" ]]; then
   MAPS_KEY="$(read_env VITE_GOOGLE_MAPS_API_KEY)"
 fi
 if [[ -z "$MAPS_KEY" ]]; then
   MAPS_KEY="${GOOGLE_MAPS_API_KEY:-}"
+fi
+if [[ -z "$MAPS_KEY" ]] && [[ -f "$MOBILE_ROOT/lib/core/maps_key.dart" ]]; then
+  MAPS_KEY="$(grep -oE "resolved = '[^']+'" "$MOBILE_ROOT/lib/core/maps_key.dart" | sed "s/.*'\\([^']*\\)'.*/\\1/" || true)"
 fi
 
 GOOGLE_CLIENT="$(read_env GOOGLE_WEB_CLIENT_ID)"
