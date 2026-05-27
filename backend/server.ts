@@ -4722,7 +4722,7 @@ app.get('/api/admin/riders/:id/profile', authenticateToken, async (req: any, res
     if (!user) return res.status(404).json({ message: 'Driver not found' });
 
     const docsRes = await pool.query(
-      `SELECT doc_type, review_status, rejection_reason, created_at, updated_at
+      `SELECT doc_type, review_status, rejection_reason, uploaded_at, reviewed_at
        FROM rider_documents WHERE user_id = $1 ORDER BY doc_type`,
       [id]
     );
@@ -4739,20 +4739,43 @@ app.get('/api/admin/riders/:id/profile', authenticateToken, async (req: any, res
       [id]
     );
 
-    const commissionRes = await pool.query(
-      `SELECT
-        COALESCE(SUM(commission_total), 0)::float AS commission_accrued,
-        COALESCE(SUM(insurance_amount), 0)::float AS insurance_accrued,
-        COALESCE(SUM(platform_amount), 0)::float AS platform_accrued
-       FROM order_commissions WHERE rider_id = $1`,
-      [id]
-    );
+    let commissionTotals = {
+      commission_accrued: 0,
+      insurance_accrued: 0,
+      platform_accrued: 0,
+    };
+    let settlements: any[] = [];
+    try {
+      const commissionRes = await pool.query(
+        `SELECT
+          COALESCE(SUM(commission_total), 0)::float AS commission_accrued,
+          COALESCE(SUM(insurance_amount), 0)::float AS insurance_accrued,
+          COALESCE(SUM(platform_amount), 0)::float AS platform_accrued
+         FROM order_commissions WHERE rider_id = $1`,
+        [id]
+      );
+      if (commissionRes.rows[0]) commissionTotals = commissionRes.rows[0];
 
-    await refreshRiderSettlementStatus(id);
-    const settlementsRes = await pool.query(
-      `SELECT * FROM rider_daily_settlements WHERE rider_id = $1 ORDER BY settlement_date DESC LIMIT 14`,
-      [id]
-    );
+      await refreshRiderSettlementStatus(id);
+      const settlementsRes = await pool.query(
+        `SELECT * FROM rider_daily_settlements WHERE rider_id = $1 ORDER BY settlement_date DESC LIMIT 14`,
+        [id]
+      );
+      settlements = settlementsRes.rows.map((s: any) => ({
+        id: s.id,
+        settlement_date: s.settlement_date,
+        commission_total: parseFloat(s.commission_total),
+        insurance_total: parseFloat(s.insurance_total),
+        platform_total: parseFloat(s.platform_total),
+        amount_paid: parseFloat(s.amount_paid),
+        amount_owed: moneyRound(parseFloat(s.commission_total) - parseFloat(s.amount_paid)),
+        status: s.status,
+        due_at: s.due_at,
+        paid_at: s.paid_at,
+      }));
+    } catch (commissionErr) {
+      console.warn('[admin/riders/profile] commission data skipped:', commissionErr);
+    }
 
     const recentTripsRes = await pool.query(
       `SELECT id, status, total, delivery_fee, payment_status, rating, created_at, address, pickup_address
@@ -4761,18 +4784,6 @@ app.get('/api/admin/riders/:id/profile', authenticateToken, async (req: any, res
     );
 
     const settings = await getCommissionSettings();
-    const settlements = settlementsRes.rows.map((s: any) => ({
-      id: s.id,
-      settlement_date: s.settlement_date,
-      commission_total: parseFloat(s.commission_total),
-      insurance_total: parseFloat(s.insurance_total),
-      platform_total: parseFloat(s.platform_total),
-      amount_paid: parseFloat(s.amount_paid),
-      amount_owed: moneyRound(parseFloat(s.commission_total) - parseFloat(s.amount_paid)),
-      status: s.status,
-      due_at: s.due_at,
-      paid_at: s.paid_at,
-    }));
 
     res.json({
       driver: {
@@ -4795,11 +4806,12 @@ app.get('/api/admin/riders/:id/profile', authenticateToken, async (req: any, res
         has_live_location:
           user.live_lat != null &&
           user.live_lng != null &&
-          Math.abs(parseFloat(user.live_lat)) > 0.001,
+          Math.abs(parseFloat(user.live_lat)) > 0.001 &&
+          Math.abs(parseFloat(user.live_lng)) > 0.001,
       },
       stats: statsRes.rows[0],
       commission_policy: settings,
-      commission_totals: commissionRes.rows[0],
+      commission_totals: commissionTotals,
       settlements,
       documents: docsRes.rows,
       recent_trips: recentTripsRes.rows,
