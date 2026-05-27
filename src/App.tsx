@@ -3535,6 +3535,9 @@ function AdminView({
     paystack_public_key: '',
     paystack_secret_key: '',
     platform_fee_percent: '10',
+    commission_percent: '10',
+    commission_insurance_percent: '3',
+    commission_platform_percent: '7',
     delivery_price_per_km: '4',
     delivery_min_fee: '',
     delivery_max_fee: '',
@@ -3590,6 +3593,9 @@ function AdminView({
         paystack_public_key: res.data.paystack_public_key || '',
         paystack_secret_key: '',
         platform_fee_percent: res.data.platform_fee_percent || '10',
+        commission_percent: res.data.commission_percent || '10',
+        commission_insurance_percent: res.data.commission_insurance_percent || '3',
+        commission_platform_percent: res.data.commission_platform_percent || '7',
         delivery_price_per_km: res.data.delivery_price_per_km || '4',
         delivery_min_fee: res.data.delivery_min_fee ?? '',
         delivery_max_fee: res.data.delivery_max_fee ?? '',
@@ -4221,6 +4227,17 @@ function AdminView({
              <DarkInput label="Paystack public key" value={settings.paystack_public_key} onChange={(e) => setSettings({ ...settings, paystack_public_key: e.target.value })} placeholder="pk_test_..." />
              <DarkInput label="Paystack secret key" type="password" value={settings.paystack_secret_key} onChange={(e) => setSettings({ ...settings, paystack_secret_key: e.target.value })} placeholder="sk_test_... (leave blank to keep)" />
              <DarkInput label="Platform fee %" value={settings.platform_fee_percent} onChange={(e) => setSettings({ ...settings, platform_fee_percent: e.target.value })} />
+             <div className="rounded-2xl border border-slate-700 bg-slate-900/50 p-4 space-y-3">
+               <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Trip commission (per delivery)</p>
+               <p className="text-[10px] text-slate-500 font-bold">
+                 Cash trips: drivers pay total commission from wallet by 8:00 AM Ghana time the next day or cannot go online. Insurance % is tracked for backend payouts.
+               </p>
+               <div className="grid grid-cols-3 gap-3">
+                 <DarkInput label="Total %" type="number" min="0" max="100" step="0.1" value={settings.commission_percent} onChange={(e) => setSettings({ ...settings, commission_percent: e.target.value })} />
+                 <DarkInput label="Insurance %" type="number" min="0" max="100" step="0.1" value={settings.commission_insurance_percent} onChange={(e) => setSettings({ ...settings, commission_insurance_percent: e.target.value })} />
+                 <DarkInput label="BytzGo %" type="number" min="0" max="100" step="0.1" value={settings.commission_platform_percent} onChange={(e) => setSettings({ ...settings, commission_platform_percent: e.target.value })} />
+               </div>
+             </div>
              <DarkInput
                label="Delivery price per km (₵)"
                type="number"

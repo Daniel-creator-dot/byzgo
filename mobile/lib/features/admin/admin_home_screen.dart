@@ -17,6 +17,7 @@ import '../../shared/theme.dart';
 import 'admin_drivers_tab.dart';
 import 'admin_live_map.dart';
 import 'admin_stores_hub.dart';
+import 'admin_driver_profile_sheet.dart';
 import 'admin_pricing_tab.dart';
 import 'admin_support_tab.dart';
 import 'widgets/admin_hero_header.dart';
@@ -411,7 +412,10 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
               child: AdminLiveMap(
                 riders: riders,
                 selectedId: _selectedRiderId,
-                onRiderTap: (r) => setState(() => _selectedRiderId = r.id),
+                onRiderTap: (r) {
+                  setState(() => _selectedRiderId = r.id);
+                  showAdminDriverProfileSheet(context, riderId: r.id);
+                },
               ),
             ),
           ),
@@ -512,7 +516,10 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
   Widget _riderChip(AdminLiveRider r, bool selected) {
     final onTrip = r.activeTrips > 0;
     return GestureDetector(
-      onTap: () => setState(() => _selectedRiderId = r.id),
+      onTap: () {
+        setState(() => _selectedRiderId = r.id);
+        showAdminDriverProfileSheet(context, riderId: r.id);
+      },
       child: Container(
         width: 168,
         margin: const EdgeInsets.only(right: 10),

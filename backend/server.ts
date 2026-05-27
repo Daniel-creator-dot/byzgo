@@ -420,6 +420,154 @@ function applyDeliveryFeeCaps(
   return Math.round(fee * 100) / 100;
 }
 
+function moneyRound(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+/** Ghana calendar date (GMT, no DST). */
+function ghanaDateOnly(d = new Date()): string {
+  return d.toISOString().slice(0, 10);
+}
+
+/** Commission for trips on `dateStr` is due by 08:00 Ghana time the next day. */
+function commissionDueAt(dateStr: string): Date {
+  const d = new Date(`${dateStr}T00:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() + 1);
+  d.setUTCHours(8, 0, 0, 0);
+  return d;
+}
+
+async function getCommissionSettings() {
+  const totalPercent = Math.max(
+    0,
+    parseFloat((await getSetting('commission_percent')) || '10') || 10
+  );
+  const insurancePercent = Math.max(
+    0,
+    parseFloat((await getSetting('commission_insurance_percent')) || '3') || 3
+  );
+  const platformPercent = Math.max(
+    0,
+    parseFloat((await getSetting('commission_platform_percent')) || '7') || 7
+  );
+  return { totalPercent, insurancePercent, platformPercent };
+}
+
+async function refreshRiderSettlementStatus(riderId?: string) {
+  if (riderId) {
+    await pool.query(
+      `UPDATE rider_daily_settlements SET
+        status = CASE
+          WHEN amount_paid >= commission_total - 0.01 THEN 'paid'
+          WHEN due_at < NOW() THEN 'overdue'
+          ELSE 'open'
+        END,
+        updated_at = CURRENT_TIMESTAMP
+       WHERE rider_id = $1 AND status != 'paid'`,
+      [riderId]
+    );
+    return;
+  }
+  await pool.query(
+    `UPDATE rider_daily_settlements SET
+      status = CASE
+        WHEN amount_paid >= commission_total - 0.01 THEN 'paid'
+        WHEN due_at < NOW() THEN 'overdue'
+        ELSE 'open'
+      END,
+      updated_at = CURRENT_TIMESTAMP
+     WHERE status != 'paid'`
+  );
+}
+
+async function riderHasOverdueCommission(riderId: string): Promise<boolean> {
+  await refreshRiderSettlementStatus(riderId);
+  const r = await pool.query(
+    `SELECT 1 FROM rider_daily_settlements
+     WHERE rider_id = $1
+       AND commission_total > amount_paid + 0.01
+       AND due_at < NOW()
+     LIMIT 1`,
+    [riderId]
+  );
+  return r.rows.length > 0;
+}
+
+async function recordTripCommission(order: any) {
+  if (!order?.rider_id) return;
+  const settings = await getCommissionSettings();
+  const total = parseFloat(order.total);
+  if (!Number.isFinite(total) || total <= 0) return;
+
+  const commissionTotal = moneyRound((total * settings.totalPercent) / 100);
+  const insuranceAmount = moneyRound((total * settings.insurancePercent) / 100);
+  const platformAmount = moneyRound((total * settings.platformPercent) / 100);
+  const settlementDate = ghanaDateOnly();
+  const dueAt = commissionDueAt(settlementDate);
+  const isCod = order.payment_status !== 'paid';
+
+  await pool.query(
+    `INSERT INTO order_commissions (
+      order_id, rider_id, order_total, commission_total, insurance_amount, platform_amount, settlement_date
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+    ON CONFLICT (order_id) DO NOTHING`,
+    [
+      order.id,
+      order.rider_id,
+      total,
+      commissionTotal,
+      insuranceAmount,
+      platformAmount,
+      settlementDate,
+    ]
+  );
+
+  if (insuranceAmount > 0) {
+    await pool.query(
+      `INSERT INTO wallet_transactions (user_id, amount, type, reference) VALUES ($1, $2, $3, $4)`,
+      [
+        null,
+        insuranceAmount,
+        'commission',
+        `Insurance pool · Order #${order.id.slice(0, 8)} (${settings.insurancePercent}%)`,
+      ]
+    );
+  }
+  if (platformAmount > 0) {
+    await pool.query(
+      `INSERT INTO wallet_transactions (user_id, amount, type, reference) VALUES ($1, $2, $3, $4)`,
+      [
+        null,
+        platformAmount,
+        'commission',
+        `BytzGo · Order #${order.id.slice(0, 8)} (${settings.platformPercent}%)`,
+      ]
+    );
+  }
+
+  if (isCod && commissionTotal > 0) {
+    await pool.query(
+      `INSERT INTO rider_daily_settlements (
+        rider_id, settlement_date, commission_total, insurance_total, platform_total, due_at, status
+      ) VALUES ($1, $2, $3, $4, $5, $6, 'open')
+      ON CONFLICT (rider_id, settlement_date) DO UPDATE SET
+        commission_total = rider_daily_settlements.commission_total + EXCLUDED.commission_total,
+        insurance_total = rider_daily_settlements.insurance_total + EXCLUDED.insurance_total,
+        platform_total = rider_daily_settlements.platform_total + EXCLUDED.platform_total,
+        due_at = EXCLUDED.due_at,
+        updated_at = CURRENT_TIMESTAMP`,
+      [
+        order.rider_id,
+        settlementDate,
+        commissionTotal,
+        insuranceAmount,
+        platformAmount,
+        dueAt,
+      ]
+    );
+  }
+}
+
 /** One active zone per region — removes duplicate rows that break pricing. */
 async function reconcileDeliveryZones() {
   try {
@@ -900,6 +1048,37 @@ const initDb = async () => {
         ON wallet_transactions (reference)
         WHERE type = 'topup' AND reference IS NOT NULL;
 
+      CREATE TABLE IF NOT EXISTS order_commissions (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        order_id UUID NOT NULL UNIQUE REFERENCES orders(id) ON DELETE CASCADE,
+        rider_id UUID NOT NULL REFERENCES users(id),
+        order_total DECIMAL(10,2) NOT NULL,
+        commission_total DECIMAL(10,2) NOT NULL,
+        insurance_amount DECIMAL(10,2) NOT NULL,
+        platform_amount DECIMAL(10,2) NOT NULL,
+        settlement_date DATE NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS rider_daily_settlements (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        rider_id UUID NOT NULL REFERENCES users(id),
+        settlement_date DATE NOT NULL,
+        commission_total DECIMAL(10,2) NOT NULL DEFAULT 0,
+        insurance_total DECIMAL(10,2) NOT NULL DEFAULT 0,
+        platform_total DECIMAL(10,2) NOT NULL DEFAULT 0,
+        amount_paid DECIMAL(10,2) NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'open',
+        due_at TIMESTAMP WITH TIME ZONE NOT NULL,
+        paid_at TIMESTAMP WITH TIME ZONE,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(rider_id, settlement_date)
+      );
+
+      CREATE INDEX IF NOT EXISTS rider_daily_settlements_rider_due_idx
+        ON rider_daily_settlements (rider_id, due_at);
+
       CREATE TABLE IF NOT EXISTS system_settings (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL,
@@ -1034,6 +1213,12 @@ const initDb = async () => {
       INSERT INTO system_settings (key, value) VALUES ('delivery_min_fee', '')
       ON CONFLICT (key) DO NOTHING;
       INSERT INTO system_settings (key, value) VALUES ('delivery_max_fee', '')
+      ON CONFLICT (key) DO NOTHING;
+      INSERT INTO system_settings (key, value) VALUES ('commission_percent', '10')
+      ON CONFLICT (key) DO NOTHING;
+      INSERT INTO system_settings (key, value) VALUES ('commission_insurance_percent', '3')
+      ON CONFLICT (key) DO NOTHING;
+      INSERT INTO system_settings (key, value) VALUES ('commission_platform_percent', '7')
       ON CONFLICT (key) DO NOTHING;
       INSERT INTO system_settings (key, value) VALUES ('surge_enabled', 'false')
       ON CONFLICT (key) DO NOTHING;
@@ -1431,10 +1616,12 @@ async function broadcastOrderUpdated(order: any) {
 async function settleOrderPayment(order: any) {
   const total = parseFloat(order.total);
   const isPaidOnline = order.payment_status === 'paid';
+  const settings = await getCommissionSettings();
+  const vendorSharePct = 0.8;
 
   if (isPaidOnline) {
     if (order.vendor_id) {
-      const vendorAmount = total * 0.8;
+      const vendorAmount = moneyRound(total * vendorSharePct);
       const vRes = await pool.query(
         'UPDATE users SET balance = balance + $1 WHERE id = $2 RETURNING balance',
         [vendorAmount, order.vendor_id]
@@ -1447,7 +1634,9 @@ async function settleOrderPayment(order: any) {
     }
     if (order.rider_id) {
       const riderAmount =
-        order.delivery_fee && Number(order.delivery_fee) > 0 ? Number(order.delivery_fee) : total * 0.1;
+        order.delivery_fee && Number(order.delivery_fee) > 0
+          ? Number(order.delivery_fee)
+          : moneyRound((total * settings.totalPercent) / 100);
       const rRes = await pool.query(
         'UPDATE users SET balance = balance + $1 WHERE id = $2 RETURNING balance',
         [riderAmount, order.rider_id]
@@ -1458,23 +1647,22 @@ async function settleOrderPayment(order: any) {
       );
       io.to(order.rider_id).emit('wallet:updated', { balance: parseFloat(rRes.rows[0].balance) });
     }
-    const commissionAmount = total * 0.1;
-    await pool.query(
-      'INSERT INTO wallet_transactions (user_id, amount, type, reference) VALUES ($1, $2, $3, $4)',
-      [null, commissionAmount, 'commission', `Order #${order.id.slice(0, 8)} platform fee`]
-    );
+    await recordTripCommission(order);
   } else if (order.rider_id) {
-    const platformFee = total * 0.1;
-    const vendorShare = total * 0.8;
-    const totalToDeduct = platformFee + vendorShare;
+    const vendorShare = moneyRound(total * vendorSharePct);
 
     const rRes = await pool.query(
       'UPDATE users SET balance = balance - $1 WHERE id = $2 RETURNING balance',
-      [totalToDeduct, order.rider_id]
+      [vendorShare, order.rider_id]
     );
     await pool.query(
       'INSERT INTO wallet_transactions (user_id, amount, type, reference) VALUES ($1, $2, $3, $4)',
-      [order.rider_id, -totalToDeduct, 'payment', `COD Order #${order.id.slice(0, 8)} (Vendor + Platform share)`]
+      [
+        order.rider_id,
+        -vendorShare,
+        'payment',
+        `COD Order #${order.id.slice(0, 8)} vendor share (pay vendor)`,
+      ]
     );
     io.to(order.rider_id).emit('wallet:updated', { balance: parseFloat(rRes.rows[0].balance) });
 
@@ -1490,10 +1678,7 @@ async function settleOrderPayment(order: any) {
       io.to(order.vendor_id).emit('wallet:updated', { balance: parseFloat(vRes.rows[0].balance) });
     }
 
-    await pool.query(
-      'INSERT INTO wallet_transactions (user_id, amount, type, reference) VALUES ($1, $2, $3, $4)',
-      [null, platformFee, 'commission', `COD Order #${order.id.slice(0, 8)} platform fee`]
-    );
+    await recordTripCommission(order);
   }
 }
 
@@ -2920,6 +3105,13 @@ app.patch('/api/auth/status', authenticateToken, async (req: any, res) => {
       if (isOnline && !hasDocs) {
         return res.status(403).json({ message: 'Upload your licence, Ghana card, and photo before going online.' });
       }
+      if (isOnline && (await riderHasOverdueCommission(req.user.id))) {
+        const settings = await getCommissionSettings();
+        return res.status(403).json({
+          message: `Pay yesterday's ${settings.totalPercent}% trip commission (due by 8:00 AM Ghana time) before going online.`,
+          code: 'COMMISSION_OVERDUE',
+        });
+      }
       const result = await pool.query(
         `UPDATE users SET is_online = $1 WHERE id = $2 RETURNING ${USER_PUBLIC_FIELDS}`,
         [isOnline, req.user.id]
@@ -3577,6 +3769,15 @@ app.get('/api/maps/reverse-geocode', authenticateToken, async (req: any, res) =>
     console.error('Maps reverse geocode error:', err);
     res.status(500).json({ message: 'Reverse geocode failed' });
   }
+});
+
+/** Public Maps SDK key for mobile/web clients (restrict by app bundle in Google Cloud). */
+app.get('/api/config/maps', async (_req, res) => {
+  const apiKey = mapsApiKey();
+  if (!apiKey || apiKey.length < 20) {
+    return res.json({ apiKey: '', configured: false });
+  }
+  res.json({ apiKey, configured: true, keyHint: `…${apiKey.slice(-6)}` });
 });
 
 app.get('/api/config/maps-health', async (_req, res) => {
@@ -4364,6 +4565,248 @@ app.get('/api/admin/overview', authenticateToken, async (req: any, res) => {
   } catch (err) {
     console.error('[admin/overview]', err);
     res.status(500).json({ message: 'Failed to load admin overview' });
+  }
+});
+
+/** Rider — commission owed (COD trips) and 8am deadline. */
+app.get('/api/rider/commission/summary', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'rider') return res.sendStatus(403);
+  try {
+    await refreshRiderSettlementStatus(req.user.id);
+    const settings = await getCommissionSettings();
+    const rows = await pool.query(
+      `SELECT * FROM rider_daily_settlements
+       WHERE rider_id = $1 AND commission_total > amount_paid + 0.01
+       ORDER BY settlement_date ASC`,
+      [req.user.id]
+    );
+    const settlements = rows.rows.map((s: any) => {
+      const owed = moneyRound(parseFloat(s.commission_total) - parseFloat(s.amount_paid));
+      return {
+        id: s.id,
+        settlement_date: s.settlement_date,
+        commission_total: parseFloat(s.commission_total),
+        insurance_total: parseFloat(s.insurance_total),
+        platform_total: parseFloat(s.platform_total),
+        amount_paid: parseFloat(s.amount_paid),
+        amount_owed: owed,
+        status: s.status,
+        due_at: s.due_at,
+        paid_at: s.paid_at,
+        is_overdue: new Date(s.due_at).getTime() < Date.now() && owed > 0,
+      };
+    });
+    const totalOwed = moneyRound(
+      settlements.reduce((sum: number, s: any) => sum + s.amount_owed, 0)
+    );
+    const overdue = settlements.some((s: any) => s.is_overdue);
+    res.json({
+      commission_percent: settings.totalPercent,
+      insurance_percent: settings.insurancePercent,
+      platform_percent: settings.platformPercent,
+      total_owed: totalOwed,
+      has_overdue: overdue,
+      can_go_online: !overdue,
+      settlements,
+      policy:
+        `BytzGo takes ${settings.totalPercent}% per trip (${settings.insurancePercent}% driver insurance, ${settings.platformPercent}% platform). ` +
+        'Cash trips: pay commission from your wallet by 8:00 AM Ghana time the next day.',
+    });
+  } catch (err) {
+    console.error('[rider/commission/summary]', err);
+    res.status(500).json({ message: 'Failed to load commission summary' });
+  }
+});
+
+app.post('/api/rider/commission/pay', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'rider') return res.sendStatus(403);
+  const { settlement_id } = req.body || {};
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await refreshRiderSettlementStatus(req.user.id);
+    let settlements: any[];
+    if (settlement_id) {
+      const r = await client.query(
+        `SELECT * FROM rider_daily_settlements
+         WHERE id = $1 AND rider_id = $2 FOR UPDATE`,
+        [settlement_id, req.user.id]
+      );
+      settlements = r.rows;
+    } else {
+      const r = await client.query(
+        `SELECT * FROM rider_daily_settlements
+         WHERE rider_id = $1 AND commission_total > amount_paid + 0.01
+         ORDER BY settlement_date ASC FOR UPDATE`,
+        [req.user.id]
+      );
+      settlements = r.rows;
+    }
+    if (settlements.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ message: 'No commission balance to pay' });
+    }
+    let totalDue = 0;
+    for (const s of settlements) {
+      totalDue += parseFloat(s.commission_total) - parseFloat(s.amount_paid);
+    }
+    totalDue = moneyRound(totalDue);
+    const balRes = await client.query('SELECT balance FROM users WHERE id = $1 FOR UPDATE', [
+      req.user.id,
+    ]);
+    const balance = parseFloat(balRes.rows[0]?.balance ?? 0);
+    if (balance < totalDue - 0.01) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        message: `Insufficient wallet balance. Need ₵${totalDue.toFixed(2)}, have ₵${balance.toFixed(2)}.`,
+      });
+    }
+    await client.query('UPDATE users SET balance = balance - $1 WHERE id = $2', [
+      totalDue,
+      req.user.id,
+    ]);
+    await client.query(
+      `INSERT INTO wallet_transactions (user_id, amount, type, reference) VALUES ($1, $2, $3, $4)`,
+      [
+        req.user.id,
+        -totalDue,
+        'payment',
+        `Trip commission settlement (${settlements.length} day(s))`,
+      ]
+    );
+    const now = new Date();
+    for (const s of settlements) {
+      const owed = moneyRound(parseFloat(s.commission_total) - parseFloat(s.amount_paid));
+      await client.query(
+        `UPDATE rider_daily_settlements SET
+          amount_paid = commission_total,
+          status = 'paid',
+          paid_at = $2,
+          updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1`,
+        [s.id, now]
+      );
+    }
+    await client.query('COMMIT');
+    const newBal = await pool.query('SELECT balance FROM users WHERE id = $1', [req.user.id]);
+    io.to(req.user.id).emit('wallet:updated', { balance: parseFloat(newBal.rows[0].balance) });
+    res.json({
+      success: true,
+      paid: totalDue,
+      balance: parseFloat(newBal.rows[0].balance),
+    });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('[rider/commission/pay]', err);
+    res.status(500).json({ message: 'Commission payment failed' });
+  } finally {
+    client.release();
+  }
+});
+
+/** Admin — full driver profile for map tap / fleet management. */
+app.get('/api/admin/riders/:id/profile', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'admin') return res.sendStatus(403);
+  const { id } = req.params;
+  try {
+    const userRes = await pool.query(
+      `SELECT u.id, u.name, u.email, u.phone, u.region, u.status, u.is_online, u.balance,
+              u.lat, u.lng, u.address, u.avatar_url, u.created_at,
+              rl.lat AS live_lat, rl.lng AS live_lng, rl.updated_at AS location_updated_at
+       FROM users u
+       LEFT JOIN rider_locations rl ON rl.rider_id = u.id
+       WHERE u.id = $1 AND u.role = 'rider'`,
+      [id]
+    );
+    const user = userRes.rows[0];
+    if (!user) return res.status(404).json({ message: 'Driver not found' });
+
+    const docsRes = await pool.query(
+      `SELECT doc_type, review_status, rejection_reason, created_at, updated_at
+       FROM rider_documents WHERE user_id = $1 ORDER BY doc_type`,
+      [id]
+    );
+
+    const statsRes = await pool.query(
+      `SELECT
+        COUNT(*) FILTER (WHERE status = 'delivered')::int AS trips_delivered,
+        COUNT(*) FILTER (WHERE status NOT IN ('delivered', 'cancelled'))::int AS trips_active,
+        COALESCE(AVG(rating) FILTER (WHERE rating IS NOT NULL), 0)::float AS avg_rating,
+        COUNT(*) FILTER (WHERE rating IS NOT NULL)::int AS rating_count,
+        COALESCE(SUM(delivery_fee) FILTER (WHERE status = 'delivered'), 0)::float AS delivery_earnings,
+        COALESCE(SUM(total) FILTER (WHERE status = 'delivered'), 0)::float AS order_value_delivered
+       FROM orders WHERE rider_id = $1`,
+      [id]
+    );
+
+    const commissionRes = await pool.query(
+      `SELECT
+        COALESCE(SUM(commission_total), 0)::float AS commission_accrued,
+        COALESCE(SUM(insurance_amount), 0)::float AS insurance_accrued,
+        COALESCE(SUM(platform_amount), 0)::float AS platform_accrued
+       FROM order_commissions WHERE rider_id = $1`,
+      [id]
+    );
+
+    await refreshRiderSettlementStatus(id);
+    const settlementsRes = await pool.query(
+      `SELECT * FROM rider_daily_settlements WHERE rider_id = $1 ORDER BY settlement_date DESC LIMIT 14`,
+      [id]
+    );
+
+    const recentTripsRes = await pool.query(
+      `SELECT id, status, total, delivery_fee, payment_status, rating, created_at, address, pickup_address
+       FROM orders WHERE rider_id = $1 ORDER BY created_at DESC LIMIT 15`,
+      [id]
+    );
+
+    const settings = await getCommissionSettings();
+    const settlements = settlementsRes.rows.map((s: any) => ({
+      id: s.id,
+      settlement_date: s.settlement_date,
+      commission_total: parseFloat(s.commission_total),
+      insurance_total: parseFloat(s.insurance_total),
+      platform_total: parseFloat(s.platform_total),
+      amount_paid: parseFloat(s.amount_paid),
+      amount_owed: moneyRound(parseFloat(s.commission_total) - parseFloat(s.amount_paid)),
+      status: s.status,
+      due_at: s.due_at,
+      paid_at: s.paid_at,
+    }));
+
+    res.json({
+      driver: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        phone: user.phone,
+        region: user.region,
+        status: user.status,
+        is_online: user.is_online === true,
+        balance: parseFloat(user.balance),
+        address: user.address,
+        avatar_url: user.avatar_url,
+        created_at: user.created_at,
+        profile_lat: user.lat != null ? parseFloat(user.lat) : null,
+        profile_lng: user.lng != null ? parseFloat(user.lng) : null,
+        live_lat: user.live_lat != null ? parseFloat(user.live_lat) : null,
+        live_lng: user.live_lng != null ? parseFloat(user.live_lng) : null,
+        location_updated_at: user.location_updated_at,
+        has_live_location:
+          user.live_lat != null &&
+          user.live_lng != null &&
+          Math.abs(parseFloat(user.live_lat)) > 0.001,
+      },
+      stats: statsRes.rows[0],
+      commission_policy: settings,
+      commission_totals: commissionRes.rows[0],
+      settlements,
+      documents: docsRes.rows,
+      recent_trips: recentTripsRes.rows,
+    });
+  } catch (err) {
+    console.error('[admin/riders/profile]', err);
+    res.status(500).json({ message: 'Failed to load driver profile' });
   }
 });
 
@@ -5674,6 +6117,9 @@ app.get('/api/admin/settings', authenticateToken, async (req: any, res) => {
       paystack_secret_key: maskSecret(sec || process.env.PAYSTACK_SECRET_KEY || ''),
       paystack_secret_configured: !!(sec || process.env.PAYSTACK_SECRET_KEY),
       platform_fee_percent: fee || '10',
+      commission_percent: (await getSetting('commission_percent')) || '10',
+      commission_insurance_percent: (await getSetting('commission_insurance_percent')) || '3',
+      commission_platform_percent: (await getSetting('commission_platform_percent')) || '7',
       delivery_price_per_km: pricePerKm || '4',
       delivery_min_fee: minFee ?? '',
       delivery_max_fee: maxFee ?? '',
@@ -5700,6 +6146,9 @@ app.patch('/api/admin/settings', authenticateToken, async (req: any, res) => {
     paystack_public_key,
     paystack_secret_key,
     platform_fee_percent,
+    commission_percent,
+    commission_insurance_percent,
+    commission_platform_percent,
     delivery_price_per_km,
     delivery_min_fee,
     delivery_max_fee,
@@ -5740,6 +6189,18 @@ app.patch('/api/admin/settings', authenticateToken, async (req: any, res) => {
          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
         [String(platform_fee_percent)]
       );
+    }
+    if (commission_percent != null) {
+      const pct = Math.max(0, Math.min(100, parseFloat(String(commission_percent)) || 10));
+      await setSetting('commission_percent', String(pct));
+    }
+    if (commission_insurance_percent != null) {
+      const pct = Math.max(0, Math.min(100, parseFloat(String(commission_insurance_percent)) || 3));
+      await setSetting('commission_insurance_percent', String(pct));
+    }
+    if (commission_platform_percent != null) {
+      const pct = Math.max(0, Math.min(100, parseFloat(String(commission_platform_percent)) || 7));
+      await setSetting('commission_platform_percent', String(pct));
     }
     if (delivery_price_per_km != null) {
       const rate = Math.max(0.01, parseFloat(String(delivery_price_per_km)) || 4);

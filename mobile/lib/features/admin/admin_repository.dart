@@ -43,6 +43,13 @@ class AdminRepository {
     );
   }
 
+  Future<Map<String, dynamic>> fetchRiderProfile(String riderId) async {
+    final res = await _api.dio.get<Map<String, dynamic>>(
+      '/api/admin/riders/$riderId/profile',
+    );
+    return Map<String, dynamic>.from(res.data ?? {});
+  }
+
   Future<AdminPricingSettings> fetchPricingSettings() async {
     final res = await _api.dio.get<Map<String, dynamic>>('/api/admin/settings');
     return AdminPricingSettings.fromJson(
