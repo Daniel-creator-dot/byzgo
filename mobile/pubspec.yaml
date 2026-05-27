@@ -1,7 +1,7 @@
 name: bytzgo_mobile
 description: BytzGo — cross-platform delivery app (iOS & Android).
 publish_to: "none"
-version: 1.0.16+18
+version: 1.0.17+19
 
 environment:
   sdk: ^3.5.0
