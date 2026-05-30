@@ -73,10 +73,15 @@ class RideGoogleMap extends StatefulWidget {
 
 enum MapPickMode { pickup, destination }
 
-class RideGoogleMapState extends State<RideGoogleMap>
-    with SingleTickerProviderStateMixin {
+class RideGoogleMapState extends State<RideGoogleMap> {
   GoogleMapController? _controller;
-  late final AnimationController _radarCtrl;
+  // Pulse/radar phase (0..1). Advanced by a throttled timer (~10fps) instead of
+  // a 60fps ticker so we don't flood the native map with circle/marker updates
+  // every frame (that caused severe rider-side lag when Pulse Guide was active).
+  Timer? _radarTimer;
+  double _radarT = 0.0;
+  static const int _radarTickMs = 100;
+  static const double _radarStep = _radarTickMs / 2200;
   DateTime? _lastBoundsFit;
   DateTime? _lastFollow;
   static const _accra = LatLng(ghanaCenterLat, ghanaCenterLng);
@@ -84,21 +89,35 @@ class RideGoogleMapState extends State<RideGoogleMap>
   @override
   void initState() {
     super.initState();
-    _radarCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 2200),
+    if (_radarActive(widget)) _startRadar();
+  }
+
+  bool _radarActive(RideGoogleMap w) =>
+      w.showSearchRadar ||
+      w.showRiderApproachRadar ||
+      w.showDriverIdleRadar ||
+      w.showPulseGuide;
+
+  void _startRadar() {
+    if (_radarTimer != null) return;
+    _radarTimer = Timer.periodic(
+      const Duration(milliseconds: _radarTickMs),
+      (_) {
+        if (!mounted) return;
+        setState(() => _radarT = (_radarT + _radarStep) % 1.0);
+      },
     );
-    if (widget.showSearchRadar ||
-        widget.showRiderApproachRadar ||
-        widget.showDriverIdleRadar ||
-        widget.showPulseGuide) {
-      _radarCtrl.repeat();
-    }
+  }
+
+  void _stopRadar() {
+    _radarTimer?.cancel();
+    _radarTimer = null;
+    _radarT = 0.0;
   }
 
   @override
   void dispose() {
-    _radarCtrl.dispose();
+    _radarTimer?.cancel();
     super.dispose();
   }
 
@@ -141,32 +160,27 @@ class RideGoogleMapState extends State<RideGoogleMap>
     }
 
     final target = _cameraTarget();
+    final layers = _buildLayers(_radarT);
 
     return Stack(
       fit: StackFit.expand,
       children: [
-        AnimatedBuilder(
-          animation: _radarCtrl,
-          builder: (context, _) {
-            final layers = _buildLayers(_radarCtrl.value);
-            return GoogleMap(
-              initialCameraPosition: CameraPosition(target: target, zoom: 13.5),
-              onMapCreated: (c) {
-                _controller = c;
-                _fitBounds();
-              },
-              markers: layers.markers,
-              polylines: layers.polylines,
-              circles: layers.circles,
-              myLocationEnabled: true,
-              myLocationButtonEnabled: false,
-              zoomControlsEnabled: false,
-              mapToolbarEnabled: false,
-              onTap: widget.onMapTap == null
-                  ? null
-                  : (pos) => widget.onMapTap!(pos.latitude, pos.longitude),
-            );
+        GoogleMap(
+          initialCameraPosition: CameraPosition(target: target, zoom: 13.5),
+          onMapCreated: (c) {
+            _controller = c;
+            _fitBounds();
           },
+          markers: layers.markers,
+          polylines: layers.polylines,
+          circles: layers.circles,
+          myLocationEnabled: true,
+          myLocationButtonEnabled: false,
+          zoomControlsEnabled: false,
+          mapToolbarEnabled: false,
+          onTap: widget.onMapTap == null
+              ? null
+              : (pos) => widget.onMapTap!(pos.latitude, pos.longitude),
         ),
         if (!Env.hasGoogleMaps)
           Positioned(
@@ -567,10 +581,9 @@ class RideGoogleMapState extends State<RideGoogleMap>
         oldWidget.showPulseGuide;
     if (needsRadar != neededRadar) {
       if (needsRadar) {
-        if (!_radarCtrl.isAnimating) _radarCtrl.repeat();
+        _startRadar();
       } else {
-        _radarCtrl.stop();
-        _radarCtrl.reset();
+        _stopRadar();
       }
     }
     if (widget.followRider &&
