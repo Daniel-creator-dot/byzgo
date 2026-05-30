@@ -407,14 +407,14 @@ export function RiderApp({
       const authorizationUrl: string = init.data?.authorization_url;
       const reference: string = init.data?.reference;
       if (!authorizationUrl || !reference) {
-        throw new Error('Paystack checkout could not be started');
+        throw new Error('Payment checkout could not be started');
       }
       const popup = window.open(authorizationUrl, 'paystack_commission', 'width=480,height=720');
       if (!popup) {
         window.location.href = authorizationUrl;
         return;
       }
-      addNotification?.('Opening Paystack…', 'info');
+      addNotification?.('Opening payment…', 'info');
       await new Promise<void>((resolve) => {
         const timer = setInterval(() => {
           if (popup.closed) {
@@ -431,14 +431,14 @@ export function RiderApp({
       await loadCommission();
       await refreshData?.();
       addNotification?.(
-        verify.data?.alreadyProcessed ? 'Commission already settled' : 'Commission paid via Paystack',
+        verify.data?.alreadyProcessed ? 'Commission already settled' : 'Commission paid',
         'success'
       );
     } catch (err) {
       const status = (err as { response?: { status?: number } })?.response?.status;
       const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
       if (status === 503) {
-        addNotification?.('Paystack is not configured. Ask admin to add keys in Settings.', 'warning');
+        addNotification?.('Mobile Money / card payments are not available. Contact support.', 'warning');
       } else {
         addNotification?.(msg || 'Payment could not be completed', 'warning');
       }
@@ -1053,8 +1053,8 @@ export function RiderApp({
                         className="w-full py-3.5 bg-brand-green text-slate-950 rounded-2xl font-black uppercase tracking-widest text-[11px] disabled:opacity-50"
                       >
                         {commissionPaystackPaying
-                          ? 'Opening Paystack…'
-                          : `Pay ₵${commission.total_owed.toFixed(2)} with Paystack (MoMo / Card)`}
+                          ? 'Opening payment…'
+                          : `Pay ₵${commission.total_owed.toFixed(2)} with Mobile Money or Card`}
                       </button>
                       {commission.can_pay_from_wallet ? (
                         <button
@@ -1067,8 +1067,7 @@ export function RiderApp({
                         </button>
                       ) : (
                         <p className="text-[11px] text-slate-500 leading-relaxed">
-                          Wallet balance ₵{commission.wallet_balance.toFixed(2)} — not enough to cover commission. Use
-                          Paystack above.
+                          Wallet balance ₵{commission.wallet_balance.toFixed(2)} — not enough to cover commission. Pay with Mobile Money or card above.
                         </p>
                       )}
                     </div>

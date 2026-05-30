@@ -692,7 +692,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
       final publicKey = await context.read<ConfigRepository>().fetchPaystackPublicKey();
       if (publicKey.isEmpty || !publicKey.startsWith('pk_')) {
         throw Exception(
-          'Paystack is not configured. Ask admin to add keys in Admin → Settings.',
+          'Mobile Money and card payments are not available. Contact support.',
         );
       }
       final session = await _commissionRepo.initializePaystack();
@@ -712,7 +712,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
       await _loadCommission();
       unawaited(_loadWalletTransactions(silent: true));
       if (!mounted) return;
-      _snack('Commission paid via Paystack', success: true);
+      _snack('Commission paid', success: true);
     } catch (e) {
       _snack(RiderCommissionRepository.errorMessage(e));
     } finally {
@@ -734,7 +734,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
       final publicKey = await context.read<ConfigRepository>().fetchPaystackPublicKey();
       if (publicKey.isEmpty || !publicKey.startsWith('pk_')) {
         throw Exception(
-          'Paystack is not configured. Ask admin to add keys in Admin → Settings.',
+          'Mobile Money and card payments are not available. Contact support.',
         );
       }
       final session = await _wallet.initializeTopup(amount);
@@ -2297,8 +2297,8 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
                   const SizedBox(height: 12),
                   RidePrimaryButton(
                     label: _commissionPaystackPaying
-                        ? 'Opening Paystack…'
-                        : 'Pay ${formatCedis(comm.totalOwed)} with Paystack (MoMo / Card)',
+                        ? 'Opening payment…'
+                        : 'Pay ${formatCedis(comm.totalOwed)} with Mobile Money or Card',
                     onPressed: _commissionPaystackPaying || _commissionPaying
                         ? null
                         : _payCommissionWithPaystack,
@@ -2313,7 +2313,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
                     )
                   else
                     Text(
-                      'Wallet balance ${formatCedis(comm.walletBalance)} — not enough to cover commission. Use Paystack above.',
+                      'Wallet balance ${formatCedis(comm.walletBalance)} — not enough to cover commission. Pay with Mobile Money or card above.',
                       style: TextStyle(
                         color: Colors.white.withValues(alpha: 0.5),
                         fontSize: 11,
@@ -2361,7 +2361,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
               if (balance < 0) ...[
                 const SizedBox(height: 8),
                 Text(
-                  'Negative balance is usually from older cash trips before ledger fix. New deliveries credit cash collected first. Top up or pay commission with Paystack.',
+                  'Negative balance is usually from older cash trips before ledger fix. New deliveries credit cash collected first. Top up or pay commission with Mobile Money or card.',
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     color: Colors.white.withValues(alpha: 0.55),
@@ -2396,7 +2396,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
         ),
         const SizedBox(height: 8),
         Text(
-          'Add funds with Mobile Money or card via Paystack (separate from paying commission).',
+          'Add funds with Mobile Money (MTN, Telecel, AirtelTigo) or debit card.',
           style: TextStyle(
             color: Colors.white.withValues(alpha: 0.55),
             fontSize: 11,
@@ -2412,7 +2412,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
         ),
         const SizedBox(height: 10),
         RidePrimaryButton(
-          label: _walletTopupLoading ? 'Opening Paystack…' : 'Top up with Paystack',
+          label: _walletTopupLoading ? 'Opening payment…' : 'Top up with Mobile Money or Card',
           onPressed: _walletTopupLoading ? null : _topUpWalletPaystack,
         ),
         const SizedBox(height: 24),

@@ -77,7 +77,7 @@ class _CustomerWalletSheetState extends State<_CustomerWalletSheet> {
           await context.read<ConfigRepository>().fetchPaystackPublicKey();
       if (publicKey.isEmpty || !publicKey.startsWith('pk_')) {
         throw Exception(
-          'Paystack is not configured. Ask admin to add keys in Admin → Settings.',
+          'Mobile Money and card payments are not available. Contact support.',
         );
       }
 
@@ -122,7 +122,7 @@ class _CustomerWalletSheetState extends State<_CustomerWalletSheet> {
     final ref = _referenceCtrl.text.trim();
     if (ref.isEmpty) {
       setState(() {
-        _message = 'Paste your Paystack payment reference';
+        _message = 'Paste your payment reference';
         _success = false;
       });
       return;
@@ -232,7 +232,7 @@ class _CustomerWalletSheetState extends State<_CustomerWalletSheet> {
           const SizedBox(height: 16),
           if (_tab == 0) ...[
             Text(
-              'Top up with Mobile Money (MTN, Telecel, AirtelTigo) or debit card via Paystack.',
+              'Top up with Mobile Money (MTN, Telecel, AirtelTigo) or debit card.',
               style: BytzGoTheme.sheetBody(13),
             ),
             const SizedBox(height: 12),
@@ -282,14 +282,14 @@ class _CustomerWalletSheetState extends State<_CustomerWalletSheet> {
             ),
             if (_showManualRef) ...[
               Text(
-                'Only if you already completed Paystack checkout elsewhere.',
+                'Only if you already completed payment elsewhere.',
                 style: BytzGoTheme.sheetBody(12),
               ),
               const SizedBox(height: 8),
               TextField(
                 controller: _referenceCtrl,
                 decoration: InputDecoration(
-                  labelText: 'Paystack reference',
+                  labelText: 'Payment reference',
                   hintText: 'e.g. T1234567890 or bytzgo_…',
                   filled: true,
                   fillColor: BytzGoTheme.sheetDivider.withValues(alpha: 0.35),

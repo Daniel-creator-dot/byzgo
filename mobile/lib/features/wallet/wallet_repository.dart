@@ -28,12 +28,12 @@ class WalletRepository {
     );
     final data = res.data;
     if (data == null) {
-      throw Exception('Could not start Paystack checkout');
+      throw Exception('Could not start payment');
     }
     final url = data['authorization_url']?.toString().trim() ?? '';
     final reference = data['reference']?.toString().trim() ?? '';
     if (url.isEmpty || reference.isEmpty) {
-      throw Exception('Paystack checkout URL missing from server');
+      throw Exception('Payment checkout URL missing from server');
     }
     final amount = double.tryParse(data['amount']?.toString() ?? '') ?? amountGhs;
     return PaystackCheckoutSession(

@@ -1899,7 +1899,7 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
       }
     }
     if (!currentKey) {
-      addNotification('Payment system is offline. Check Paystack keys in admin settings.', 'warning');
+      addNotification('Payment system is offline. Try again later or contact support.', 'warning');
       return;
     }
 
@@ -1989,7 +1989,7 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
   const creditPendingOrManual = () => {
     const ref = (manualTopupRef || pendingTopupRef).trim();
     if (!ref) {
-      addNotification('Paste your Paystack reference (e.g. T1234567890) or pay again below.', 'warning');
+      addNotification('Paste your payment reference (e.g. T1234567890) or pay again below.', 'warning');
       return;
     }
     const hint = walletTopupReferenceHint(ref);
@@ -2041,13 +2041,13 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
                      (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') &&
                      paystackKey.startsWith('pk_live_') && (
                        <p className="mb-4 p-3 rounded-xl bg-amber-500/15 border border-amber-500/40 text-[11px] text-amber-200 leading-relaxed">
-                         Live Paystack keys often fail on localhost. For local testing, set <strong>pk_test_</strong> keys in Admin → Settings.
+                         Live payment keys often fail on localhost. For local testing, use test keys in Admin → Settings.
                        </p>
                      )}
                    <div className="mb-5 p-4 rounded-2xl bg-slate-800/80 border border-slate-700">
                      <p className="text-[10px] font-black uppercase tracking-widest text-amber-400 mb-2">Already paid?</p>
                      <p className="text-[11px] text-slate-500 mb-2">
-                       Use the <strong className="text-slate-400">Paystack</strong> reference (starts with{' '}
+                       Use your <strong className="text-slate-400">payment reference</strong> (starts with{' '}
                        <span className="font-mono text-slate-400">T</span> or{' '}
                        <span className="font-mono text-slate-400">bytzgo_</span>), not your MTN/Vodafone MoMo ID.
                      </p>

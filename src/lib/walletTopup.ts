@@ -51,10 +51,10 @@ export function walletTopupReferenceHint(ref: string): string | null {
   const t = ref.trim();
   if (!t) return null;
   if (looksLikeMomoNetworkId(t)) {
-    return 'That looks like a MoMo network ID (from your telco SMS), not a Paystack reference. Use the code from the Paystack receipt or email — it usually starts with T or bytzgo_.';
+    return 'That looks like a MoMo network ID (from your telco SMS), not a payment reference. Use the code from your payment receipt — it usually starts with T or bytzgo_.';
   }
   if (!looksLikePaystackReference(t)) {
-    return 'Use the Paystack transaction reference (from the payment success screen, Paystack SMS, or email), not your bank/MoMo approval number.';
+    return 'Use the payment reference from the success screen, SMS, or email — not your bank/MoMo approval number.';
   }
   return null;
 }

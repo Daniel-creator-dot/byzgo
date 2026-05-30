@@ -117,7 +117,7 @@ class RiderCommissionRepository {
     final url = data['authorization_url']?.toString().trim() ?? '';
     final reference = data['reference']?.toString().trim() ?? '';
     if (url.isEmpty || reference.isEmpty) {
-      throw Exception('Paystack checkout URL missing from server');
+      throw Exception('Payment checkout URL missing from server');
     }
     return PaystackCommissionCheckout(
       reference: reference,

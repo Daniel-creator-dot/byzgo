@@ -4660,7 +4660,7 @@ app.get('/api/rider/commission/summary', authenticateToken, async (req: any, res
       settlements,
       policy:
         `BytzGo takes ${settings.totalPercent}% commission per trip. ` +
-        'Cash trips: pay with MoMo/card (Paystack) or from wallet by 8:00 AM Ghana time the next day.',
+        'Cash trips: pay commission with Mobile Money or card, or from wallet, by 8:00 AM Ghana time the next day.',
     });
   } catch (err) {
     console.error('[rider/commission/summary]', err);
@@ -4730,14 +4730,14 @@ async function applyRiderCommissionSettlement(
     }
     await client.query(
       `INSERT INTO wallet_transactions (user_id, amount, type, reference) VALUES ($1, $2, $3, $4)`,
-      [riderId, -totalDue, 'payment', `Paystack commission · ${ref}`]
+      [riderId, -totalDue, 'payment', `MoMo/card commission · ${ref}`]
     );
   } else {
     const balRes = await client.query('SELECT balance FROM users WHERE id = $1 FOR UPDATE', [riderId]);
     const balance = parseFloat(balRes.rows[0]?.balance ?? 0);
     if (balance < totalDue - 0.01) {
       const err = new Error(
-        `Insufficient wallet balance. Need ₵${totalDue.toFixed(2)}, have ₵${balance.toFixed(2)}. Use Paystack to pay commission.`
+        `Insufficient wallet balance. Need ₵${totalDue.toFixed(2)}, have ₵${balance.toFixed(2)}. Pay with Mobile Money or card instead.`
       );
       throw err;
     }
