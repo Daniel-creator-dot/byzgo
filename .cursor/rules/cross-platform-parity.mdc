@@ -1,0 +1,52 @@
+---
+description: Keep BytzGo features in sync across backend, web, and mobile (iOS + Android)
+alwaysApply: true
+---
+
+# Cross-platform parity (BytzGo)
+
+BytzGo has THREE surfaces that do NOT share UI code. A user-facing change is not
+"done" until it is applied to every surface it touches, and all affected builds
+are rebuilt/redeployed.
+
+| Surface | Where | Notes |
+|---------|-------|-------|
+| Backend / API | `backend/server.ts`, `backend/**` | Shared source of truth (data + money logic). Change once. Deployed to Render from GitHub `main`. |
+| Web app | `src/**` (React + TypeScript) | Separate from mobile. |
+| Mobile app | `mobile/lib/**` (Flutter / Dart) | One codebase → builds BOTH iOS and Android. |
+
+## Rules
+
+1. **Mirror UI/logic changes in BOTH `src/` (web) and `mobile/lib/` (Flutter).**
+   The web React app and the Flutter app are independent — a feature added to one
+   must be added to the other unless the user explicitly says one platform only.
+2. **iOS + Android share `mobile/lib/`.** A Dart change is automatically on both.
+   It only "shows on one platform" because of a stale build or per-OS native config.
+3. **Per-OS native config / assets are NOT shared — update both when relevant**
+   (permissions, app icon, identity, deep links, push). Example bug: the branded
+   launcher icon existed for Android (`res/mipmap-*/ic_launcher.png`) but iOS still
+   shipped the Flutter placeholder in `ios/Runner/Assets.xcassets/AppIcon.appiconset`.
+   - iOS: `mobile/ios/Runner/Info.plist`, `Assets.xcassets`, `Runner.xcodeproj`
+   - Android: `mobile/android/app/src/main/AndroidManifest.xml`, `res/`, `build.gradle`
+4. **After changing, rebuild every affected target** (a build that wasn't rebuilt is
+   the #1 reason a change "didn't reach" a platform):
+   - Web/backend: pushed to GitHub `main` → Render auto-deploys
+   - iOS: `flutter build ipa` (bump `pubspec.yaml` build number) → upload to App Store
+   - Android: `flutter build appbundle` → upload to Play
+
+## Parity map (known web ↔ mobile pairs)
+
+| Concern | Web | Mobile (Flutter) |
+|---------|-----|------------------|
+| Rider console | `src/components/rider/RiderApp.tsx` | `mobile/lib/features/rider/rider_shell.dart` |
+| Customer app | `src/components/customer/**`, `src/App.tsx` | `mobile/lib/features/customer/**` |
+| Paystack checkout | `src/lib/paystackCheckout.ts` | `mobile/lib/features/wallet/paystack_*.dart` |
+| Wallet / payments | `src/lib/walletTopup.ts` | `mobile/lib/features/wallet/wallet_repository.dart` |
+
+## Done-checklist for any feature/fix
+
+- [ ] Backend updated (if data/logic) — `backend/server.ts`
+- [ ] Web updated — `src/**`
+- [ ] Mobile updated — `mobile/lib/**` (covers iOS + Android)
+- [ ] Per-OS native config/assets updated on BOTH iOS and Android if relevant
+- [ ] All affected targets rebuilt (Render push, iOS build, Android build)
