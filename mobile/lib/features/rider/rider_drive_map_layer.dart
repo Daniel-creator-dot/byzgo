@@ -22,6 +22,7 @@ class RiderDriveMapLayer extends StatefulWidget {
     this.showRoute = false,
     this.routePoints = const [],
     this.followRider = false,
+    this.mapPadding = EdgeInsets.zero,
   });
 
   final ValueNotifier<LocationPoint?> riderPosition;
@@ -34,6 +35,7 @@ class RiderDriveMapLayer extends StatefulWidget {
   final bool showRoute;
   final List<LocationPoint> routePoints;
   final bool followRider;
+  final EdgeInsets mapPadding;
 
   @override
   State<RiderDriveMapLayer> createState() => RiderDriveMapLayerState();
@@ -158,6 +160,7 @@ class RiderDriveMapLayerState extends State<RiderDriveMapLayer> {
           followRider: widget.followRider,
           pulseGuide: pulseGuide,
           showPulseGuide: pulseGuide != null,
+          padding: widget.mapPadding,
         );
       },
     );

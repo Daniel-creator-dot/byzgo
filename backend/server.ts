@@ -3742,6 +3742,19 @@ app.get('/api/maps/place-details', authenticateToken, async (req: any, res) => {
   }
 });
 
+/** Strip Google's HTML instruction markup ("<b>Turn left</b>") to plain text. */
+function stripHtmlTags(html: string): string {
+  return html
+    .replace(/<\/?div[^>]*>/gi, ' ')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function decodeGooglePolyline(encoded: string): { lat: number; lng: number }[] {
   const points: { lat: number; lng: number }[] = [];
   let index = 0;
@@ -3801,12 +3814,25 @@ app.get('/api/maps/directions', authenticateToken, async (req: any, res) => {
     const encoded = data.routes[0].overview_polyline?.points ?? '';
     const points = encoded ? decodeGooglePolyline(encoded) : [];
     const etaMinutes = Math.max(1, Math.round(durationSec / 60));
+    // Turn-by-turn maneuvers for in-app navigation ("turn left in 200 m").
+    const rawSteps = Array.isArray(leg?.steps) ? leg.steps : [];
+    const steps = rawSteps.map((s: any) => ({
+      instruction: stripHtmlTags(String(s?.html_instructions ?? '')),
+      maneuver: s?.maneuver ? String(s.maneuver) : '',
+      distance_text: s?.distance?.text ?? '',
+      distance_meters: s?.distance?.value ?? 0,
+      start_lat: typeof s?.start_location?.lat === 'number' ? s.start_location.lat : null,
+      start_lng: typeof s?.start_location?.lng === 'number' ? s.start_location.lng : null,
+      end_lat: typeof s?.end_location?.lat === 'number' ? s.end_location.lat : null,
+      end_lng: typeof s?.end_location?.lng === 'number' ? s.end_location.lng : null,
+    }));
     res.json({
       duration_seconds: durationSec,
       duration_text: durationText,
       distance_text: distanceText,
       eta_minutes: etaMinutes,
       points,
+      steps,
     });
   } catch (err) {
     console.error('Maps directions error:', err);

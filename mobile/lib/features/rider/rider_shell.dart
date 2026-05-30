@@ -96,6 +96,10 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
   List<LocationPoint> _navRoutePoints = [];
   String? _navEtaPhrase;
   String? _navDistanceText;
+  List<RouteStep> _navSteps = [];
+  String? _navTurnInstruction;
+  String? _navTurnDistance;
+  String? _navTurnManeuver;
   OrderMessageHandler? _chatNotifyHandler;
   int? _navEtaMinutes;
   DateTime? _navEtaExpiresAt;
@@ -606,6 +610,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
         _lastGpsUiUpdate = now;
         _myPositionNotifier.value = point;
         if (_primaryActive != null) {
+          if (_navSteps.isNotEmpty) _updateNextTurn(point);
           _driveMapKey.currentState?.fitAllMarkers();
         }
       }
@@ -875,13 +880,19 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
       _lastNavOrigin = null;
       if (_navRoutePoints.isNotEmpty ||
           _navEtaPhrase != null ||
-          _navDistanceText != null) {
+          _navDistanceText != null ||
+          _navSteps.isNotEmpty ||
+          _navTurnInstruction != null) {
         setState(() {
           _navRoutePoints = [];
           _navEtaPhrase = null;
           _navDistanceText = null;
           _navEtaMinutes = null;
           _navEtaExpiresAt = null;
+          _navSteps = [];
+          _navTurnInstruction = null;
+          _navTurnDistance = null;
+          _navTurnManeuver = null;
         });
       }
     }
@@ -931,8 +942,90 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
       _navDistanceText = summary.distanceText;
       _navEtaMinutes = summary.etaMinutes;
       _navEtaExpiresAt = summary.expiresAtFrom(now);
+      _navSteps = summary.steps;
     });
+    _updateNextTurn(pos);
     _driveMapKey.currentState?.fitAllMarkers();
+  }
+
+  /// Pick the upcoming maneuver from the route steps based on the rider's
+  /// current position, so the HUD can show "Turn left · in 200 m".
+  void _updateNextTurn(LocationPoint pos) {
+    final steps = _navSteps;
+    if (steps.isEmpty) {
+      if (_navTurnInstruction != null || _navTurnDistance != null) {
+        setState(() {
+          _navTurnInstruction = null;
+          _navTurnDistance = null;
+        });
+      }
+      return;
+    }
+    var cur = 0;
+    var best = double.infinity;
+    for (var i = 0; i < steps.length; i++) {
+      final d = haversineDistanceKm(
+        pos.lat,
+        pos.lng,
+        steps[i].start.lat,
+        steps[i].start.lng,
+      );
+      if (d < best) {
+        best = d;
+        cur = i;
+      }
+    }
+    final maneuverPoint = steps[cur].end;
+    final meters = haversineDistanceKm(
+          pos.lat,
+          pos.lng,
+          maneuverPoint.lat,
+          maneuverPoint.lng,
+        ) *
+        1000;
+    final instr = cur + 1 < steps.length
+        ? steps[cur + 1].instruction
+        : 'Arrive at destination';
+    final maneuver =
+        cur + 1 < steps.length ? steps[cur + 1].maneuver : 'arrive';
+    final distStr = meters >= 1000
+        ? '${(meters / 1000).toStringAsFixed(1)} km'
+        : '${(meters / 10).round() * 10} m';
+    if (instr != _navTurnInstruction ||
+        distStr != _navTurnDistance ||
+        maneuver != _navTurnManeuver) {
+      setState(() {
+        _navTurnInstruction = instr;
+        _navTurnDistance = distStr;
+        _navTurnManeuver = maneuver;
+      });
+    }
+  }
+
+  IconData _maneuverIcon(String maneuver) {
+    final m = maneuver.toLowerCase();
+    if (m.contains('uturn') || m.contains('u-turn')) {
+      return Icons.u_turn_left;
+    }
+    if (m.contains('roundabout') || m.contains('rotary')) {
+      return Icons.rotate_right;
+    }
+    if (m.contains('merge')) return Icons.merge;
+    if (m.contains('fork')) {
+      return m.contains('left') ? Icons.turn_slight_left : Icons.turn_slight_right;
+    }
+    if (m.contains('ramp')) {
+      return m.contains('left') ? Icons.turn_slight_left : Icons.turn_slight_right;
+    }
+    if (m.contains('slight') && m.contains('left')) return Icons.turn_slight_left;
+    if (m.contains('slight') && m.contains('right')) return Icons.turn_slight_right;
+    if (m.contains('sharp') && m.contains('left')) return Icons.turn_sharp_left;
+    if (m.contains('sharp') && m.contains('right')) return Icons.turn_sharp_right;
+    if (m.contains('left')) return Icons.turn_left;
+    if (m.contains('right')) return Icons.turn_right;
+    if (m.contains('straight') || m.contains('continue')) return Icons.straight;
+    if (m.contains('arrive') || m.contains('destination')) return Icons.place;
+    return Icons.navigation;
   }
 
   Future<void> _startInAppNavigation(Order order) async {
@@ -1297,6 +1390,17 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
     final showRoute = (_incoming != null || _primaryActive != null) &&
         (_mapPickup() != null || _mapDestination() != null);
 
+    // Keep the route + biker framed in the clear band between the top HUDs and
+    // the bottom sheet so nothing covers the navigation.
+    final media = MediaQuery.of(context);
+    final screenH = media.size.height;
+    final hasTopHud = _isOnline;
+    final hasActiveHud = _primaryActive != null && _incoming == null;
+    final topPad = media.padding.top +
+        (hasActiveHud ? 150.0 : (hasTopHud ? 92.0 : 0.0));
+    final bottomPad = screenH * _driveSheetFraction + 16.0;
+    final mapPadding = EdgeInsets.only(top: topPad, bottom: bottomPad);
+
     return Stack(
       fit: StackFit.expand,
       children: [
@@ -1312,6 +1416,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
           showRoute: showRoute,
           routePoints: _navRoutePoints,
           followRider: _primaryActive != null,
+          mapPadding: mapPadding,
         ),
         if (!_isOnline)
           Container(
@@ -1378,6 +1483,65 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
     );
   }
 
+  Widget _turnByTurnBanner() {
+    final instr = _navTurnInstruction;
+    if (instr == null) return const SizedBox.shrink();
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: BytzGoTheme.accent.withValues(alpha: 0.16),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: BytzGoTheme.accent.withValues(alpha: 0.45)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: BytzGoTheme.accent.withValues(alpha: 0.25),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(
+              _maneuverIcon(_navTurnManeuver ?? ''),
+              color: BytzGoTheme.accent,
+              size: 24,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (_navTurnDistance != null)
+                  Text(
+                    'In ${_navTurnDistance!}',
+                    style: const TextStyle(
+                      color: BytzGoTheme.accent,
+                      fontWeight: FontWeight.w900,
+                      fontSize: 13,
+                    ),
+                  ),
+                Text(
+                  instr,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 14,
+                    height: 1.2,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _activeTripHud(Order order) {
     final nav = navigationTarget(order, _vendors);
     final phase = tripPhase(order);
@@ -1394,6 +1558,10 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             mainAxisSize: MainAxisSize.min,
             children: [
+              if (_navTurnInstruction != null) ...[
+                _turnByTurnBanner(),
+                const SizedBox(height: 10),
+              ],
               CustomerTripIdentity(order: order, light: true),
               const SizedBox(height: 8),
               ValueListenableBuilder<LocationPoint?>(

@@ -945,9 +945,23 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
     final navTarget = tracking ? customerRiderNavTarget(active) : null;
     final showRiderOnMap = hasRider && !searching;
 
+    // Keep the rider/route framed in the band above the sheet and below the
+    // floating trip HUD so the customer always sees the biker approaching.
+    final media = MediaQuery.of(context);
+    final screenH = media.size.height;
+    final sheetFrac = tracking
+        ? (widget.embedded ? 0.48 : 0.52)
+        : (widget.embedded ? (fee > 0 ? 0.64 : 0.58) : (fee > 0 ? 0.78 : 0.72));
+    final effFrac = sheetFrac > 0.55 ? 0.55 : sheetFrac;
+    final mapPadding = EdgeInsets.only(
+      top: media.padding.top + (tracking ? 96.0 : 8.0),
+      bottom: screenH * effFrac + 12.0,
+    );
+
     return RideShell(
       mapChild: RideGoogleMap(
         key: _mapKey,
+        padding: mapPadding,
         pickup: mapPickup,
         destination: mapDest,
         riderPosition: showRiderOnMap ? _riderPosition : null,

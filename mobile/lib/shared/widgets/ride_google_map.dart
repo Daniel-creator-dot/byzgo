@@ -11,6 +11,7 @@ import '../../core/maps_runtime_config.dart';
 import '../../core/env.dart';
 import '../../models/location_point.dart';
 import '../../models/rider_map_offer.dart';
+import '../../shared/delivery_pricing.dart';
 import '../../shared/ghana_location.dart';
 import '../theme.dart';
 import 'biker_search_radar.dart';
@@ -38,6 +39,7 @@ class RideGoogleMap extends StatefulWidget {
     this.followRider = false,
     this.pulseGuide,
     this.showPulseGuide = false,
+    this.padding = EdgeInsets.zero,
   });
 
   final LocationPoint? pickup;
@@ -66,6 +68,9 @@ class RideGoogleMap extends StatefulWidget {
   /// Customer's live Pulse Guide™ position (overrides static pin while active).
   final LocationPoint? pulseGuide;
   final bool showPulseGuide;
+  /// Insets so the camera keeps the route/markers (and Google logo) in the
+  /// visible window above the bottom sheet and below the top HUDs.
+  final EdgeInsets padding;
 
   @override
   State<RideGoogleMap> createState() => RideGoogleMapState();
@@ -84,6 +89,11 @@ class RideGoogleMapState extends State<RideGoogleMap> {
   static const double _radarStep = _radarTickMs / 2200;
   DateTime? _lastBoundsFit;
   DateTime? _lastFollow;
+  // Previous rider position + last camera heading so we can rotate the camera to
+  // the rider's ACTUAL travel direction (where they're moving) instead of always
+  // pointing at the target.
+  LatLng? _lastFollowPos;
+  double? _lastHeading;
   static const _accra = LatLng(ghanaCenterLat, ghanaCenterLng);
 
   @override
@@ -167,6 +177,7 @@ class RideGoogleMapState extends State<RideGoogleMap> {
       children: [
         GoogleMap(
           initialCameraPosition: CameraPosition(target: target, zoom: 13.5),
+          padding: widget.padding,
           onMapCreated: (c) {
             _controller = c;
             _fitBounds();
@@ -475,19 +486,22 @@ class RideGoogleMapState extends State<RideGoogleMap> {
     await _fitBounds();
   }
 
+  static double _bearing(double lat1, double lng1, double lat2, double lng2) {
+    final rLat1 = lat1 * math.pi / 180;
+    final rLat2 = lat2 * math.pi / 180;
+    final dLon = (lng2 - lng1) * math.pi / 180;
+    final y = math.sin(dLon) * math.cos(rLat2);
+    final x = math.cos(rLat1) * math.sin(rLat2) -
+        math.sin(rLat1) * math.cos(rLat2) * math.cos(dLon);
+    return (math.atan2(y, x) * 180 / math.pi + 360) % 360;
+  }
+
   double? _bearingTowardTarget() {
     final pos = widget.riderPosition;
     if (pos == null || !pos.hasCoords) return null;
     final t = widget.riderNavTarget ?? widget.destination ?? widget.pickup;
     if (t == null || !t.hasCoords) return null;
-    final target = LatLng(t.lat, t.lng);
-    final lat1 = pos.lat * math.pi / 180;
-    final lat2 = target.latitude * math.pi / 180;
-    final dLon = (target.longitude - pos.lng) * math.pi / 180;
-    final y = math.sin(dLon) * math.cos(lat2);
-    final x = math.cos(lat1) * math.sin(lat2) -
-        math.sin(lat1) * math.cos(lat2) * math.cos(dLon);
-    return (math.atan2(y, x) * 180 / math.pi + 360) % 360;
+    return _bearing(pos.lat, pos.lng, t.lat, t.lng);
   }
 
   Future<void> _followRiderCamera() async {
@@ -501,14 +515,38 @@ class RideGoogleMapState extends State<RideGoogleMap> {
     _lastFollow = now;
     final c = _controller;
     if (c == null) return;
-    final bearing = _bearingTowardTarget();
+    final here = LatLng(pos.lat, pos.lng);
+    // Prefer the rider's actual travel heading (movement direction). Only update
+    // it once they've moved enough (~6 m) so the camera doesn't spin while idle.
+    double? heading;
+    final prev = _lastFollowPos;
+    if (prev != null) {
+      final movedKm = haversineDistanceKm(
+        prev.latitude,
+        prev.longitude,
+        here.latitude,
+        here.longitude,
+      );
+      if (movedKm > 0.006) {
+        heading = _bearing(
+          prev.latitude,
+          prev.longitude,
+          here.latitude,
+          here.longitude,
+        );
+      }
+    }
+    // Fall back to last known heading, then to bearing toward the target.
+    heading ??= _lastHeading ?? _bearingTowardTarget();
+    _lastHeading = heading;
+    _lastFollowPos = here;
     await c.animateCamera(
       CameraUpdate.newCameraPosition(
         CameraPosition(
-          target: LatLng(pos.lat, pos.lng),
+          target: here,
           zoom: 17,
           tilt: 50,
-          bearing: bearing ?? 0,
+          bearing: heading ?? 0,
         ),
       ),
     );
@@ -604,7 +642,8 @@ class RideGoogleMapState extends State<RideGoogleMap> {
         oldWidget.destination != widget.destination ||
         oldWidget.riderPosition != widget.riderPosition ||
         oldWidget.routePoints.length != widget.routePoints.length ||
-        oldWidget.jobOffers.length != widget.jobOffers.length) {
+        oldWidget.jobOffers.length != widget.jobOffers.length ||
+        oldWidget.padding != widget.padding) {
       unawaited(_fitBounds());
     }
   }
