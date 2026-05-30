@@ -4659,8 +4659,8 @@ app.get('/api/rider/commission/summary', authenticateToken, async (req: any, res
       can_pay_from_wallet: walletBalance >= totalOwed - 0.01,
       settlements,
       policy:
-        `BytzGo takes ${settings.totalPercent}% per trip (${settings.insurancePercent}% driver insurance, ${settings.platformPercent}% platform). ` +
-        'Cash trips: pay commission with MoMo/card (Paystack) or from wallet by 8:00 AM Ghana time the next day.',
+        `BytzGo takes ${settings.totalPercent}% commission per trip. ` +
+        'Cash trips: pay with MoMo/card (Paystack) or from wallet by 8:00 AM Ghana time the next day.',
     });
   } catch (err) {
     console.error('[rider/commission/summary]', err);

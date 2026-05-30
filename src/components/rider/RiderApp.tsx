@@ -72,6 +72,32 @@ interface AuthUser {
   avatar_url?: string;
 }
 
+interface CommissionSettlement {
+  id: string;
+  settlement_date: string;
+  amount_owed: number;
+  status: string;
+  is_overdue: boolean;
+}
+
+interface CommissionSummary {
+  total_owed: number;
+  has_overdue: boolean;
+  can_go_online: boolean;
+  wallet_balance: number;
+  can_pay_from_wallet: boolean;
+  policy: string;
+  settlements: CommissionSettlement[];
+}
+
+function formatCommissionDay(raw: string): string {
+  const parsed = new Date(raw);
+  if (!Number.isNaN(parsed.getTime())) {
+    return parsed.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+  }
+  return raw.length >= 10 ? raw.slice(0, 10) : raw;
+}
+
 function PaymentChip({ order }: { order: Order }) {
   if (!order.payment_status) return null;
   const paid = order.payment_status === 'paid';
@@ -265,6 +291,14 @@ export function RiderApp({
 
   const toggleOnline = async () => {
     const next = isOnline ? 'offline' : 'active';
+    if (next === 'active' && commission?.has_overdue) {
+      addNotification?.(
+        `Commission overdue — pay ₵${commission.total_owed.toFixed(2)} in Wallet before going online`,
+        'warning'
+      );
+      setTab('wallet');
+      return;
+    }
     try {
       const res = await axios.patch('/api/auth/status', { status: next });
       const updated = res.data?.user;
@@ -283,7 +317,12 @@ export function RiderApp({
       }
     } catch (e) {
       const msg = (e as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      const code = (e as { response?: { data?: { code?: string } } })?.response?.data?.code;
       addNotification?.(msg || 'Could not update online status', 'warning');
+      if (code === 'COMMISSION_OVERDUE') {
+        void loadCommission();
+        setTab('wallet');
+      }
     }
   };
 
@@ -321,6 +360,90 @@ export function RiderApp({
       setWithdrawStatus({ message: msg || 'Withdrawal failed', type: 'error' });
     } finally {
       setIsWithdrawing(false);
+    }
+  };
+
+  // ——— Trip commission ———
+  const [commission, setCommission] = useState<CommissionSummary | null>(null);
+  const [commissionPaying, setCommissionPaying] = useState(false);
+  const [commissionPaystackPaying, setCommissionPaystackPaying] = useState(false);
+
+  const loadCommission = async () => {
+    try {
+      const res = await axios.get('/api/rider/commission/summary');
+      setCommission(res.data as CommissionSummary);
+    } catch {
+      /* non-blocking */
+    }
+  };
+
+  useEffect(() => {
+    void loadCommission();
+  }, []);
+
+  const payCommissionFromWallet = async () => {
+    if (commissionPaying || commissionPaystackPaying) return;
+    setCommissionPaying(true);
+    try {
+      const res = await axios.post('/api/rider/commission/pay', {});
+      setUser((u) => (u && res.data?.balance != null ? { ...u, balance: res.data.balance } : u));
+      await loadCommission();
+      await refreshData?.();
+      addNotification?.('Commission paid — you can go online', 'success');
+    } catch (err) {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      addNotification?.(msg || 'Could not pay commission', 'warning');
+    } finally {
+      setCommissionPaying(false);
+    }
+  };
+
+  const payCommissionWithPaystack = async () => {
+    if (commissionPaying || commissionPaystackPaying) return;
+    if (!commission || commission.total_owed < 0.01) return;
+    setCommissionPaystackPaying(true);
+    try {
+      const init = await axios.post('/api/rider/commission/paystack/initialize', {});
+      const authorizationUrl: string = init.data?.authorization_url;
+      const reference: string = init.data?.reference;
+      if (!authorizationUrl || !reference) {
+        throw new Error('Paystack checkout could not be started');
+      }
+      const popup = window.open(authorizationUrl, 'paystack_commission', 'width=480,height=720');
+      if (!popup) {
+        window.location.href = authorizationUrl;
+        return;
+      }
+      addNotification?.('Opening Paystack…', 'info');
+      await new Promise<void>((resolve) => {
+        const timer = setInterval(() => {
+          if (popup.closed) {
+            clearInterval(timer);
+            resolve();
+          }
+        }, 800);
+      });
+      addNotification?.('Verifying payment…', 'info');
+      const verify = await axios.post('/api/rider/commission/paystack/verify', { reference });
+      if (verify.data?.balance != null) {
+        setUser((u) => (u ? { ...u, balance: verify.data.balance } : u));
+      }
+      await loadCommission();
+      await refreshData?.();
+      addNotification?.(
+        verify.data?.alreadyProcessed ? 'Commission already settled' : 'Commission paid via Paystack',
+        'success'
+      );
+    } catch (err) {
+      const status = (err as { response?: { status?: number } })?.response?.status;
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      if (status === 503) {
+        addNotification?.('Paystack is not configured. Ask admin to add keys in Settings.', 'warning');
+      } else {
+        addNotification?.(msg || 'Payment could not be completed', 'warning');
+      }
+    } finally {
+      setCommissionPaystackPaying(false);
     }
   };
 
@@ -880,6 +1003,78 @@ export function RiderApp({
                   ₵{Number(user.balance || 0).toFixed(2)}
                 </p>
               </div>
+              {commission && (commission.total_owed > 0.01 || commission.settlements.length > 0) && (
+                <div
+                  className={cn(
+                    'mb-6 p-5 rounded-3xl bg-slate-900 border',
+                    commission.has_overdue ? 'border-red-500/50' : 'border-slate-800'
+                  )}
+                >
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Trip commission</p>
+                  <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">{commission.policy}</p>
+                  {commission.has_overdue && (
+                    <div className="mt-3 px-3 py-2 rounded-xl bg-red-500/15 border border-red-500/40">
+                      <p className="text-[11px] font-black text-red-400">
+                        Commission overdue — pay ₵{commission.total_owed.toFixed(2)} before the 8:00 AM rule
+                      </p>
+                    </div>
+                  )}
+                  <p
+                    className={cn(
+                      'mt-3 text-2xl font-black font-mono',
+                      commission.has_overdue ? 'text-red-400' : 'text-brand-green'
+                    )}
+                  >
+                    Owed: ₵{commission.total_owed.toFixed(2)}
+                  </p>
+                  {commission.settlements.length > 0 && (
+                    <div className="mt-3 space-y-1.5">
+                      {commission.settlements.slice(0, 5).map((s) => (
+                        <div key={s.id} className="flex items-center justify-between">
+                          <span className="text-[11px] text-slate-500">{formatCommissionDay(s.settlement_date)}</span>
+                          <span
+                            className={cn(
+                              'text-xs font-black font-mono',
+                              s.is_overdue ? 'text-red-400' : 'text-slate-300'
+                            )}
+                          >
+                            ₵{s.amount_owed.toFixed(2)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {commission.total_owed > 0.01 && (
+                    <div className="mt-4 space-y-2">
+                      <button
+                        type="button"
+                        onClick={payCommissionWithPaystack}
+                        disabled={commissionPaystackPaying || commissionPaying}
+                        className="w-full py-3.5 bg-brand-green text-slate-950 rounded-2xl font-black uppercase tracking-widest text-[11px] disabled:opacity-50"
+                      >
+                        {commissionPaystackPaying
+                          ? 'Opening Paystack…'
+                          : `Pay ₵${commission.total_owed.toFixed(2)} with Paystack (MoMo / Card)`}
+                      </button>
+                      {commission.can_pay_from_wallet ? (
+                        <button
+                          type="button"
+                          onClick={payCommissionFromWallet}
+                          disabled={commissionPaying || commissionPaystackPaying}
+                          className="w-full py-3.5 bg-slate-800 text-white rounded-2xl font-black uppercase tracking-widest text-[11px] border border-slate-700 disabled:opacity-50"
+                        >
+                          {commissionPaying ? 'Paying…' : 'Pay from wallet balance'}
+                        </button>
+                      ) : (
+                        <p className="text-[11px] text-slate-500 leading-relaxed">
+                          Wallet balance ₵{commission.wallet_balance.toFixed(2)} — not enough to cover commission. Use
+                          Paystack above.
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
               <form onSubmit={handleWithdraw} className="space-y-4">
                 <motion.div className="flex gap-2">
                   {(['momo', 'bank'] as const).map((m) => (

@@ -3526,6 +3526,9 @@ function AdminView({
   const [ridersLoading, setRidersLoading] = useState(false);
   const [rejectRiderId, setRejectRiderId] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState('');
+  const [profileRiderId, setProfileRiderId] = useState<string | null>(null);
+  const [riderProfile, setRiderProfile] = useState<any>(null);
+  const [riderProfileLoading, setRiderProfileLoading] = useState(false);
   const [zones, setZones] = useState<any[]>([]);
   const [pendingProducts, setPendingProducts] = useState<any[]>([]);
   const [revenueData, setRevenueData] = useState<any>(null);
@@ -3572,6 +3575,20 @@ function AdminView({
     }).catch(() => {});
     axios.get('/api/delivery-zones').then((res) => setZones(res.data)).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (!profileRiderId) return;
+    setRiderProfileLoading(true);
+    setRiderProfile(null);
+    axios
+      .get(`/api/admin/riders/${profileRiderId}/profile`)
+      .then((res) => setRiderProfile(res.data))
+      .catch((err) => {
+        addNotification(getApiError(err, 'Could not load driver profile'), 'warning');
+        setProfileRiderId(null);
+      })
+      .finally(() => setRiderProfileLoading(false));
+  }, [profileRiderId]);
 
   useEffect(() => {
     if (activeTab === 'products') {
@@ -3880,6 +3897,14 @@ function AdminView({
                          </td>
                          <td className="px-8 py-6">
                            <div className="flex gap-2">
+                             {u.role === 'rider' && (
+                               <button
+                                 onClick={() => setProfileRiderId(u.id)}
+                                 className="px-3 py-1.5 bg-slate-900 text-white rounded-lg text-[10px] font-black uppercase hover:scale-105 transition-all"
+                               >
+                                 Profile
+                               </button>
+                             )}
                              {u.status === 'pending' && (
                                <button 
                                  onClick={async () => {
@@ -3924,6 +3949,14 @@ function AdminView({
                           <span className="font-mono font-black text-brand-green text-sm">{formatCedis(u.balance)}</span>
                        </div>
                        <div className="flex gap-2">
+                           {u.role === 'rider' && (
+                             <button
+                               onClick={() => setProfileRiderId(u.id)}
+                               className="px-4 py-2 bg-slate-900 text-white rounded-xl text-[8px] font-black uppercase tracking-widest"
+                             >
+                               Profile
+                             </button>
+                           )}
                            {u.status === 'pending' && (
                              <button 
                                onClick={async () => {
@@ -3951,6 +3984,90 @@ function AdminView({
                  </div>
                ))}
             </div>
+            {profileRiderId && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => setProfileRiderId(null)}>
+                <div className="bg-white rounded-[2rem] p-6 sm:p-8 max-w-lg w-full max-h-[90vh] overflow-y-auto shadow-xl" onClick={(e) => e.stopPropagation()}>
+                  <div className="flex justify-between items-start mb-4">
+                    <h4 className="font-black text-lg text-slate-800 uppercase tracking-tight">Driver profile</h4>
+                    <button type="button" onClick={() => setProfileRiderId(null)} className="text-slate-400 hover:text-slate-600 font-black text-xl leading-none">×</button>
+                  </div>
+                  {riderProfileLoading || !riderProfile ? (
+                    <p className="text-slate-400 text-sm font-bold py-8 text-center">Loading…</p>
+                  ) : (
+                    <div className="space-y-5">
+                      <div>
+                        <p className="font-black text-slate-800">{riderProfile.driver?.name}</p>
+                        <p className="text-xs text-slate-500">{riderProfile.driver?.phone || riderProfile.driver?.email}</p>
+                        <div className="flex flex-wrap gap-2 mt-2">
+                          <span className={cn('px-3 py-1 rounded-lg text-[9px] font-black uppercase', riderProfile.driver?.is_online ? 'bg-brand-green/10 text-brand-green' : 'bg-slate-100 text-slate-500')}>{riderProfile.driver?.is_online ? 'Online' : 'Offline'}</span>
+                          <span className="px-3 py-1 rounded-lg text-[9px] font-black uppercase bg-slate-100 text-slate-500">{riderProfile.driver?.status}</span>
+                          {riderProfile.driver?.region && <span className="px-3 py-1 rounded-lg text-[9px] font-black uppercase bg-slate-100 text-slate-500">{riderProfile.driver.region}</span>}
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2">
+                        <div className="p-3 rounded-2xl bg-slate-50 border border-slate-100">
+                          <p className="text-[8px] font-black uppercase text-slate-400">Trips</p>
+                          <p className="font-black text-slate-800">{riderProfile.stats?.trips_delivered ?? 0}</p>
+                        </div>
+                        <div className="p-3 rounded-2xl bg-slate-50 border border-slate-100">
+                          <p className="text-[8px] font-black uppercase text-slate-400">Rating</p>
+                          <p className="font-black text-slate-800">{(riderProfile.stats?.rating_count ?? 0) > 0 ? `${Number(riderProfile.stats?.avg_rating || 0).toFixed(1)} (${riderProfile.stats?.rating_count})` : '—'}</p>
+                        </div>
+                        <div className="p-3 rounded-2xl bg-slate-50 border border-slate-100">
+                          <p className="text-[8px] font-black uppercase text-slate-400">Balance</p>
+                          <p className="font-black font-mono text-brand-green">{formatCedis(riderProfile.driver?.balance || 0)}</p>
+                        </div>
+                      </div>
+                      <div className="p-4 rounded-2xl bg-slate-900 text-white">
+                        <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-2">Commission breakdown (admin only)</p>
+                        <div className="grid grid-cols-3 gap-2 mb-3">
+                          <div>
+                            <p className="text-[8px] font-black uppercase text-slate-500">Total</p>
+                            <p className="font-black">{riderProfile.commission_policy?.totalPercent ?? 10}%</p>
+                          </div>
+                          <div>
+                            <p className="text-[8px] font-black uppercase text-slate-500">Driver insurance</p>
+                            <p className="font-black">{riderProfile.commission_policy?.insurancePercent ?? 3}%</p>
+                          </div>
+                          <div>
+                            <p className="text-[8px] font-black uppercase text-slate-500">Platform</p>
+                            <p className="font-black">{riderProfile.commission_policy?.platformPercent ?? 7}%</p>
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-3 gap-2 pt-3 border-t border-slate-700">
+                          <div>
+                            <p className="text-[8px] font-black uppercase text-slate-500">Commission accrued</p>
+                            <p className="font-black font-mono">{formatCedis(riderProfile.commission_totals?.commission_accrued || 0)}</p>
+                          </div>
+                          <div>
+                            <p className="text-[8px] font-black uppercase text-slate-500">Insurance pool</p>
+                            <p className="font-black font-mono text-amber-300">{formatCedis(riderProfile.commission_totals?.insurance_accrued || 0)}</p>
+                          </div>
+                          <div>
+                            <p className="text-[8px] font-black uppercase text-slate-500">Platform</p>
+                            <p className="font-black font-mono text-brand-blue">{formatCedis(riderProfile.commission_totals?.platform_accrued || 0)}</p>
+                          </div>
+                        </div>
+                      </div>
+                      {Array.isArray(riderProfile.settlements) && riderProfile.settlements.length > 0 && (
+                        <div>
+                          <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-2">Recent settlements</p>
+                          <div className="space-y-1.5">
+                            {riderProfile.settlements.slice(0, 7).map((s: any) => (
+                              <div key={s.id} className="flex items-center justify-between text-xs p-2 rounded-lg bg-slate-50 border border-slate-100">
+                                <span className="font-bold text-slate-600">{new Date(s.settlement_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</span>
+                                <span className="text-slate-400">ins {formatCedis(s.insurance_total)} · plat {formatCedis(s.platform_total)}</span>
+                                <span className={cn('font-black font-mono', s.amount_owed > 0.01 ? (s.status === 'overdue' ? 'text-red-500' : 'text-slate-700') : 'text-brand-green')}>{s.amount_owed > 0.01 ? formatCedis(s.amount_owed) : 'Paid'}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
          </div>
        ) : activeTab === 'drivers' ? (
          <div className="space-y-6">
