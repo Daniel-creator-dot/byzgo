@@ -63,10 +63,10 @@ export function formatWalletTopupError(message: string | null | undefined): stri
   const m = (message || '').trim();
   if (!m) return 'Could not verify payment. Try again or contact support.';
   if (/reference not found/i.test(m)) {
-    return 'Paystack has no payment with that reference. If you paid via MoMo, paste the Paystack reference (starts with T or bytzgo_), not the MTN/Vodafone transaction ID.';
+    return 'No payment found with that reference. If you paid via MoMo, paste the payment reference (starts with T or bytzgo_), not the MTN/Vodafone transaction ID.';
   }
   if (/secret key/i.test(m)) {
-    return 'Wallet top-up is not configured on the server. Ask admin to set Paystack secret key.';
+    return 'Wallet top-up is not configured on the server. Contact support.';
   }
   return m;
 }

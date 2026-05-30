@@ -38,7 +38,7 @@ export function loadPaystackScript(): Promise<void> {
         return;
       }
       existing.addEventListener('load', () => resolve());
-      existing.addEventListener('error', () => reject(new Error('Paystack script failed to load')));
+      existing.addEventListener('error', () => reject(new Error('Payment service failed to load. Refresh and try again.')));
       return;
     }
 
@@ -46,7 +46,7 @@ export function loadPaystackScript(): Promise<void> {
     script.src = 'https://js.paystack.co/v1/inline.js';
     script.async = true;
     script.onload = () => resolve();
-    script.onerror = () => reject(new Error('Paystack script failed to load'));
+    script.onerror = () => reject(new Error('Payment service failed to load. Refresh and try again.'));
     document.head.appendChild(script);
   });
 }
@@ -55,7 +55,7 @@ function paystackOpenHint(publicKey: string): string | null {
   if (typeof window === 'undefined') return null;
   const host = window.location.hostname;
   if ((host === 'localhost' || host === '127.0.0.1') && publicKey.startsWith('pk_live_')) {
-    return 'Live Paystack keys often fail on localhost. Use pk_test_ keys in admin for local development.';
+    return 'Live payment keys often fail on localhost. Use test keys in admin for local development.';
   }
   return null;
 }
@@ -73,7 +73,7 @@ export function openPaystackCheckout(options: {
   const { publicKey, email, amountGhs, onSuccess, onClose, onReferenceReady, metadata } = options;
 
   if (!isPaystackPublicKeyValid(publicKey)) {
-    return Promise.reject(new Error('Invalid Paystack public key. Add keys in Admin → Settings.'));
+    return Promise.reject(new Error('Payments are not configured. Contact support.'));
   }
 
   const amount = Math.round(amountGhs * 100);
@@ -88,7 +88,7 @@ export function openPaystackCheckout(options: {
       new Promise<void>((resolve, reject) => {
         const PaystackPop = window.PaystackPop;
         if (!PaystackPop) {
-          reject(new Error('Paystack library not loaded. Refresh and try again.'));
+          reject(new Error('Payment service not loaded. Refresh and try again.'));
           return;
         }
 
@@ -116,7 +116,7 @@ export function openPaystackCheckout(options: {
             },
           });
         } catch (err) {
-          const msg = err instanceof Error ? err.message : 'Paystack setup failed';
+          const msg = err instanceof Error ? err.message : 'Could not start payment';
           reject(new Error(localhostHint ? `${msg}. ${localhostHint}` : msg));
           return;
         }
@@ -124,7 +124,7 @@ export function openPaystackCheckout(options: {
         if (!handler?.openIframe) {
           reject(
             new Error(
-              localhostHint ?? 'Paystack could not start checkout. Check your public key in admin settings.'
+              localhostHint ?? 'Could not start payment. Try again later.'
             )
           );
           return;

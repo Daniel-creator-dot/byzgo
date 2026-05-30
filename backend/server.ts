@@ -804,12 +804,12 @@ function paystackKeysMatch(publicKey: string, secretKey: string): boolean {
 async function verifyPaystackTransaction(reference: string) {
   const secretKey = await getPaystackSecretKey();
   if (!secretKey) {
-    throw new Error('Paystack secret key is not configured. Add sk_test_ or sk_live_ in Admin or PAYSTACK_SECRET_KEY in backend/.env');
+    throw new Error('Mobile Money and card payments are not configured. Contact support.');
   }
 
   const publicKey = await getPaystackPublicKey();
   if (publicKey && !paystackKeysMatch(publicKey, secretKey)) {
-    throw new Error('Paystack public and secret keys must both be test or both be live (pk_test_ with sk_test_, etc.)');
+    throw new Error('Payment configuration error. Contact support.');
   }
 
   try {
@@ -819,7 +819,7 @@ async function verifyPaystackTransaction(reference: string) {
     );
 
     if (!response.data?.status) {
-      throw new Error(response.data?.message || 'Paystack could not verify this payment');
+      throw new Error(response.data?.message || 'Could not verify this payment');
     }
 
     const data = response.data.data;
@@ -855,12 +855,12 @@ async function initializePaystackPayment(
 ) {
   const secretKey = await getPaystackSecretKey();
   if (!secretKey) {
-    throw new Error('Paystack is not configured. Add keys in Admin → Settings.');
+    throw new Error('Mobile Money and card payments are not available. Contact support.');
   }
 
   const publicKey = await getPaystackPublicKey();
   if (publicKey && !paystackKeysMatch(publicKey, secretKey)) {
-    throw new Error('Paystack public and secret keys must both be test or both be live.');
+    throw new Error('Payment configuration error. Contact support.');
   }
 
   const amount = Math.round(amountGhs * 100);
@@ -890,12 +890,12 @@ async function initializePaystackPayment(
   );
 
   if (!response.data?.status) {
-    throw new Error(response.data?.message || 'Could not start Paystack checkout');
+    throw new Error(response.data?.message || 'Could not start payment');
   }
 
   const data = response.data.data;
   if (!data?.authorization_url || !data?.reference) {
-    throw new Error('Paystack did not return a checkout URL');
+    throw new Error('Could not start payment. Try again.');
   }
 
   return {
