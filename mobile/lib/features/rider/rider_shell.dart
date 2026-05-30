@@ -92,6 +92,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
   DateTime? _lastGpsUiUpdate;
   DateTime? _lastNavFetch;
   LocationPoint? _lastNavOrigin;
+  String? _lastNavTargetKey;
   List<LocationPoint> _navRoutePoints = [];
   String? _navEtaPhrase;
   String? _navDistanceText;
@@ -859,16 +860,19 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
     final navigating = active != null &&
         !const {'delivered', 'cancelled'}.contains(active.status);
     if (navigating) {
-      if (_navPollTimer == null) {
-        unawaited(_refreshNav(active));
-        _navPollTimer = Timer.periodic(const Duration(seconds: 12), (_) {
-          final trip = _primaryActive;
-          if (trip != null) unawaited(_refreshNav(trip));
-        });
-      }
+      // Refresh now (throttled internally; phase changes bypass the throttle)
+      // so the route re-points the moment the trip stage changes.
+      unawaited(_refreshNav(active));
+      _navPollTimer ??= Timer.periodic(const Duration(seconds: 6), (_) {
+        final trip = _primaryActive;
+        if (trip != null) unawaited(_refreshNav(trip));
+      });
     } else {
       _navPollTimer?.cancel();
       _navPollTimer = null;
+      _lastNavTargetKey = null;
+      _lastNavFetch = null;
+      _lastNavOrigin = null;
       if (_navRoutePoints.isNotEmpty ||
           _navEtaPhrase != null ||
           _navDistanceText != null) {
@@ -894,17 +898,23 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
       lat: target.lat,
       lng: target.lng,
     );
+    // Key the destination so a phase change (to-pickup → to-dropoff) forces an
+    // immediate re-route even if the rider hasn't moved or we fetched recently.
+    final targetKey =
+        '${target.lat.toStringAsFixed(5)},${target.lng.toStringAsFixed(5)}';
+    final targetChanged = targetKey != _lastNavTargetKey;
     final now = DateTime.now();
-    if (_lastNavFetch != null &&
+    if (!targetChanged &&
+        _lastNavFetch != null &&
         _lastNavOrigin != null &&
-        now.difference(_lastNavFetch!) < const Duration(seconds: 12)) {
+        now.difference(_lastNavFetch!) < const Duration(seconds: 5)) {
       final moved = haversineDistanceKm(
         _lastNavOrigin!.lat,
         _lastNavOrigin!.lng,
         pos.lat,
         pos.lng,
       );
-      if (moved < 0.03) return;
+      if (moved < 0.015) return;
     }
 
     final summary = await _directions.fetchRoute(
@@ -914,6 +924,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
     if (!mounted || summary == null) return;
     _lastNavFetch = now;
     _lastNavOrigin = pos;
+    _lastNavTargetKey = targetKey;
     setState(() {
       _navRoutePoints = summary.points;
       _navEtaPhrase = summary.arrivalPhrase;
