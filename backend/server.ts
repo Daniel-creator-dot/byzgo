@@ -1989,7 +1989,10 @@ async function advanceDispatchWave(order: any, wave: number) {
   const pickup = await getPickupPoint(order);
   const radiusKm = dispatchRadiusKm(wave);
 
+  const widestRadiusKm = DISPATCH_RADIUS_KM_TIERS[DISPATCH_RADIUS_KM_TIERS.length - 1];
+
   let candidates: NearbyRider[] = [];
+  let usedGlobalFallback = false;
 
   if (pickup) {
     candidates = await getNearestActiveRiders(
@@ -1999,6 +2002,20 @@ async function advanceDispatchWave(order: any, wave: number) {
       RIDERS_PER_WAVE,
       radiusKm
     );
+    // Centralized fallback: once we've widened to the largest radius and still
+    // find nobody nearby, offer the job to ANY online rider (region first, then
+    // global) regardless of distance / location freshness. This guarantees a
+    // request reaches available riders across platforms even when the rider's
+    // GPS is stale, missing, or far from the pickup.
+    if (candidates.length === 0 && radiusKm >= widestRadiusKm) {
+      const fallbackIds = (await getActiveRiderIds(order.region)).filter(
+        (id) => !exclude.includes(id)
+      );
+      candidates = fallbackIds
+        .slice(0, RIDERS_PER_WAVE)
+        .map((id) => ({ id, distanceKm: 0 }));
+      usedGlobalFallback = candidates.length > 0;
+    }
   } else {
     const fallback = (await getActiveRiderIds(order.region)).filter(
       (id) => !exclude.includes(id)
@@ -2016,10 +2033,16 @@ async function advanceDispatchWave(order: any, wave: number) {
       await advanceDispatchWave(order, wave + 1);
     } else {
       console.warn(
-        `[dispatch] order ${order.id}: no nearby riders accepted after ${MAX_DISPATCH_WAVES} attempts`
+        `[dispatch] order ${order.id}: no riders available (nearby or online) after ${MAX_DISPATCH_WAVES} attempts`
       );
     }
     return;
+  }
+
+  if (usedGlobalFallback) {
+    console.info(
+      `[dispatch] order ${order.id} step ${wave}: no rider within ${radiusKm}km — falling back to any online rider`
+    );
   }
 
   await emitOffersToRiders(order, candidates, wave);
