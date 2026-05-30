@@ -160,24 +160,38 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
   Order? get _activeCourier {
     final userId = _session.user?.id;
     if (userId == null) return null;
-    final list = _orders.where((o) {
+    bool isRelevant(Order o) {
       if (o.customerId != userId) return false;
-      if (['delivered', 'cancelled'].contains(o.status)) return false;
       final type = o.orderType ?? '';
       return type == 'courier' ||
           type == 'food' ||
           customerOrderHasShopPickup(o) ||
           (o.pickup != null && o.pickup!.trim().isNotEmpty);
-    }).toList();
-    if (list.isEmpty) return null;
-    list.sort((a, b) {
-      try {
-        return DateTime.parse(b.createdAt).compareTo(DateTime.parse(a.createdAt));
-      } catch (_) {
-        return b.id.compareTo(a.id);
+    }
+
+    final relevant = _orders.where(isRelevant).toList()
+      ..sort((a, b) {
+        try {
+          return DateTime.parse(b.createdAt).compareTo(DateTime.parse(a.createdAt));
+        } catch (_) {
+          return b.id.compareTo(a.id);
+        }
+      });
+    if (relevant.isEmpty) return null;
+    // A trip with an assigned rider that hasn't finished is always the live
+    // trip — never hide it behind a newer order.
+    for (final o in relevant) {
+      if (o.riderId != null && !['delivered', 'cancelled'].contains(o.status)) {
+        return o;
       }
-    });
-    return list.first;
+    }
+    // Otherwise only the customer's most recent order can be the active trip.
+    // Once that trip is delivered/cancelled we return to idle instead of
+    // resurrecting an older, abandoned "pending" order — which would otherwise
+    // wrongly re-show the "searching for a rider" radar after a trip ends.
+    final newest = relevant.first;
+    if (['delivered', 'cancelled'].contains(newest.status)) return null;
+    return newest;
   }
 
   /// After marketplace checkout — show trip on map and in lists.
