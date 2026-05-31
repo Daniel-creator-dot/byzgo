@@ -31,7 +31,6 @@ import '../../shared/format.dart';
 import '../../shared/driver_tier.dart';
 import '../../shared/ghana_regions.dart';
 import '../../shared/rider_trip.dart';
-import '../../shared/trip_chat_sheet.dart';
 import '../../shared/trip_contact.dart';
 import '../../shared/theme.dart';
 import '../../models/rider_map_offer.dart';
@@ -48,6 +47,7 @@ import '../../shared/widgets/pulse_guide_hud.dart';
 import '../../shared/widgets/ride_ui.dart';
 import '../../shared/widgets/trip_rating_sheet.dart';
 import 'delivery_pin_dialog.dart';
+import 'rider_trip_tracking.dart';
 import 'incoming_ride_alert.dart';
 import 'incoming_ride_overlay.dart';
 import 'rider_drive_hud.dart';
@@ -1401,7 +1401,11 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
 
   double get _driveSheetFraction {
     if (!_isOnline) return 0.32;
-    if (_primaryActive != null || _incoming != null) return 0.16;
+    if (_incoming != null) return 0.16;
+    if (_primaryActive != null && _driveSheet == _DriveSheet.active) {
+      return riderTrackingSheetFraction(_primaryActive!);
+    }
+    if (_primaryActive != null) return 0.18;
     if (_availableOrders.isEmpty) return _driveListExpanded ? 0.28 : 0.20;
     return _driveListExpanded ? 0.34 : 0.26;
   }
@@ -1642,73 +1646,6 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
                   ),
                 ],
               ),
-              if (_activeTripActionLabel(order) != null) ...[
-                const SizedBox(height: 8),
-                SizedBox(
-                  width: double.infinity,
-                  child: _activeActionButton(order, prominent: true),
-                ),
-              ],
-              if (tripAllowsContact(order)) ...[
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    if (order.customerPhone != null) ...[
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: () => launchPhoneCall(order.customerPhone),
-                          icon: const Icon(Icons.phone, size: 16),
-                          label: const Text('Call'),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: Colors.white,
-                            side: BorderSide(color: Colors.white.withValues(alpha: 0.35)),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: () => launchSms(order.customerPhone),
-                          icon: const Icon(Icons.sms_outlined, size: 16),
-                          label: const Text('SMS'),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: Colors.white,
-                            side: BorderSide(color: Colors.white.withValues(alpha: 0.35)),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                    ],
-                    Expanded(
-                      child: Consumer<TripChatUnread>(
-                        builder: (context, unread, _) {
-                          final n = unread.countFor(order.id);
-                          return FilledButton.icon(
-                            onPressed: () => showTripChatSheet(
-                              context,
-                              order: order,
-                              title:
-                                  'Chat with ${order.customerName.isNotEmpty ? order.customerName : 'customer'}',
-                            ),
-                            icon: n > 0
-                                ? Badge(
-                                    label: Text(n > 9 ? '9+' : '$n'),
-                                    backgroundColor: const Color(0xFFEF4444),
-                                    child: const Icon(Icons.chat_bubble_outline, size: 16),
-                                  )
-                                : const Icon(Icons.chat_bubble_outline, size: 16),
-                            label: Text(n > 0 ? 'Chat ($n)' : 'Chat'),
-                            style: FilledButton.styleFrom(
-                              backgroundColor: BytzGoTheme.accent,
-                              foregroundColor: const Color(0xFF020617),
-                            ),
-                          );
-                        },
-                      ),
-                    ),
-                  ],
-                ),
-              ],
             ],
           ),
         ),
@@ -1718,16 +1655,18 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
 
   Widget _driveBottomSheet() {
     final primary = _primaryActive;
-    final pinTripCta =
+    final onActiveTab =
         _isOnline && _driveSheet == _DriveSheet.active && primary != null;
+    final activePrimary = onActiveTab ? primary : null;
+    final isArrived = activePrimary?.status == 'arrived';
 
     return RideSheet(
       maxHeightFraction: _driveSheetFraction,
-      minSheetHeight: pinTripCta ? 168 : 112,
+      minSheetHeight: onActiveTab ? (isArrived ? 200 : 148) : 112,
       padding: const EdgeInsets.fromLTRB(16, 6, 16, 12),
-      footerPadding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-      scrollBottomPadding: pinTripCta ? 8 : 0,
-      footer: pinTripCta ? _activeTripFooter(primary) : null,
+      footerPadding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
+      scrollBottomPadding: onActiveTab ? 8 : 0,
+      footer: activePrimary != null ? _activeTripFooter(activePrimary) : null,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1781,7 +1720,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
               ),
             )
           else
-            _activeList(hidePrimaryTripActions: pinTripCta),
+            _activeList(hidePrimaryTripActions: onActiveTab),
           if (!_isOnline) ...[
             const SizedBox(height: 12),
             Row(
@@ -1816,6 +1755,22 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
   }
 
   Widget _activeTripFooter(Order order) {
+    if (order.status == 'arrived') {
+      return RiderDeliveryPinCard(
+        order: order,
+        pinned: true,
+        onCompleted: () async {
+          _snack('Delivery completed', success: true);
+          await _refreshAll(silent: true);
+          if (!mounted) return;
+          await TripRatingSheet.showRiderCompletion(
+            context,
+            order: order,
+          );
+        },
+      );
+    }
+
     final nav = navigationTarget(order, _vendors);
     final label = _activeTripActionLabel(order);
     if (label == null) return const SizedBox.shrink();
@@ -1838,7 +1793,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
               OutlinedButton.icon(
                 onPressed: () => _openExternalNavigation(order),
                 icon: const Icon(Icons.open_in_new, size: 18),
-                label: const Text('Google Maps'),
+                label: const Text('Maps'),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: BytzGoTheme.sheetText,
                   side: const BorderSide(color: BytzGoTheme.sheetDivider),
@@ -2080,7 +2035,20 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
 
   Widget _activeCard(Order order, {bool hideTripActions = false}) {
     final nav = navigationTarget(order, _vendors);
-    final step = activeTripStep(order);
+    final isPrimaryCompact = hideTripActions;
+
+    if (isPrimaryCompact) {
+      return Container(
+        margin: const EdgeInsets.only(bottom: 10),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: BytzGoTheme.accent.withValues(alpha: 0.25)),
+        ),
+        child: RiderActiveTripBody(order: order),
+      );
+    }
+
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.all(14),
@@ -2109,32 +2077,10 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
               ),
               const Spacer(),
               _paymentStatusChip(order),
-              const SizedBox(width: 6),
-              Text(
-                order.status.replaceAll('_', ' ').toUpperCase(),
-                style: const TextStyle(
-                  fontSize: 10,
-                  fontWeight: FontWeight.w800,
-                  color: BytzGoTheme.accentDark,
-                ),
-              ),
             ],
           ),
-          const SizedBox(height: 8),
-          Row(
-            children: List.generate(4, (i) {
-              return Expanded(
-                child: Container(
-                  height: 4,
-                  margin: EdgeInsets.only(right: i < 3 ? 4 : 0),
-                  decoration: BoxDecoration(
-                    color: i < step ? BytzGoTheme.accent : BytzGoTheme.sheetDivider,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-              );
-            }),
-          ),
+          const SizedBox(height: 10),
+          RiderCompactProgressBar(order: order),
           if (nav != null) ...[
             const SizedBox(height: 10),
             Text(nav.label, style: BytzGoTheme.sheetBody(13), maxLines: 2),

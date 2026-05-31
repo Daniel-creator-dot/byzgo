@@ -194,3 +194,23 @@ List<CustomerTripStep> customerTripSteps(Order order) {
     );
   });
 }
+
+/// Bottom-sheet height fraction during live tracking — keeps the map visible and
+/// leaves room for a pinned payment footer when the driver has arrived.
+double customerTrackingSheetFraction(
+  Order order, {
+  bool embedded = false,
+  bool searching = false,
+}) {
+  switch (order.status) {
+    case 'delivered':
+      return embedded ? 0.34 : 0.36;
+    case 'arrived':
+      return embedded ? 0.46 : 0.48;
+    case 'cancelled':
+      return 0.22;
+    default:
+      if (searching) return embedded ? 0.17 : 0.19;
+      return embedded ? 0.22 : 0.24;
+  }
+}

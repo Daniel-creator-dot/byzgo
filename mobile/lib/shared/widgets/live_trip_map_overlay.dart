@@ -8,6 +8,7 @@ import '../../shared/customer_trip.dart';
 import '../../shared/delivery_pricing.dart';
 import '../theme.dart';
 import 'biker_search_radar.dart';
+import 'bolt_eta_pill.dart';
 
 /// HUD on the map during active trip tracking (search + rider approaching).
 class LiveTripMapHud extends StatelessWidget {
@@ -23,6 +24,7 @@ class LiveTripMapHud extends StatelessWidget {
     this.riderPosition,
     this.navTarget,
     this.onRecenter,
+    this.minimalChrome = false,
   });
 
   final Order order;
@@ -35,6 +37,8 @@ class LiveTripMapHud extends StatelessWidget {
   final LocationPoint? riderPosition;
   final LocationPoint? navTarget;
   final VoidCallback? onRecenter;
+  /// When true (driver arrived / pay phase), hide map chrome so the route stays visible.
+  final bool minimalChrome;
 
   double? get _distanceKm {
     if (riderPosition == null || navTarget == null) return null;
@@ -71,24 +75,38 @@ class LiveTripMapHud extends StatelessWidget {
               hasRider: hasRider,
             ),
           ),
-          if (hasRider && dist != null)
+          if (hasRider && !minimalChrome)
             Positioned(
               left: 12,
               bottom: 12,
-              child: _DistanceRadarPill(
-                distanceKm: dist,
-                label: order.status == 'picked_up'
-                    ? 'To you'
-                    : (customerOrderHasShopPickup(order) ? 'To shop' : 'To pickup'),
-              ),
+              child: etaExpiresAt != null || etaMinutes != null
+                  ? BoltEtaPill(
+                      minutes: etaMinutes,
+                      expiresAt: etaExpiresAt,
+                      subtitle: etaDistanceText,
+                      compact: true,
+                      label: 'route ETA',
+                    )
+                  : (dist != null ||
+                          (etaDistanceText != null && etaDistanceText!.isNotEmpty))
+                      ? _DistanceRadarPill(
+                          distanceKm: dist,
+                          routeDistanceText: etaDistanceText,
+                          label: order.status == 'picked_up'
+                              ? 'To you'
+                              : (customerOrderHasShopPickup(order)
+                                  ? 'To shop'
+                                  : 'To pickup'),
+                        )
+                      : const SizedBox.shrink(),
             ),
-          if (searching)
+          if (searching && !minimalChrome)
             Positioned(
               right: 12,
               bottom: 12,
               child: _ScanningLegend(nearbyCount: nearbyCount ?? 0),
             ),
-          if (hasRider)
+          if (hasRider && !minimalChrome)
             Positioned(
               right: 12,
               bottom: 12,
@@ -97,7 +115,7 @@ class LiveTripMapHud extends StatelessWidget {
           if (onRecenter != null)
             Positioned(
               right: 12,
-              top: 120,
+              top: minimalChrome ? 88 : 120,
               child: _RecenterButton(onPressed: onRecenter!),
             ),
         ],
@@ -348,13 +366,21 @@ class _DistanceRadarPill extends StatelessWidget {
   const _DistanceRadarPill({
     required this.distanceKm,
     required this.label,
+    this.routeDistanceText,
   });
 
-  final double distanceKm;
+  final double? distanceKm;
   final String label;
+  final String? routeDistanceText;
 
   @override
   Widget build(BuildContext context) {
+    final distanceLabel = routeDistanceText != null && routeDistanceText!.isNotEmpty
+        ? routeDistanceText!
+        : distanceKm != null
+            ? '${distanceKm!.toStringAsFixed(1)} km'
+            : '—';
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
@@ -376,13 +402,13 @@ class _DistanceRadarPill extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.radar, color: Colors.white, size: 20),
+          const Icon(Icons.route, color: Colors.white, size: 20),
           const SizedBox(width: 8),
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                '${distanceKm.toStringAsFixed(1)} km',
+                distanceLabel,
                 style: const TextStyle(
                   color: Colors.white,
                   fontWeight: FontWeight.w900,

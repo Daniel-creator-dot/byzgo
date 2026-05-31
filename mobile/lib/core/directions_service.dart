@@ -41,6 +41,12 @@ class RouteSummary {
   final List<RouteStep> steps;
 
   String get arrivalPhrase {
+    final t = durationText.trim();
+    if (t.isNotEmpty) {
+      final lower = t.toLowerCase();
+      if (lower.startsWith('arriving')) return t;
+      return 'Arriving in $t';
+    }
     if (etaMinutes <= 1) return 'Arriving in about 1 min';
     return 'Arriving in about $etaMinutes min';
   }
@@ -142,13 +148,14 @@ class DirectionsService {
       destination.lat,
       destination.lng,
     );
-    final minutes = (km / 0.45).ceil().clamp(1, 120);
+    // Urban motorcycle fallback when Directions API unavailable (~22 km/h).
+    final minutes = (km / 0.37).ceil().clamp(1, 120);
     final secs = minutes * 60;
     return RouteSummary(
       etaMinutes: minutes,
       durationSeconds: secs,
       durationText: '$minutes min',
-      distanceText: '${km.toStringAsFixed(1)} km',
+      distanceText: '${km.toStringAsFixed(1)} km (direct)',
       points: [origin, destination],
     );
   }

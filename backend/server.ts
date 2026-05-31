@@ -3910,18 +3910,24 @@ app.get('/api/maps/directions', authenticateToken, async (req: any, res) => {
     url.searchParams.set('mode', 'driving');
     url.searchParams.set('region', 'gh');
     url.searchParams.set('language', 'en');
+    // Live traffic-adjusted driving time (motorcycle couriers use road network + traffic).
+    const departureTime = Math.floor(Date.now() / 1000);
+    url.searchParams.set('departure_time', String(departureTime));
+    url.searchParams.set('traffic_model', 'best_guess');
     url.searchParams.set('key', key);
     const { data } = await axios.get(url.toString());
     if (data.status !== 'OK' || !data.routes?.length) {
       return res.status(404).json({ message: data.error_message || 'No route found' });
     }
     const leg = data.routes[0].legs?.[0];
-    const durationSec = leg?.duration?.value ?? 0;
-    const durationText = leg?.duration?.text ?? '';
+    const durationSec =
+      leg?.duration_in_traffic?.value ?? leg?.duration?.value ?? 0;
+    const durationText =
+      leg?.duration_in_traffic?.text ?? leg?.duration?.text ?? '';
     const distanceText = leg?.distance?.text ?? '';
     const encoded = data.routes[0].overview_polyline?.points ?? '';
     const points = encoded ? decodeGooglePolyline(encoded) : [];
-    const etaMinutes = Math.max(1, Math.round(durationSec / 60));
+    const etaMinutes = Math.max(1, Math.ceil(durationSec / 60));
     // Turn-by-turn maneuvers for in-app navigation ("turn left in 200 m").
     const rawSteps = Array.isArray(leg?.steps) ? leg.steps : [];
     const steps = rawSteps.map((s: any) => ({

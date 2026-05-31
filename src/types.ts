@@ -27,6 +27,8 @@ export interface Order {
   riderTier?: string;
   riderName?: string;
   rider_name?: string;
+  riderPhone?: string;
+  rider_phone?: string;
   payment_status?: string;
   payment_method?: string;
   customer_payment_ack?: string;

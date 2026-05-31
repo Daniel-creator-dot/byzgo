@@ -37,6 +37,8 @@ class CustomerDeliveryTracker extends StatelessWidget {
     this.navTarget,
     this.searching = false,
     this.nearbyCount = 0,
+    this.omitPayment = false,
+    this.mapHudActive = false,
   });
 
   final Order order;
@@ -51,6 +53,10 @@ class CustomerDeliveryTracker extends StatelessWidget {
   final LocationPoint? navTarget;
   final bool searching;
   final int nearbyCount;
+  /// Payment card is pinned in the sheet footer during the arrived phase.
+  final bool omitPayment;
+  /// Status HUD on the map — hide duplicate hero blocks in the sheet.
+  final bool mapHudActive;
 
   double? get _riderDistanceKm {
     if (riderPosition == null || navTarget == null) return null;
@@ -68,94 +74,259 @@ class CustomerDeliveryTracker extends StatelessWidget {
     if (order.status == 'cancelled') {
       return const _CancelledTripBanner();
     }
-    final dist = _riderDistanceKm;
-    final hasRider = order.riderId != null && !searching;
+    if (order.status == 'delivered') {
+      return RateDriverCard(order: order, onOrderUpdated: onOrderUpdated);
+    }
+    if (order.status == 'arrived') {
+      return _ArrivedTrackingBody(
+        order: order,
+        onOrderUpdated: onOrderUpdated,
+        omitPayment: omitPayment,
+      );
+    }
+    return _InTransitTrackingBody(
+      order: order,
+      onOrderUpdated: onOrderUpdated,
+      searching: searching,
+      nearbyCount: nearbyCount,
+      mapHudActive: mapHudActive,
+      etaPhrase: etaPhrase,
+      etaMinutes: etaMinutes,
+      etaDistanceText: etaDistanceText,
+      etaExpiresAt: etaExpiresAt,
+    );
+  }
+}
+
+/// Compact in-transit sheet — progress dots + contact only (status lives on the map HUD).
+class _InTransitTrackingBody extends StatelessWidget {
+  const _InTransitTrackingBody({
+    required this.order,
+    required this.onOrderUpdated,
+    required this.searching,
+    required this.nearbyCount,
+    required this.mapHudActive,
+    this.etaPhrase,
+    this.etaMinutes,
+    this.etaDistanceText,
+    this.etaExpiresAt,
+  });
+
+  final Order order;
+  final ValueChanged<Order> onOrderUpdated;
+  final bool searching;
+  final int nearbyCount;
+  final bool mapHudActive;
+  final String? etaPhrase;
+  final int? etaMinutes;
+  final String? etaDistanceText;
+  final DateTime? etaExpiresAt;
+
+  @override
+  Widget build(BuildContext context) {
+    final showEta = !searching &&
+        order.riderId != null &&
+        (etaExpiresAt != null || etaMinutes != null || etaPhrase != null);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
       children: [
-        _LiveMapHint(
-          searching: searching,
-          hasRider: hasRider,
-          nearbyCount: nearbyCount,
-          distanceKm: dist,
-        ),
-        const SizedBox(height: 12),
-        _StatusHero(
-          order: order,
-          etaPhrase: etaPhrase,
-          etaMinutes: etaMinutes,
-          etaDistanceText: etaDistanceText,
-          etaExpiresAt: etaExpiresAt,
-          distanceKm: dist,
-          searching: searching,
-        ),
-        if (customerOrderHasShopPickup(order) &&
-            order.riderId != null &&
-            !searching &&
-            const {'ready', 'preparing', 'pending', 'picked_up'}.contains(order.status)) ...[
-          const SizedBox(height: 10),
-          _ShopPickupUpdateBanner(order: order),
-        ],
-        if (hasRider && order.riderName != null && order.riderName!.isNotEmpty) ...[
-          const SizedBox(height: 10),
-          _RiderLiveCard(
-            order: order,
-            distanceKm: dist,
-            etaPhrase: etaPhrase,
-            etaExpiresAt: etaExpiresAt,
-            etaMinutes: etaMinutes,
-            etaDistanceText: etaDistanceText,
+        CompactTripProgressBar(order: order, searching: searching),
+        if (showEta) ...[
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              if (etaExpiresAt != null || etaMinutes != null)
+                BoltEtaPill(
+                  minutes: etaMinutes,
+                  expiresAt: etaExpiresAt,
+                  subtitle: etaDistanceText,
+                  compact: true,
+                  label: 'route ETA',
+                )
+              else if (etaPhrase != null && etaPhrase!.isNotEmpty)
+                Expanded(
+                  child: Text(
+                    etaPhrase!,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w800,
+                      fontSize: 12,
+                      color: BytzGoTheme.brandBlue,
+                    ),
+                  ),
+                ),
+            ],
           ),
         ],
-        if (pickupLabel != null || dropoffLabel != null) ...[
+        if (tripAllowsContact(order)) ...[
           const SizedBox(height: 10),
-          _AddressSummary(
-            pickup: pickupLabel,
-            dropoff: dropoffLabel,
-          ),
+          _CompactContactRow(order: order),
         ],
         if (orderAllowsPulseGuide(order)) ...[
-          const SizedBox(height: 12),
+          const SizedBox(height: 8),
           PulseGuideButton(
             order: order,
             onOrderUpdated: onOrderUpdated,
           ),
         ],
-        if (tripAllowsContact(order)) ...[
-          const SizedBox(height: 12),
-          Consumer<TripChatUnread>(
-            builder: (context, unread, _) => TripContactActions(
-              order: order,
-              phone: order.riderPhone,
-              label: 'Contact your biker',
-              chatTitle: order.riderName != null && order.riderName!.isNotEmpty
-                  ? 'Chat with ${order.riderName}'
-                  : 'Chat with your biker',
-              unreadCount: unread.countFor(order.id),
-            ),
-          ),
-        ],
-        const SizedBox(height: 16),
-        DeliveryProgressTimeline(order: order),
         if (customerCanCancelOrder(order)) ...[
-          const SizedBox(height: 16),
+          const SizedBox(height: 8),
           CustomerCancelRequestButton(
             order: order,
             onOrderUpdated: onOrderUpdated,
           ),
         ],
-        if (order.status == 'arrived') ...[
-          const SizedBox(height: 16),
+      ],
+    );
+  }
+}
+
+/// Arrived phase — slim body; payment is pinned in the sheet footer.
+class _ArrivedTrackingBody extends StatelessWidget {
+  const _ArrivedTrackingBody({
+    required this.order,
+    required this.onOrderUpdated,
+    required this.omitPayment,
+  });
+
+  final Order order;
+  final ValueChanged<Order> onOrderUpdated;
+  final bool omitPayment;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        CompactTripProgressBar(order: order),
+        const SizedBox(height: 10),
+        if (tripAllowsContact(order)) _CompactContactRow(order: order),
+        if (!omitPayment) ...[
+          const SizedBox(height: 12),
           CustomerTripPaymentCard(
             order: order,
             onOrderUpdated: onOrderUpdated,
           ),
         ],
-        if (order.status == 'delivered') ...[
-          const SizedBox(height: 16),
-          RateDriverCard(order: order, onOrderUpdated: onOrderUpdated),
+      ],
+    );
+  }
+}
+
+class _CompactContactRow extends StatelessWidget {
+  const _CompactContactRow({required this.order});
+
+  final Order order;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: BytzGoTheme.sheetDivider.withValues(alpha: 0.35),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: BytzGoTheme.sheetDivider),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              order.riderName != null && order.riderName!.isNotEmpty
+                  ? order.riderName!
+                  : 'Your biker',
+              style: const TextStyle(
+                fontWeight: FontWeight.w800,
+                fontSize: 13,
+                color: BytzGoTheme.sheetText,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          Consumer<TripChatUnread>(
+            builder: (context, unread, _) => TripContactActions(
+              order: order,
+              phone: order.riderPhone,
+              label: 'Contact',
+              chatTitle: order.riderName != null && order.riderName!.isNotEmpty
+                  ? 'Chat with ${order.riderName}'
+                  : 'Chat with your biker',
+              compact: true,
+              unreadCount: unread.countFor(order.id),
+            ),
+          ),
         ],
+      ),
+    );
+  }
+}
+
+/// Horizontal progress only — no vertical timeline (saves ~120px of sheet height).
+class CompactTripProgressBar extends StatelessWidget {
+  const CompactTripProgressBar({
+    super.key,
+    required this.order,
+    this.searching = false,
+  });
+
+  final Order order;
+  final bool searching;
+
+  @override
+  Widget build(BuildContext context) {
+    final steps = customerTripSteps(order);
+    final current = steps.where((s) => s.current).map((s) => s.label).firstOrNull ??
+        steps.lastWhere((s) => s.active, orElse: () => steps.first).label;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          children: List.generate(steps.length, (i) {
+            final step = steps[i];
+            return Expanded(
+              child: _AnimatedProgressSegment(
+                active: step.active,
+                pulse: searching && step.current,
+                marginRight: i < steps.length - 1 ? 3 : 0,
+              ),
+            );
+          }),
+        ),
+        const SizedBox(height: 6),
+        Row(
+          children: [
+            Text(
+              current,
+              style: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w900,
+                color: BytzGoTheme.accentDark,
+                letterSpacing: 0.2,
+              ),
+            ),
+            const Spacer(),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: BytzGoTheme.accent.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Text(
+                'LIVE',
+                style: TextStyle(
+                  fontSize: 9,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 1,
+                  color: BytzGoTheme.accentDark,
+                ),
+              ),
+            ),
+          ],
+        ),
       ],
     );
   }
@@ -849,10 +1020,13 @@ class CustomerTripPaymentCard extends StatefulWidget {
     super.key,
     required this.order,
     required this.onOrderUpdated,
+    this.pinned = false,
   });
 
   final Order order;
   final ValueChanged<Order> onOrderUpdated;
+  /// Pinned sheet footer — tighter layout, always visible without scrolling.
+  final bool pinned;
 
   @override
   State<CustomerTripPaymentCard> createState() => _CustomerTripPaymentCardState();
@@ -862,6 +1036,7 @@ class _CustomerTripPaymentCardState extends State<CustomerTripPaymentCard> {
   final _referenceCtrl = TextEditingController();
   bool _loading = false;
   String? _error;
+  bool _showMomo = false;
 
   @override
   void dispose() {
@@ -911,224 +1086,354 @@ class _CustomerTripPaymentCardState extends State<CustomerTripPaymentCard> {
     final showPay = customerNeedsPayment(order);
     final showPin = customerCanShowDeliveryPin(order);
     final code = order.deliveryCode;
+    final pinned = widget.pinned;
 
     return Container(
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: BytzGoTheme.warning.withValues(alpha: 0.45)),
-        color: BytzGoTheme.warning.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(pinned ? 18 : 20),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: showPay
+              ? [const Color(0xFF0F172A), const Color(0xFF1E293B)]
+              : [BytzGoTheme.accent.withValues(alpha: 0.12), BytzGoTheme.sheetBg],
+        ),
+        border: Border.all(
+          color: showPay
+              ? BytzGoTheme.accent.withValues(alpha: 0.45)
+              : BytzGoTheme.accent.withValues(alpha: 0.35),
+        ),
+        boxShadow: showPay
+            ? [
+                BoxShadow(
+                  color: BytzGoTheme.accent.withValues(alpha: 0.18),
+                  blurRadius: 20,
+                  offset: const Offset(0, 8),
+                ),
+              ]
+            : null,
       ),
+      padding: EdgeInsets.all(pinned ? 14 : 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  showPay ? 'Complete payment' : 'Your delivery PIN',
-                  style: BytzGoTheme.sheetTitle(17),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: showPay
+                      ? BytzGoTheme.accent.withValues(alpha: 0.2)
+                      : BytzGoTheme.accent.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(12),
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  showPay
-                      ? 'Pay ${formatCedis(order.total)} — then give the 6-digit code to your driver.'
-                      : 'Tell your driver this code so they can complete the delivery.',
-                  style: BytzGoTheme.sheetBody(13),
-                ),
-              ],
-            ),
-          ),
-          if (showPay) ...[
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Text(
-                formatCedis(order.total),
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  fontSize: 28,
-                  fontWeight: FontWeight.w900,
-                  color: BytzGoTheme.sheetText,
+                child: Icon(
+                  showPay ? Icons.lock_open_rounded : Icons.key_rounded,
+                  color: showPay ? BytzGoTheme.accent : BytzGoTheme.accentDark,
+                  size: 22,
                 ),
               ),
-            ),
-            const SizedBox(height: 12),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: RidePrimaryButton(
-                label: 'Pay with wallet',
-                icon: Icons.account_balance_wallet_outlined,
-                loading: _loading,
-                onPressed: user.balance < order.total
-                    ? null
-                    : () => _run(
-                          () => context
-                              .read<OrdersRepository>()
-                              .payAtDeliveryWallet(order.id),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      showPay ? 'Driver arrived — pay to unlock PIN' : 'Share your delivery PIN',
+                      style: TextStyle(
+                        fontSize: pinned ? 14 : 15,
+                        fontWeight: FontWeight.w900,
+                        color: showPay ? Colors.white : BytzGoTheme.sheetText,
+                        height: 1.2,
+                      ),
+                    ),
+                    if (showPay) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        formatCedis(order.total),
+                        style: const TextStyle(
+                          fontSize: 26,
+                          fontWeight: FontWeight.w900,
+                          color: BytzGoTheme.accent,
+                          letterSpacing: -0.5,
                         ),
-              ),
-            ),
-            if (user.balance < order.total) ...[
-              const SizedBox(height: 6),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: Text(
-                  'Insufficient balance — top up wallet or use another method',
-                  style: BytzGoTheme.sheetBody(12),
-                  textAlign: TextAlign.center,
+                      ),
+                    ],
+                  ],
                 ),
               ),
             ],
-            const SizedBox(height: 10),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: OutlinedButton.icon(
-                onPressed: _loading
-                    ? null
-                    : () => _run(
+          ),
+          if (showPay) ...[
+            const SizedBox(height: 14),
+            Row(
+              children: [
+                Expanded(
+                  child: _PayMethodTile(
+                    icon: Icons.account_balance_wallet_outlined,
+                    label: 'Wallet',
+                    sub: formatCedis(user.balance),
+                    enabled: !_loading && user.balance >= order.total,
+                    primary: true,
+                    onTap: user.balance < order.total
+                        ? null
+                        : () => _run(
+                              () => context
+                                  .read<OrdersRepository>()
+                                  .payAtDeliveryWallet(order.id),
+                            ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: _PayMethodTile(
+                    icon: Icons.payments_outlined,
+                    label: 'Cash',
+                    sub: 'To driver',
+                    enabled: !_loading,
+                    onTap: () => _run(
                           () => context
                               .read<OrdersRepository>()
                               .ackCashPayment(order.id),
                         ),
-                icon: const Icon(Icons.payments_outlined),
-                label: const Text('I\'ll pay cash to driver'),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: BytzGoTheme.sheetText,
-                  minimumSize: const Size.fromHeight(50),
-                  side: BorderSide(color: BytzGoTheme.warning.withValues(alpha: 0.6)),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
                   ),
+                ),
+              ],
+            ),
+            if (user.balance < order.total) ...[
+              const SizedBox(height: 6),
+              Text(
+                'Wallet low — use cash or MoMo below',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.white.withValues(alpha: 0.65),
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ],
+            const SizedBox(height: 8),
+            TextButton.icon(
+              onPressed: _loading ? null : () => setState(() => _showMomo = !_showMomo),
+              icon: Icon(
+                _showMomo ? Icons.expand_less : Icons.expand_more,
+                size: 18,
+                color: Colors.white.withValues(alpha: 0.85),
+              ),
+              label: Text(
+                'Pay with MoMo / card',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.white.withValues(alpha: 0.85),
                 ),
               ),
             ),
-            const SizedBox(height: 12),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: TextField(
+            if (_showMomo) ...[
+              TextField(
                 controller: _referenceCtrl,
-                style: const TextStyle(color: BytzGoTheme.sheetText),
+                enabled: !_loading,
+                style: const TextStyle(color: Colors.white, fontSize: 13),
                 decoration: InputDecoration(
-                  labelText: 'MoMo / card payment reference',
-                  hintText: 'After paying online',
+                  hintText: 'Paste payment reference',
+                  hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.45)),
                   filled: true,
-                  fillColor: BytzGoTheme.sheetDivider.withValues(alpha: 0.35),
+                  fillColor: Colors.white.withValues(alpha: 0.08),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide.none,
+                    borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.15)),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.15)),
                   ),
                 ),
+              ),
+              const SizedBox(height: 8),
+              SizedBox(
+                height: 44,
+                child: OutlinedButton.icon(
+                  onPressed: _loading
+                      ? null
+                      : () {
+                          final ref = _referenceCtrl.text.trim();
+                          if (ref.isEmpty) {
+                            setState(() => _error = 'Paste your payment reference');
+                            return;
+                          }
+                          _run(
+                            () => context.read<OrdersRepository>().payAtDeliveryReference(
+                                  orderId: order.id,
+                                  paymentReference: ref,
+                                ),
+                          );
+                        },
+                  icon: const Icon(Icons.credit_card, size: 18),
+                  label: const Text('Confirm MoMo / card'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.white,
+                    side: BorderSide(color: Colors.white.withValues(alpha: 0.35)),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                ),
+              ),
+            ],
+          ],
+          if (showPin && code != null && code.length == 6) ...[
+            if (showPay) ...[
+              const SizedBox(height: 12),
+              Divider(color: Colors.white.withValues(alpha: 0.12), height: 1),
+              const SizedBox(height: 12),
+            ],
+            Text(
+              'Delivery PIN',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 1,
+                color: showPay ? Colors.white70 : BytzGoTheme.accentDark,
               ),
             ),
             const SizedBox(height: 10),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: OutlinedButton.icon(
-                onPressed: _loading
-                    ? null
-                    : () {
-                        final ref = _referenceCtrl.text.trim();
-                        if (ref.isEmpty) {
-                          setState(() => _error = 'Paste your payment reference');
-                          return;
-                        }
-                        _run(
-                          () => context.read<OrdersRepository>().payAtDeliveryReference(
-                                orderId: order.id,
-                                paymentReference: ref,
-                              ),
-                        );
-                      },
-                icon: const Icon(Icons.credit_card),
-                label: const Text('Confirm card / MoMo payment'),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: BytzGoTheme.sheetText,
-                  minimumSize: const Size.fromHeight(50),
-                  side: const BorderSide(color: BytzGoTheme.sheetDivider),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: code.split('').map((d) {
+                return Container(
+                  width: pinned ? 38 : 44,
+                  height: pinned ? 46 : 52,
+                  margin: const EdgeInsets.symmetric(horizontal: 3),
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: showPay ? Colors.white : BytzGoTheme.sheetText,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: BytzGoTheme.accent.withValues(alpha: 0.55),
+                      width: 2,
+                    ),
                   ),
+                  child: Text(
+                    d,
+                    style: TextStyle(
+                      fontSize: pinned ? 20 : 24,
+                      fontWeight: FontWeight.w900,
+                      color: BytzGoTheme.accent,
+                      fontFamily: 'monospace',
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+            const SizedBox(height: 8),
+            TextButton.icon(
+              onPressed: () => _copyPin(code),
+              icon: Icon(Icons.copy, size: 16, color: showPay ? Colors.white70 : BytzGoTheme.accentDark),
+              label: Text(
+                'Copy PIN',
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  color: showPay ? Colors.white70 : BytzGoTheme.accentDark,
                 ),
               ),
             ),
-            const SizedBox(height: 16),
           ],
-          if (showPin && code != null && code.length == 6) ...[
-            if (showPay) const Divider(height: 1),
-            Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Icon(Icons.key, size: 18, color: BytzGoTheme.accentDark),
-                      const SizedBox(width: 8),
-                      Text(
-                        'Delivery PIN',
-                        style: BytzGoTheme.sheetBody(12).copyWith(
-                          fontWeight: FontWeight.w800,
-                          color: BytzGoTheme.accentDark,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 14),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: code.split('').map((d) {
-                      return Container(
-                        width: 44,
-                        height: 52,
-                        margin: const EdgeInsets.symmetric(horizontal: 3),
-                        alignment: Alignment.center,
-                        decoration: BoxDecoration(
-                          color: BytzGoTheme.sheetText,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color: BytzGoTheme.accent.withValues(alpha: 0.5),
-                            width: 2,
-                          ),
-                        ),
-                        child: Text(
-                          d,
-                          style: const TextStyle(
-                            fontSize: 24,
-                            fontWeight: FontWeight.w900,
-                            color: BytzGoTheme.accent,
-                            fontFamily: 'monospace',
-                          ),
-                        ),
-                      );
-                    }).toList(),
-                  ),
-                  const SizedBox(height: 14),
-                  TextButton.icon(
-                    onPressed: () => _copyPin(code),
-                    icon: const Icon(Icons.copy, size: 18),
-                    label: const Text(
-                      'Copy PIN',
-                      style: TextStyle(fontWeight: FontWeight.w700),
-                    ),
-                  ),
-                ],
+          if (_error != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              _error!,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: showPay ? const Color(0xFFFCA5A5) : BytzGoTheme.danger,
+                fontWeight: FontWeight.w600,
+                fontSize: 12,
               ),
             ),
           ],
-          if (_error != null)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-              child: Text(
-                _error!,
-                style: const TextStyle(
-                  color: BytzGoTheme.danger,
-                  fontWeight: FontWeight.w600,
-                  fontSize: 13,
+          if (_loading)
+            const Padding(
+              padding: EdgeInsets.only(top: 10),
+              child: Center(
+                child: SizedBox(
+                  width: 22,
+                  height: 22,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: BytzGoTheme.accent),
                 ),
               ),
             ),
         ],
+      ),
+    );
+  }
+}
+
+class _PayMethodTile extends StatelessWidget {
+  const _PayMethodTile({
+    required this.icon,
+    required this.label,
+    required this.sub,
+    required this.onTap,
+    this.enabled = true,
+    this.primary = false,
+  });
+
+  final IconData icon;
+  final String label;
+  final String sub;
+  final VoidCallback? onTap;
+  final bool enabled;
+  final bool primary;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: primary
+          ? BytzGoTheme.accent
+          : Colors.white.withValues(alpha: enabled ? 0.1 : 0.05),
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        onTap: enabled ? onTap : null,
+        borderRadius: BorderRadius.circular(14),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+          child: Column(
+            children: [
+              Icon(
+                icon,
+                size: 22,
+                color: primary
+                    ? const Color(0xFF020617)
+                    : Colors.white.withValues(alpha: enabled ? 0.9 : 0.4),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w900,
+                  color: primary
+                      ? const Color(0xFF020617)
+                      : Colors.white.withValues(alpha: enabled ? 0.95 : 0.4),
+                ),
+              ),
+              Text(
+                sub,
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w600,
+                  color: primary
+                      ? const Color(0xFF020617).withValues(alpha: 0.65)
+                      : Colors.white.withValues(alpha: 0.55),
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

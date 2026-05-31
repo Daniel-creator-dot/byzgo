@@ -18,6 +18,7 @@ import {
   Upload,
   IdCard,
   Camera,
+  MessageCircle,
 } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -32,6 +33,11 @@ import { RiderDriveMap } from './RiderDriveMap';
 import { RiderMapPlaceholder } from './RiderMapPlaceholder';
 import { ActiveTripHud } from './ActiveTripHud';
 import { DeliveryPinModal } from './DeliveryPinModal';
+import { RiderDeliveryCompletionCard } from './RiderDeliveryCompletionCard';
+import {
+  RiderTripProgressBar,
+  riderTrackingSheetMaxClass,
+} from './riderTripUi';
 import type { RouteSummary } from './MapDirections';
 import { LoadingIndicator } from '../UI';
 import {
@@ -676,11 +682,14 @@ export function RiderApp({
                 )}
               </motion.div>
 
-              {/* Bottom sheet */}
+              {/* Bottom sheet — compact during active trip; pinned footer for primary CTA / PIN */}
               <div
                 className={cn(
                   'shrink-0 bg-slate-900 rounded-t-[1.75rem] border-t border-slate-800 shadow-[0_-20px_60px_rgba(0,0,0,0.5)] flex flex-col transition-all',
-                  isNavigating ? 'max-h-[32vh]' : 'max-h-[48vh]'
+                  riderTrackingSheetMaxClass(
+                    sheetTab === 'active' ? primaryActiveOrder : null,
+                    isNavigating
+                  )
                 )}
               >
                 <div className="w-10 h-1 bg-slate-700 rounded-full mx-auto mt-2 mb-1" />
@@ -707,7 +716,7 @@ export function RiderApp({
                   </button>
                 </div>
 
-                <div className="overflow-y-auto flex-1 px-4 pb-4 space-y-3">
+                <div className="overflow-y-auto flex-1 px-4 pb-2 space-y-3 min-h-0">
                   {sheetTab === 'requests' && (
                     <>
                       {!isOnline ? (
@@ -801,17 +810,62 @@ export function RiderApp({
                       <p className="text-center text-slate-500 text-sm py-8">No active trips</p>
                     ) : (
                       activeOrders.map((order) => {
+                        const isPrimary = order.id === primaryActiveOrder?.id;
+                        const navTarget = getNavigationTarget(order, vendors);
+                        const customerPhone =
+                          order.customerPhone ??
+                          (order as Order & { customer_phone?: string }).customer_phone;
+                        const customerName =
+                          order.customer_name ||
+                          (order as Order & { customerName?: string }).customerName ||
+                          'Customer';
+
+                        if (isPrimary) {
+                          return (
+                            <div
+                              key={order.id}
+                              className="p-3 rounded-2xl bg-slate-800/50 border border-brand-green/20 space-y-3"
+                            >
+                              <div className="flex justify-between items-center gap-2">
+                                <span className="font-black">#{order.id.slice(-4)}</span>
+                                <PaymentChip order={order} />
+                              </div>
+                              <RiderTripProgressBar order={order} />
+                              <div className="flex items-center gap-2 rounded-xl bg-slate-800/60 border border-slate-700/80 px-3 py-2">
+                                <span className="flex-1 text-sm font-bold text-white truncate">
+                                  {customerName}
+                                </span>
+                                {customerPhone && (
+                                  <>
+                                    <a
+                                      href={`tel:${customerPhone}`}
+                                      className="w-9 h-9 rounded-lg bg-slate-900 border border-slate-700 flex items-center justify-center text-slate-300 hover:text-white"
+                                      aria-label="Call customer"
+                                    >
+                                      <Phone size={16} />
+                                    </a>
+                                    <a
+                                      href={`sms:${customerPhone}`}
+                                      className="w-9 h-9 rounded-lg bg-brand-blue flex items-center justify-center text-white"
+                                      aria-label="Text customer"
+                                    >
+                                      <MessageCircle size={16} />
+                                    </a>
+                                  </>
+                                )}
+                              </div>
+                              {navTarget && order.status !== 'arrived' && (
+                                <p className="text-xs text-slate-400 truncate">
+                                  <Navigation size={12} className="inline mr-1 text-brand-green" />
+                                  {navTarget.label}
+                                </p>
+                              )}
+                            </div>
+                          );
+                        }
+
                         const vendor = getVendor(order);
                         const isCourier = (order as Order & { order_type?: string }).order_type === 'courier';
-                        const step =
-                          order.status === 'ready'
-                            ? 1
-                            : order.status === 'picked_up'
-                              ? 2
-                              : order.status === 'arrived'
-                                ? 3
-                                : 4;
-                        const navTarget = getNavigationTarget(order, vendors);
                         const tripLeg = getTripPhase(order);
                         return (
                           <div
@@ -820,26 +874,11 @@ export function RiderApp({
                           >
                             <div className="flex justify-between items-center mb-3 gap-2">
                               <span className="font-black text-lg">#{order.id.slice(-4)}</span>
-                              <div className="flex items-center gap-2">
-                                <PaymentChip order={order} />
-                                <span className="text-[10px] font-black uppercase tracking-widest text-brand-green">
-                                  {order.status.replace('_', ' ')}
-                                </span>
-                              </div>
+                              <PaymentChip order={order} />
                             </div>
-                            <div className="flex gap-1 mb-4">
-                              {[1, 2, 3, 4].map((s) => (
-                                <motion.div
-                                  key={s}
-                                  className={cn(
-                                    'h-1 flex-1 rounded-full',
-                                    s <= step ? 'bg-brand-green' : 'bg-slate-700'
-                                  )}
-                                />
-                              ))}
-                            </div>
+                            <RiderTripProgressBar order={order} />
                             {vendor && !isCourier && (
-                              <p className="text-xs text-slate-400 mb-2">
+                              <p className="text-xs text-slate-400 mt-3 mb-2">
                                 <Store size={12} className="inline mr-1" />
                                 Pickup: {vendor.name}
                               </p>
@@ -932,6 +971,96 @@ export function RiderApp({
                       })
                     ))}
                 </div>
+
+                {/* Pinned primary trip actions — always visible without scrolling */}
+                {sheetTab === 'active' && primaryActiveOrder && (
+                  <div className="shrink-0 px-4 pb-3 pt-1 bg-gradient-to-t from-slate-950 via-slate-900/95 to-transparent border-t border-slate-800/80">
+                    {primaryActiveOrder.status === 'arrived' ? (
+                      <RiderDeliveryCompletionCard
+                        order={primaryActiveOrder}
+                        pinned
+                        onSuccess={async () => {
+                          setNavigatingTo(null);
+                          setRouteSummary(null);
+                          addNotification?.('Delivery completed!', 'success');
+                          await refreshData?.();
+                        }}
+                        onError={(msg) => addNotification?.(msg, 'warning')}
+                      />
+                    ) : (
+                      <div className="space-y-2">
+                        {(() => {
+                          const navTarget = getNavigationTarget(primaryActiveOrder, vendors);
+                          return navTarget ? (
+                            <p className="text-xs text-slate-400 truncate">{navTarget.label}</p>
+                          ) : null;
+                        })()}
+                        <div className="grid grid-cols-[auto_1fr] gap-2">
+                          <button
+                            type="button"
+                            onClick={() => beginTripNavigation(primaryActiveOrder)}
+                            className="px-4 py-3.5 rounded-xl bg-slate-800 border border-slate-700 font-black text-[10px] uppercase tracking-widest text-white"
+                          >
+                            Maps
+                          </button>
+                          {primaryActiveOrder.status === 'ready' ? (
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                const ok = await onUpdateStatus(primaryActiveOrder.id, 'picked_up');
+                                if (ok) beginTripNavigation(primaryActiveOrder);
+                              }}
+                              className="py-3.5 rounded-xl bg-brand-blue font-black text-[10px] uppercase tracking-widest"
+                            >
+                              Picked up
+                            </button>
+                          ) : primaryActiveOrder.status === 'picked_up' ? (
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                try {
+                                  await axios.patch(`/api/orders/${primaryActiveOrder.id}/arrive`);
+                                  addNotification?.('Marked arrived — customer can pay & share PIN', 'success');
+                                  await refreshData?.();
+                                } catch (err: unknown) {
+                                  const msg = (err as { response?: { data?: { message?: string } } })?.response
+                                    ?.data?.message;
+                                  addNotification?.(msg || 'Could not mark arrived', 'warning');
+                                }
+                              }}
+                              className="py-3.5 rounded-xl bg-amber-500 font-black text-[10px] uppercase tracking-widest text-slate-950"
+                            >
+                              I&apos;ve arrived
+                            </button>
+                          ) : null}
+                        </div>
+                        {primaryActiveOrder.status === 'ready' && (
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              if (!window.confirm('Release this trip before pickup? It will be offered to other drivers.')) {
+                                return;
+                              }
+                              try {
+                                await releaseRiderTrip(primaryActiveOrder.id);
+                                addNotification?.('Trip released', 'success');
+                                await refreshData?.();
+                                await loadDriverExtras();
+                              } catch (err: unknown) {
+                                const msg = (err as { response?: { data?: { message?: string } } })?.response
+                                  ?.data?.message;
+                                addNotification?.(msg || 'Could not release trip', 'warning');
+                              }
+                            }}
+                            className="w-full py-2 text-[10px] font-black uppercase tracking-widest text-red-400 border border-red-500/30 rounded-xl"
+                          >
+                            Release trip (before pickup)
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </motion.div>
           )}

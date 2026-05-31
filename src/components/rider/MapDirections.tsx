@@ -61,13 +61,18 @@ export function MapDirections({
         destination,
         travelMode: google.maps.TravelMode.DRIVING,
         region: 'GH',
+        drivingOptions: {
+          departureTime: new Date(),
+          trafficModel: google.maps.TrafficModel.BEST_GUESS,
+        },
       })
       .then((response) => {
         directionsRenderer.setDirections(response);
         const leg = response.routes[0]?.legs[0];
-        if (leg?.duration && leg?.distance) {
+        const duration = leg?.duration_in_traffic ?? leg?.duration;
+        if (duration && leg?.distance) {
           onRouteUpdate?.({
-            eta: leg.duration.text,
+            eta: duration.text,
             distance: leg.distance.text,
           });
         }

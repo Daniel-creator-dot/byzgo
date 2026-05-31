@@ -96,6 +96,8 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
   Timer? _etaPoll;
   DateTime? _lastEtaFetch;
   LocationPoint? _lastEtaOrigin;
+  String? _lastEtaOrderStatus;
+  String? _lastEtaTargetKey;
   SocketService? _socket;
   OrderMessageHandler? _chatNotifyHandler;
   final _mapKey = GlobalKey<RideGoogleMapState>();
@@ -512,7 +514,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
         );
       });
       _mapKey.currentState?.fitAllMarkers();
-      if (active != null) unawaited(_refreshEta(active));
+      if (active != null) unawaited(_refreshEta(active, force: true));
     };
   }
 
@@ -574,15 +576,27 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
     final hasRider = order.riderId != null &&
         !['delivered', 'cancelled'].contains(order.status);
     if (hasRider) {
+      final target = customerRiderNavTarget(order);
+      final targetKey = target != null && target.hasCoords
+          ? '${target.lat.toStringAsFixed(5)},${target.lng.toStringAsFixed(5)}'
+          : null;
+      if (_lastEtaOrderStatus != order.status || targetKey != _lastEtaTargetKey) {
+        _lastEtaOrderStatus = order.status;
+        _lastEtaTargetKey = targetKey;
+        _lastEtaFetch = null;
+        _lastEtaOrigin = null;
+      }
       if (_etaPoll == null) {
-        unawaited(_refreshEta(order));
+        unawaited(_refreshEta(order, force: true));
         _etaPoll = Timer.periodic(
-          const Duration(seconds: 12),
+          const Duration(seconds: 6),
           (_) {
             final active = _activeCourier;
             if (active != null) unawaited(_refreshEta(active));
           },
         );
+      } else if (_lastEtaFetch == null) {
+        unawaited(_refreshEta(order, force: true));
       }
     } else {
       _etaPoll?.cancel();
@@ -601,23 +615,24 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
     }
   }
 
-  Future<void> _refreshEta(Order order) async {
+  Future<void> _refreshEta(Order order, {bool force = false}) async {
     if (_riderPosition == null || !(_riderPosition!.hasCoords)) return;
     final target = customerRiderNavTarget(order);
     if (target == null || !target.hasCoords) return;
 
     final origin = _riderPosition!;
     final now = DateTime.now();
-    if (_lastEtaFetch != null &&
+    if (!force &&
+        _lastEtaFetch != null &&
         _lastEtaOrigin != null &&
-        now.difference(_lastEtaFetch!) < const Duration(seconds: 12)) {
+        now.difference(_lastEtaFetch!) < const Duration(seconds: 6)) {
       final moved = haversineDistanceKm(
         _lastEtaOrigin!.lat,
         _lastEtaOrigin!.lng,
         origin.lat,
         origin.lng,
       );
-      if (moved < 0.03) return;
+      if (moved < 0.015) return;
     }
 
     final summary = await _directions.fetchRoute(
@@ -987,11 +1002,24 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
     final media = MediaQuery.of(context);
     final screenH = media.size.height;
     final sheetFrac = tracking
-        ? (widget.embedded ? 0.38 : 0.40)
+        ? customerTrackingSheetFraction(
+            active,
+            embedded: widget.embedded,
+            searching: searching,
+          )
         : (widget.embedded ? (fee > 0 ? 0.64 : 0.58) : (fee > 0 ? 0.78 : 0.72));
     final effFrac = sheetFrac;
+    final isArrived = tracking && active.status == 'arrived';
+    final paymentFooter = isArrived &&
+            (customerNeedsPayment(active) || customerCanShowDeliveryPin(active))
+        ? CustomerTripPaymentCard(
+            order: active,
+            onOrderUpdated: _replaceOrder,
+            pinned: true,
+          )
+        : null;
     final mapPadding = EdgeInsets.only(
-      top: media.padding.top + (tracking ? 72.0 : 8.0),
+      top: media.padding.top + (tracking ? 64.0 : 8.0),
       bottom: screenH * effFrac + 12.0,
     );
 
@@ -1036,19 +1064,19 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
               etaExpiresAt: _etaExpiresAt,
               riderPosition: _riderPosition,
               navTarget: navTarget,
+              minimalChrome: isArrived,
               onRecenter: () => _mapKey.currentState?.fitAllMarkers(),
             )
           : null,
       sheet: RideSheet(
         scrollController: _sheetScrollCtrl,
-        maxHeightFraction: tracking
-            ? (widget.embedded ? 0.38 : 0.40)
-            : (widget.embedded ? (fee > 0 ? 0.64 : 0.58) : (fee > 0 ? 0.78 : 0.72)),
+        maxHeightFraction: sheetFrac,
         bottomInset: widget.embedded ? 12 : 0,
         padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
         footerPadding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
         scrollBottomPadding: !tracking && fee > 0 ? 12 : 0,
-        footer: !tracking
+        footer: paymentFooter ??
+            (!tracking
             ? Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1076,7 +1104,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
                   ),
                 ],
               )
-            : null,
+            : null),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           mainAxisSize: MainAxisSize.min,
@@ -1107,6 +1135,8 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
                 navTarget: navTarget,
                 searching: searching,
                 nearbyCount: _nearbyRiders.length,
+                omitPayment: isArrived,
+                mapHudActive: true,
               ),
             ],
             if (!tracking) ...[

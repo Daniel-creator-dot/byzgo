@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { ChevronUp, MapPin, Navigation, Package, ShoppingBag } from 'lucide-react';
+import { ChevronUp, MapPin, Navigation, Package, ShoppingBag, Phone, MessageCircle } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { Order } from '../../types';
@@ -40,10 +40,10 @@ export function LiveTripTracker({
   refreshData: () => void | Promise<void>;
 }) {
   const [eta, setEta] = useState<string | null>(null);
-  const [sheetExpanded, setSheetExpanded] = useState(
-    order.status === 'arrived' || order.status === 'delivered'
-  );
+  const [sheetExpanded, setSheetExpanded] = useState(false);
 
+  const isArrived = order.status === 'arrived';
+  const isDelivered = order.status === 'delivered';
   const isCourier = (order as Order & { order_type?: string }).order_type === 'courier';
   const pickup = getPickupCoordsForOrder(order, vendors);
   const dropoff = getDropoffCoords(order);
@@ -65,14 +65,18 @@ export function LiveTripTracker({
   const headline = getCustomerTripHeadline(order);
   const pickupLabel = pickup?.label || vendor?.name || 'Pickup';
   const dropoffLabel = dropoff?.label || order.address || 'Your address';
+  const riderPhone = order.riderPhone ?? order.rider_phone;
+
+  const mapHeightClass = isArrived
+    ? 'h-[calc(100dvh-19rem)] min-h-[340px]'
+    : isDelivered
+      ? 'h-[calc(100dvh-14rem)] min-h-[320px]'
+      : 'h-[calc(100dvh-12rem)] min-h-[380px] max-h-[720px]';
 
   return (
-    <div className="relative w-full">
-      <motion.div
-        layout
-        className="relative h-[calc(100dvh-10.5rem)] min-h-[380px] max-h-[720px] bg-slate-950 overflow-hidden"
-      >
-        {!riderLocation && order.rider_id && (
+    <div className="relative w-full flex flex-col">
+      <motion.div layout className={cn('relative bg-slate-950 overflow-hidden', mapHeightClass)}>
+        {!riderLocation && order.rider_id && !isArrived && (
           <motion.div className="absolute inset-0 z-20 flex items-center justify-center bg-slate-950/50 backdrop-blur-[2px] pointer-events-none">
             <div className="bg-slate-900/95 px-5 py-3 rounded-2xl border border-slate-700 flex items-center gap-3 shadow-xl">
               <div className="w-2.5 h-2.5 bg-brand-blue rounded-full animate-ping" />
@@ -104,7 +108,7 @@ export function LiveTripTracker({
                 <div
                   className={cn(
                     'w-10 h-10 rounded-xl flex items-center justify-center shrink-0',
-                    order.status === 'arrived' ? 'bg-amber-500/20' : 'bg-brand-green/20'
+                    isArrived ? 'bg-amber-500/20' : 'bg-brand-green/20'
                   )}
                 >
                   {isCourier ? (
@@ -129,7 +133,7 @@ export function LiveTripTracker({
                   )}
                 </div>
               </motion.div>
-              {eta && (
+              {eta && !isArrived && (
                 <div className="text-right shrink-0">
                   <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">ETA</p>
                   <p className="text-lg font-black text-brand-green font-mono leading-tight">{eta}</p>
@@ -140,75 +144,91 @@ export function LiveTripTracker({
         </div>
       </motion.div>
 
-      <motion.div
-        layout
-        className="relative z-20 -mt-6 max-w-lg mx-auto px-4"
-      >
-        <button
-          type="button"
-          onClick={() => setSheetExpanded((v) => !v)}
-          className="w-full flex flex-col items-center pt-2 pb-1"
-          aria-expanded={sheetExpanded}
-        >
-          <span className="w-10 h-1 rounded-full bg-slate-600 mb-1" />
-          <span className="text-[9px] font-black uppercase tracking-widest text-slate-500 flex items-center gap-1">
-            {sheetExpanded ? 'Less' : 'Trip details'}
-            <ChevronUp
-              size={12}
-              className={cn('transition-transform', sheetExpanded ? 'rotate-180' : '')}
-            />
-          </span>
-        </button>
-
-        <motion.div
+      {/* Compact trip sheet — progress + contact only; payment pinned below when arrived */}
+      <motion.div layout className="relative z-20 -mt-5 max-w-lg mx-auto w-full px-4">
+        <div
           className={cn(
-            'rounded-t-[1.75rem] bg-slate-900 border border-slate-800 border-b-0 shadow-[0_-12px_40px_rgba(0,0,0,0.45)] overflow-hidden',
-            sheetExpanded ? '' : 'max-h-[220px]'
+            'rounded-t-[1.75rem] bg-slate-900 border border-slate-800 shadow-[0_-12px_40px_rgba(0,0,0,0.45)] overflow-hidden',
+            !isArrived && !isDelivered && !sheetExpanded && 'max-h-[168px]'
           )}
         >
-          <div className="px-4 pt-2 pb-4 space-y-4">
+          {!isArrived && !isDelivered && (
+            <button
+              type="button"
+              onClick={() => setSheetExpanded((v) => !v)}
+              className="w-full flex flex-col items-center pt-2 pb-1"
+              aria-expanded={sheetExpanded}
+            >
+              <span className="w-10 h-1 rounded-full bg-slate-600 mb-1" />
+              <span className="text-[9px] font-black uppercase tracking-widest text-slate-500 flex items-center gap-1">
+                {sheetExpanded ? 'Less' : 'Trip details'}
+                <ChevronUp
+                  size={12}
+                  className={cn('transition-transform', sheetExpanded ? 'rotate-180' : '')}
+                />
+              </span>
+            </button>
+          )}
+
+          <div className="px-4 pt-2 pb-3 space-y-3">
             <TripProgressBar order={order} isCourier={isCourier} />
 
-            <div className="space-y-2.5">
-              <div className="flex items-start gap-3">
-                <motion.div className="w-8 h-8 rounded-lg bg-brand-blue/20 flex items-center justify-center shrink-0 mt-0.5">
-                  <MapPin size={14} className="text-brand-blue" />
-                </motion.div>
-                <div className="min-w-0">
-                  <p className="text-[9px] font-black uppercase tracking-widest text-slate-500">Pickup</p>
-                  <p className="text-sm font-bold text-white leading-snug">{pickupLabel}</p>
-                </div>
+            {order.rider_id && (
+              <div className="flex items-center gap-2 rounded-xl bg-slate-800/60 border border-slate-700/80 px-3 py-2">
+                <span className="flex-1 text-sm font-bold text-white truncate">
+                  {order.rider_name || 'Your biker'}
+                </span>
+                {riderPhone && (
+                  <>
+                    <a
+                      href={`tel:${riderPhone}`}
+                      className="w-9 h-9 rounded-lg bg-slate-900 border border-slate-700 flex items-center justify-center text-slate-300 hover:text-white"
+                      aria-label="Call biker"
+                    >
+                      <Phone size={16} />
+                    </a>
+                    <a
+                      href={`sms:${riderPhone}`}
+                      className="w-9 h-9 rounded-lg bg-brand-blue flex items-center justify-center text-white"
+                      aria-label="Text biker"
+                    >
+                      <MessageCircle size={16} />
+                    </a>
+                  </>
+                )}
               </div>
-              <div className="flex items-start gap-3">
-                <motion.div className="w-8 h-8 rounded-lg bg-brand-green/20 flex items-center justify-center shrink-0 mt-0.5">
-                  <Navigation size={14} className="text-brand-green" />
-                </motion.div>
-                <div className="min-w-0">
-                  <p className="text-[9px] font-black uppercase tracking-widest text-slate-500">Drop-off</p>
-                  <p className="text-sm font-bold text-white leading-snug">{dropoffLabel}</p>
-                </div>
-              </div>
-            </div>
+            )}
 
             <AnimatePresence>
-              {order.status === 'arrived' && (
+              {(sheetExpanded || isDelivered) && !isArrived && (
                 <motion.div
                   initial={{ opacity: 0, height: 0 }}
                   animate={{ opacity: 1, height: 'auto' }}
                   exit={{ opacity: 0, height: 0 }}
+                  className="space-y-2.5 overflow-hidden"
                 >
-                  <TripCompletionCard
-                    order={order}
-                    user={user}
-                    paystackKey={paystackKey}
-                    setPaystackKey={setPaystackKey}
-                    addNotification={addNotification}
-                    refreshData={refreshData}
-                    embedded
-                  />
+                  <div className="flex items-start gap-3">
+                    <div className="w-8 h-8 rounded-lg bg-brand-blue/20 flex items-center justify-center shrink-0 mt-0.5">
+                      <MapPin size={14} className="text-brand-blue" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-[9px] font-black uppercase tracking-widest text-slate-500">Pickup</p>
+                      <p className="text-sm font-bold text-white leading-snug">{pickupLabel}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-3">
+                    <div className="w-8 h-8 rounded-lg bg-brand-green/20 flex items-center justify-center shrink-0 mt-0.5">
+                      <Navigation size={14} className="text-brand-green" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-[9px] font-black uppercase tracking-widest text-slate-500">Drop-off</p>
+                      <p className="text-sm font-bold text-white leading-snug">{dropoffLabel}</p>
+                    </div>
+                  </div>
                 </motion.div>
               )}
-              {order.status === 'delivered' && (
+
+              {isDelivered && (
                 <motion.div
                   initial={{ opacity: 0, height: 0 }}
                   animate={{ opacity: 1, height: 'auto' }}
@@ -223,8 +243,23 @@ export function LiveTripTracker({
               )}
             </AnimatePresence>
           </div>
-        </motion.div>
+        </div>
       </motion.div>
+
+      {/* Pinned payment dock — always visible when driver arrives, no scroll needed */}
+      {isArrived && (
+        <div className="sticky bottom-0 z-30 max-w-lg mx-auto w-full px-4 pb-2 pt-1 bg-gradient-to-t from-slate-950 via-slate-950/95 to-transparent">
+          <TripCompletionCard
+            order={order}
+            user={user}
+            paystackKey={paystackKey}
+            setPaystackKey={setPaystackKey}
+            addNotification={addNotification}
+            refreshData={refreshData}
+            pinned
+          />
+        </div>
+      )}
     </div>
   );
 }

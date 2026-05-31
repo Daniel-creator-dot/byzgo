@@ -165,6 +165,78 @@ int activeTripStep(Order order) {
   }
 }
 
+/// Rider-facing trip progress — mirrors web `riderTripUi.tsx`.
+class RiderTripStep {
+  const RiderTripStep({
+    required this.label,
+    required this.active,
+    this.current = false,
+  });
+
+  final String label;
+  final bool active;
+  final bool current;
+}
+
+List<RiderTripStep> riderTripSteps(Order order) {
+  final step = activeTripStep(order);
+  const labels = ['Accepted', 'Picked up', 'Arrived', 'Complete'];
+  return List.generate(labels.length, (i) {
+    return RiderTripStep(
+      label: labels[i],
+      active: i < step,
+      current: i == step - 1 || (step == 0 && i == 0),
+    );
+  });
+}
+
+String riderTripHeadline(Order order) {
+  switch (order.status) {
+    case 'ready':
+      return 'Head to pickup';
+    case 'picked_up':
+      return 'Head to drop-off';
+    case 'arrived':
+      return isPaymentReady(order) ? 'Enter customer PIN' : 'Waiting for payment';
+    default:
+      return 'Active delivery';
+  }
+}
+
+String riderTripSubline(Order order, {String? navLabel}) {
+  if (navLabel != null && navLabel.isNotEmpty) {
+    return navLabel;
+  }
+  switch (order.status) {
+    case 'ready':
+      return 'Collect the order, then mark picked up';
+    case 'picked_up':
+      return 'Navigate to the customer';
+    case 'arrived':
+      if (!isPaymentReady(order)) {
+        return 'Customer must confirm payment in the app';
+      }
+      return 'Ask for the 6-digit PIN to complete';
+    default:
+      return '';
+  }
+}
+
+/// Bottom-sheet height during active delivery — keeps map visible; taller when
+/// arrived so the PIN footer fits without scrolling.
+double riderTrackingSheetFraction(Order order) {
+  switch (order.status) {
+    case 'arrived':
+      return 0.44;
+    case 'picked_up':
+      return 0.22;
+    case 'ready':
+      return 0.24;
+    default:
+      return 0.26;
+  }
+}
+
 bool isOfferableOrder(Order order) {
   if (order.riderId != null) return false;
   if (const {'cancelled', 'delivered', 'picked_up', 'arrived'}.contains(order.status)) {

@@ -3261,11 +3261,18 @@ function Directions({ origin, destination, onETAUpdate }: { origin: google.maps.
     directionsService.route({
       origin,
       destination,
-      travelMode: google.maps.TravelMode.DRIVING
+      travelMode: google.maps.TravelMode.DRIVING,
+      region: 'GH',
+      drivingOptions: {
+        departureTime: new Date(),
+        trafficModel: google.maps.TrafficModel.BEST_GUESS,
+      },
     }).then(response => {
       directionsRenderer.setDirections(response);
-      if (onETAUpdate && response.routes[0]?.legs[0]?.duration) {
-        onETAUpdate(response.routes[0].legs[0].duration.text);
+      if (onETAUpdate) {
+        const leg = response.routes[0]?.legs[0];
+        const duration = leg?.duration_in_traffic ?? leg?.duration;
+        if (duration) onETAUpdate(duration.text);
       }
       lastOriginRef.current = origin;
     }).catch(err => console.warn("Routing failed", err));
