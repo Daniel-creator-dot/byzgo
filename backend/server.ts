@@ -6942,17 +6942,37 @@ app.get('/terms', serveLegalPage('terms'));
 app.get('/account-deletion', serveLegalPage('account-deletion'));
 
 /** Direct APK install for testers / before Play listing (file copied by scripts/copy-apk-to-public.mjs). */
-app.get('/download/android', (_req, res) => {
+app.get('/download/android/version', (_req, res) => {
   const candidates = [
-    path.join(__dirname, '..', 'dist', 'bytzgo.apk'),
+    path.join(__dirname, '..', 'public', 'android-version.json'),
+    path.join(__dirname, '..', 'dist', 'android-version.json'),
+  ];
+  const file = candidates.find((p) => fs.existsSync(p));
+  if (!file) {
+    return res.json({ version: 'unknown' });
+  }
+  res.setHeader('Cache-Control', 'no-store');
+  res.type('json').sendFile(file);
+});
+
+app.get('/download/android', (_req, res) => {
+  // Prefer public/ — git-tracked release APK. dist/ is vite copy and can lag on Render.
+  const candidates = [
     path.join(__dirname, '..', 'public', 'bytzgo.apk'),
+    path.join(__dirname, '..', 'dist', 'bytzgo.apk'),
   ];
   const apk = candidates.find((p) => fs.existsSync(p));
   if (!apk) {
     return res.status(404).type('text/plain').send('APK not published yet. Check back after the next release.');
   }
+  const stat = fs.statSync(apk);
   res.setHeader('Content-Type', 'application/vnd.android.package-archive');
   res.setHeader('Content-Disposition', 'attachment; filename="BytzGo.apk"');
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Content-Length', String(stat.size));
+  res.setHeader('Last-Modified', stat.mtime.toUTCString());
+  res.setHeader('ETag', `"bytzgo-apk-${stat.size}-${stat.mtimeMs}"`);
   res.sendFile(apk);
 });
 
