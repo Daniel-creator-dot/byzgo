@@ -53,7 +53,9 @@
 		<string>remote-notification</string>
 	</array>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>BytzGo needs your location to set pickup and drop-off points and track deliveries.</string>
+	<string>BytzGo needs your location to set pickup and drop-off points, show your trip on the map, and share live rider position during deliveries.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>BytzGo uses your location in the background while you are online as a rider or during an active delivery, so customers can see live trip progress and navigation stays accurate.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>BytzGo uses the camera for profile photos, shop images, and rider verification documents.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
