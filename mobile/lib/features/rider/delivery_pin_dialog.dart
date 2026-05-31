@@ -81,19 +81,40 @@ class _DeliveryPinDialogState extends State<DeliveryPinDialog> {
       setState(() => _error = 'Enter the 6-digit PIN from the customer.');
       return;
     }
-    if (_order.status != 'arrived') {
-      setState(() => _error = 'Tap "Arrived" on the trip before completing delivery.');
-      return;
-    }
-    if (!isPaymentReady(_order)) {
-      setState(() => _error =
-          'Customer must confirm payment in the app first (pay or tap "I\'ll pay cash"), then share their PIN.');
-      return;
-    }
+
     setState(() {
       _submitting = true;
       _error = null;
     });
+
+    // Sync the latest payment ack / status from the server so the first attempt
+    // doesn't fail on stale client state (common right after customer pays).
+    try {
+      final orders = await widget.orders.fetchOrders();
+      final fresh = orders.where((o) => o.id == widget.order.id).firstOrNull;
+      if (fresh != null && mounted) {
+        setState(() => _order = fresh);
+      }
+    } catch (_) {}
+
+    if (_order.status != 'arrived') {
+      if (!mounted) return;
+      setState(() {
+        _error = 'Tap "Arrived" on the trip before completing delivery.';
+        _submitting = false;
+      });
+      return;
+    }
+    if (!isPaymentReady(_order)) {
+      if (!mounted) return;
+      setState(() {
+        _error =
+            'Customer must confirm payment in the app first (pay or tap "I\'ll pay cash"), then share their PIN.';
+        _submitting = false;
+      });
+      return;
+    }
+
     try {
       await widget.orders.completeDelivery(
         orderId: _order.id,

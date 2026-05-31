@@ -26,6 +26,7 @@ import '../../shared/widgets/live_trip_map_overlay.dart';
 import '../../shared/widgets/ride_google_map.dart';
 import '../../shared/widgets/bytz_scaffold.dart';
 import '../../shared/widgets/ride_ui.dart';
+import '../../shared/widgets/trip_rating_sheet.dart';
 import '../orders/orders_repository.dart';
 import '../riders/riders_repository.dart';
 import '../../shared/widgets/location_autocomplete_field.dart';
@@ -98,6 +99,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
   SocketService? _socket;
   OrderMessageHandler? _chatNotifyHandler;
   final _mapKey = GlobalKey<RideGoogleMapState>();
+  String? _ratingPromptOrderId;
 
   OrdersRepository get _ordersRepo => context.read<OrdersRepository>();
   RidersRepository get _ridersRepo => context.read<RidersRepository>();
@@ -464,6 +466,9 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
       }
       if (order.status == 'delivered' && prev?.status != 'delivered') {
         _snack('Delivered — thanks for using BytzGO!', success: true);
+        if (order.customerId == _session.user?.id) {
+          _promptDeliveryRating(order);
+        }
       } else if (order.status == 'arrived' && prev?.status != 'arrived') {
         _snack('Driver arrived — complete payment for your PIN', success: true);
       } else if (order.status == 'picked_up' && prev?.status != 'picked_up') {
@@ -937,6 +942,24 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
     }
   }
 
+  void _promptDeliveryRating(Order order) {
+    if (!mounted) return;
+    if (_ratingPromptOrderId == order.id) return;
+    if (order.rating != null && order.rating! > 0) return;
+    _ratingPromptOrderId = order.id;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      await TripRatingSheet.showCustomerRating(
+        context,
+        order: order,
+        orders: _ordersRepo,
+        onDone: () {
+          if (mounted) setState(() => _ratingPromptOrderId = null);
+        },
+      );
+    });
+  }
+
   void _snack(String msg, {bool success = false}) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -964,11 +987,11 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
     final media = MediaQuery.of(context);
     final screenH = media.size.height;
     final sheetFrac = tracking
-        ? (widget.embedded ? 0.48 : 0.52)
+        ? (widget.embedded ? 0.38 : 0.40)
         : (widget.embedded ? (fee > 0 ? 0.64 : 0.58) : (fee > 0 ? 0.78 : 0.72));
-    final effFrac = sheetFrac > 0.55 ? 0.55 : sheetFrac;
+    final effFrac = sheetFrac;
     final mapPadding = EdgeInsets.only(
-      top: media.padding.top + (tracking ? 96.0 : 8.0),
+      top: media.padding.top + (tracking ? 72.0 : 8.0),
       bottom: screenH * effFrac + 12.0,
     );
 
@@ -1019,7 +1042,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
       sheet: RideSheet(
         scrollController: _sheetScrollCtrl,
         maxHeightFraction: tracking
-            ? (widget.embedded ? 0.48 : 0.52)
+            ? (widget.embedded ? 0.38 : 0.40)
             : (widget.embedded ? (fee > 0 ? 0.64 : 0.58) : (fee > 0 ? 0.78 : 0.72)),
         bottomInset: widget.embedded ? 12 : 0,
         padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),

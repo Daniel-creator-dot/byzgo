@@ -45,6 +45,7 @@ import '../../shared/pulse_guide.dart';
 import '../../shared/widgets/customer_trip_identity.dart';
 import '../../shared/widgets/pulse_guide_hud.dart';
 import '../../shared/widgets/ride_ui.dart';
+import '../../shared/widgets/trip_rating_sheet.dart';
 import 'delivery_pin_dialog.dart';
 import 'incoming_ride_alert.dart';
 import 'incoming_ride_overlay.dart';
@@ -1381,7 +1382,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
 
   double get _driveSheetFraction {
     if (!_isOnline) return 0.32;
-    if (_primaryActive != null || _incoming != null) return 0.26;
+    if (_primaryActive != null || _incoming != null) return 0.16;
     if (_availableOrders.isEmpty) return _driveListExpanded ? 0.28 : 0.20;
     return _driveListExpanded ? 0.34 : 0.26;
   }
@@ -1397,7 +1398,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
     final hasTopHud = _isOnline;
     final hasActiveHud = _primaryActive != null && _incoming == null;
     final topPad = media.padding.top +
-        (hasActiveHud ? 150.0 : (hasTopHud ? 92.0 : 0.0));
+        (hasActiveHud ? 100.0 : (hasTopHud ? 72.0 : 0.0));
     final bottomPad = screenH * _driveSheetFraction + 16.0;
     final mapPadding = EdgeInsets.only(top: topPad, bottom: bottomPad);
 
@@ -1487,54 +1488,32 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
     final instr = _navTurnInstruction;
     if (instr == null) return const SizedBox.shrink();
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
         color: BytzGoTheme.accent.withValues(alpha: 0.16),
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(10),
         border: Border.all(color: BytzGoTheme.accent.withValues(alpha: 0.45)),
       ),
       child: Row(
         children: [
-          Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(
-              color: BytzGoTheme.accent.withValues(alpha: 0.25),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Icon(
-              _maneuverIcon(_navTurnManeuver ?? ''),
-              color: BytzGoTheme.accent,
-              size: 24,
-            ),
+          Icon(
+            _maneuverIcon(_navTurnManeuver ?? ''),
+            color: BytzGoTheme.accent,
+            size: 22,
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 10),
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (_navTurnDistance != null)
-                  Text(
-                    'In ${_navTurnDistance!}',
-                    style: const TextStyle(
-                      color: BytzGoTheme.accent,
-                      fontWeight: FontWeight.w900,
-                      fontSize: 13,
-                    ),
-                  ),
-                Text(
-                  instr,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 14,
-                    height: 1.2,
-                  ),
-                ),
-              ],
+            child: Text(
+              _navTurnDistance != null
+                  ? 'In ${_navTurnDistance!} · $instr'
+                  : instr,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w800,
+                fontSize: 13,
+              ),
             ),
           ),
         ],
@@ -1553,29 +1532,30 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
         color: const Color(0xFF0F172A).withValues(alpha: 0.92),
         borderRadius: BorderRadius.circular(16),
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             mainAxisSize: MainAxisSize.min,
             children: [
               if (_navTurnInstruction != null) ...[
                 _turnByTurnBanner(),
-                const SizedBox(height: 10),
+                const SizedBox(height: 6),
               ],
               CustomerTripIdentity(order: order, light: true),
-              const SizedBox(height: 8),
-              ValueListenableBuilder<LocationPoint?>(
-                valueListenable: _myPositionNotifier,
-                builder: (context, pos, _) {
-                  final dist = pulseGuideDistanceMeters(
-                    order,
-                    riderLat: pos?.lat,
-                    riderLng: pos?.lng,
-                  );
-                  return PulseGuideHud(order: order, distanceMeters: dist);
-                },
-              ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 6),
+              if (isPulseGuideActive(order))
+                ValueListenableBuilder<LocationPoint?>(
+                  valueListenable: _myPositionNotifier,
+                  builder: (context, pos, _) {
+                    final dist = pulseGuideDistanceMeters(
+                      order,
+                      riderLat: pos?.lat,
+                      riderLng: pos?.lng,
+                    );
+                    return PulseGuideHud(order: order, distanceMeters: dist);
+                  },
+                ),
+              if (isPulseGuideActive(order)) const SizedBox(height: 6),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -2263,9 +2243,14 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
               context,
               order: order,
               orders: _ordersRepo,
-              onCompleted: () {
+              onCompleted: () async {
                 _snack('Delivery completed', success: true);
-                _refreshAll(silent: true);
+                await _refreshAll(silent: true);
+                if (!mounted) return;
+                await TripRatingSheet.showRiderCompletion(
+                  context,
+                  order: order,
+                );
               },
             );
         bg = BytzGoTheme.accent;

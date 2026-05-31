@@ -300,6 +300,20 @@ class OrdersRepository {
 
   }
 
+  Future<Order> rateOrder({
+    required String orderId,
+    required int rating,
+    String comment = '',
+  }) async {
+    final res = await _api.dio.post<Map<String, dynamic>>(
+      '/api/orders/$orderId/rate',
+      data: {'rating': rating, 'comment': comment},
+    );
+    final data = res.data;
+    if (data == null) throw Exception('Empty rating response');
+    return Order.fromJson(Map<String, dynamic>.from(data));
+  }
+
 
 
   Future<void> declineOrder(String orderId) async {

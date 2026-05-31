@@ -23,6 +23,7 @@ import { ProfileAvatarUpload } from './components/ProfileAvatarUpload';
 import { CustomerShell } from './components/customer/CustomerShell';
 import { CustomerDeliveryHome } from './components/customer/CustomerDeliveryHome';
 import { CustomerTripsView } from './components/customer/CustomerTripsView';
+import { TripRatingModal } from './components/customer/TripRatingModal';
 import { LocationAutocompleteInput } from './components/LocationAutocompleteInput';
 import { GHANA_REGIONS } from './lib/constants';
 import {
@@ -261,6 +262,7 @@ function MainApp() {
   const [riderLocations, setRiderLocations] = useState<{ [key: string]: { lat: number, lng: number } }>({});
   const [notifications, setNotifications] = useState<{ id: string, message: string, type: 'info' | 'success' | 'warning' }[]>([]);
   const [incomingRideOffer, setIncomingRideOffer] = useState<Order | null>(null);
+  const [ratingOrder, setRatingOrder] = useState<Order | null>(null);
   const [paystackKey, setPaystackKey] = useState<string>('');
   const [refreshing, setRefreshing] = useState(false);
   const [showDeviceSetup, setShowDeviceSetup] = useState(false);
@@ -659,6 +661,10 @@ function MainApp() {
       }
       if (u?.role === 'customer' && updatedOrder.status === 'delivered' && updatedOrder.customer_id === u.id) {
         addNotification('Your order has been delivered!', 'success');
+        const rated = (updatedOrder as Order & { rating?: number }).rating;
+        if (!rated || rated < 1) {
+          setRatingOrder(updatedOrder);
+        }
       }
       if (
         u?.role === 'vendor' &&
@@ -926,6 +932,12 @@ function MainApp() {
           message="Are you sure you want to log out of BytzGo?"
           confirmLabel="Sign Out"
           type="danger"
+        />
+        <TripRatingModal
+          order={ratingOrder}
+          onClose={() => setRatingOrder(null)}
+          addNotification={addNotification}
+          refreshData={refreshData}
         />
         <PullToRefresh onRefresh={refreshData} refreshing={refreshing}>
           <CustomerShell

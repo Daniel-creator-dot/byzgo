@@ -7,7 +7,6 @@ import '../../models/order.dart';
 import '../../shared/customer_trip.dart';
 import '../../shared/delivery_pricing.dart';
 import '../theme.dart';
-import 'bolt_eta_pill.dart';
 import 'biker_search_radar.dart';
 
 /// HUD on the map during active trip tracking (search + rider approaching).
@@ -57,7 +56,7 @@ class LiveTripMapHud extends StatelessWidget {
       child: Stack(
         children: [
           Positioned(
-            top: 56,
+            top: 8,
             left: 12,
             right: 12,
             child: _StatusBanner(
@@ -67,26 +66,11 @@ class LiveTripMapHud extends StatelessWidget {
               etaPhrase: etaPhrase,
               etaMinutes: etaMinutes,
               etaDistanceText: etaDistanceText,
+              etaExpiresAt: etaExpiresAt,
               distanceKm: dist,
               hasRider: hasRider,
             ),
           ),
-          if (hasRider && (etaExpiresAt != null || etaMinutes != null))
-            Positioned(
-              top: 130,
-              left: 0,
-              right: 0,
-              child: Center(
-                child: BoltEtaPill(
-                  minutes: etaMinutes,
-                  expiresAt: etaExpiresAt,
-                  subtitle: etaDistanceText?.isNotEmpty == true
-                      ? etaDistanceText
-                      : etaPhrase,
-                  label: 'remaining',
-                ),
-              ),
-            ),
           if (hasRider && dist != null)
             Positioned(
               left: 12,
@@ -130,6 +114,7 @@ class _StatusBanner extends StatelessWidget {
     this.etaPhrase,
     this.etaMinutes,
     this.etaDistanceText,
+    this.etaExpiresAt,
     this.distanceKm,
     required this.hasRider,
   });
@@ -140,13 +125,14 @@ class _StatusBanner extends StatelessWidget {
   final String? etaPhrase;
   final int? etaMinutes;
   final String? etaDistanceText;
+  final DateTime? etaExpiresAt;
   final double? distanceKm;
   final bool hasRider;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
         color: BytzGoTheme.sheetBg.withValues(alpha: 0.94),
         borderRadius: BorderRadius.circular(20),
@@ -208,6 +194,21 @@ class _StatusBanner extends StatelessWidget {
                   Text(
                     'Scanning · $nearbyCount biker${nearbyCount == 1 ? '' : 's'} on radar',
                     style: BytzGoTheme.sheetBody(11),
+                  )
+                else if (hasRider && (etaMinutes != null || etaDistanceText != null))
+                  Text(
+                    [
+                      if (etaMinutes != null) '~$etaMinutes min',
+                      if (etaDistanceText != null && etaDistanceText!.isNotEmpty)
+                        etaDistanceText!,
+                    ].join(' · '),
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w800,
+                      fontSize: 12,
+                      color: BytzGoTheme.brandBlue,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   )
                 else if (hasRider && distanceKm != null)
                   Text(
