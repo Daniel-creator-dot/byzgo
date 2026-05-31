@@ -19,6 +19,14 @@ export interface Order {
   lng?: number;
   rating?: number;
   rating_comment?: string;
+  /** Driver's average rating across rated trips (1–5), exposed to the booker. */
+  riderAvgRating?: number | null;
+  /** How many of the driver's trips have been rated. */
+  riderRatingCount?: number;
+  /** Driver gold tier from the backend: 'gold' | 'silver' | 'bronze' | 'new'. */
+  riderTier?: string;
+  riderName?: string;
+  rider_name?: string;
   payment_status?: string;
   payment_method?: string;
   customer_payment_ack?: string;

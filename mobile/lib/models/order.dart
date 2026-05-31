@@ -65,6 +65,9 @@ class Order {
     this.riderPhone,
     this.riderName,
     this.riderAvatarUrl,
+    this.riderAvgRating,
+    this.riderRatingCount,
+    this.riderTier,
     this.vendorName,
     this.pulseGuideLat,
     this.pulseGuideLng,
@@ -140,6 +143,15 @@ class Order {
   final String? riderName;
 
   final String? riderAvatarUrl;
+
+  /// Driver's average rating across rated trips (1–5), if assigned.
+  final double? riderAvgRating;
+
+  /// How many of the driver's trips have been rated.
+  final int? riderRatingCount;
+
+  /// Driver gold tier from the backend: 'gold' | 'silver' | 'bronze' | 'new'.
+  final String? riderTier;
 
   final String? vendorName;
 
@@ -249,6 +261,14 @@ class Order {
       riderAvatarUrl:
           (json['riderAvatarUrl'] ?? json['rider_avatar_url'])?.toString(),
 
+      riderAvgRating: parseJsonDouble(
+        json['riderAvgRating'] ?? json['rider_avg_rating'],
+      ),
+      riderRatingCount: parseJsonInt(
+        json['riderRatingCount'] ?? json['rider_rating_count'],
+      ),
+      riderTier: (json['riderTier'] ?? json['rider_tier'])?.toString(),
+
       vendorName: (json['vendorName'] ?? json['vendor_name'])?.toString(),
 
       pulseGuideLat: parseJsonDouble(json['pulseGuideLat'] ?? json['pulse_guide_lat']),
@@ -301,6 +321,9 @@ class Order {
       riderPhone: riderPhone,
       riderName: riderName,
       riderAvatarUrl: riderAvatarUrl,
+      riderAvgRating: riderAvgRating,
+      riderRatingCount: riderRatingCount,
+      riderTier: riderTier,
       vendorName: vendorName,
       pulseGuideLat: lat,
       pulseGuideLng: lng,

@@ -1485,6 +1485,20 @@ async function assertOrderChatAccess(orderId: string, userId: string) {
   return order;
 }
 
+type DriverTier = 'gold' | 'silver' | 'bronze' | 'new';
+
+/**
+ * Uber Eats / Bolt Food-style driver tier. The more stars a driver keeps
+ * (across enough rated trips), the higher they climb toward Gold.
+ */
+function driverTier(avg: number | null, count: number): DriverTier {
+  if (avg == null || !Number.isFinite(avg) || count < 3) return 'new';
+  if (avg >= 4.8 && count >= 20) return 'gold';
+  if (avg >= 4.5 && count >= 8) return 'silver';
+  if (avg >= 4.0) return 'bronze';
+  return 'new';
+}
+
 async function sanitizeOrderForRole(order: any, role: string, userId: string) {
   if (!order) return order;
   const o = { ...order };
@@ -1518,6 +1532,15 @@ async function sanitizeOrderForRole(order: any, role: string, userId: string) {
     o.riderAvatarUrl = await resolveImageUrlForClient(o.rider_avatar_url);
   }
 
+  // Driver rating + gold tier — visible to whoever can see the assigned rider.
+  if (o.rider_id) {
+    const avg = o.rider_avg_rating != null ? parseFloat(String(o.rider_avg_rating)) : null;
+    const cnt = o.rider_rating_count != null ? parseInt(String(o.rider_rating_count), 10) || 0 : 0;
+    o.riderAvgRating = avg;
+    o.riderRatingCount = cnt;
+    o.riderTier = driverTier(avg, cnt);
+  }
+
   delete o.customer_phone;
   delete o.rider_phone;
   delete o.customer_name;
@@ -1525,6 +1548,8 @@ async function sanitizeOrderForRole(order: any, role: string, userId: string) {
   delete o.customer_avatar_url;
   delete o.customer_avg_rating;
   delete o.rider_avatar_url;
+  delete o.rider_avg_rating;
+  delete o.rider_rating_count;
   attachPulseGuideFields(o);
   delete o.pulse_guide_lat;
   delete o.pulse_guide_lng;
@@ -1544,6 +1569,10 @@ const ORDER_CONTACT_SELECT = `
    WHERE o2.customer_id = cu.id AND o2.rating IS NOT NULL AND o2.rating > 0) AS customer_avg_rating,
   ru.name AS rider_name, ru.phone AS rider_phone,
   ru.avatar_url AS rider_avatar_url,
+  (SELECT ROUND(AVG(o3.rating)::numeric, 1) FROM orders o3
+   WHERE o3.rider_id = ru.id AND o3.rating IS NOT NULL AND o3.rating > 0) AS rider_avg_rating,
+  (SELECT COUNT(*)::int FROM orders o4
+   WHERE o4.rider_id = ru.id AND o4.rating IS NOT NULL AND o4.rating > 0) AS rider_rating_count,
   vu.name AS vendor_name`;
 
 function isCustomerPaymentReady(order: any): boolean {
@@ -4458,10 +4487,26 @@ app.get('/api/admin/users', authenticateToken, async (req: any, res) => {
   if (req.user.role !== 'admin') return res.sendStatus(403);
   try {
     const result = await pool.query(
-      `SELECT id, name, email, role, balance, created_at, status, is_online, phone, region
-       FROM users ORDER BY created_at DESC`
+      `SELECT u.id, u.name, u.email, u.role, u.balance, u.created_at, u.status, u.is_online, u.phone, u.region,
+        (SELECT ROUND(AVG(o.rating)::numeric, 1) FROM orders o
+         WHERE o.rider_id = u.id AND o.rating IS NOT NULL AND o.rating > 0) AS rider_avg_rating,
+        (SELECT COUNT(*)::int FROM orders o
+         WHERE o.rider_id = u.id AND o.rating IS NOT NULL AND o.rating > 0) AS rider_rating_count
+       FROM users u ORDER BY u.created_at DESC`
     );
-    res.json(result.rows);
+    const rows = result.rows.map((u: any) => {
+      if (u.role === 'rider') {
+        const avg = u.rider_avg_rating != null ? parseFloat(String(u.rider_avg_rating)) : null;
+        const cnt = u.rider_rating_count != null ? parseInt(String(u.rider_rating_count), 10) || 0 : 0;
+        u.riderAvgRating = avg;
+        u.riderRatingCount = cnt;
+        u.riderTier = driverTier(avg, cnt);
+      }
+      delete u.rider_avg_rating;
+      delete u.rider_rating_count;
+      return u;
+    });
+    res.json(rows);
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
   }
@@ -5770,21 +5815,6 @@ app.get('/api/delivery-zones', async (req, res) => {
 });
 
 // Admin: Create delivery zone
-// Rating Endpoint
-app.post('/api/orders/:id/rate', authenticateToken, async (req: any, res) => {
-  try {
-    const { rating, comment } = req.body;
-    const result = await pool.query(
-      'UPDATE orders SET rating = $1, rating_comment = $2 WHERE id = $3 AND customer_id = $4 RETURNING *',
-      [rating, comment, req.params.id, req.user.id]
-    );
-    if (result.rowCount === 0) return res.status(404).json({ error: 'Order not found' });
-    res.json(result.rows[0]);
-  } catch (err) {
-    res.status(500).json({ error: 'Failed to save rating' });
-  }
-});
-
 const CUSTOMER_CANCELLABLE_STATUSES = ['pending', 'ready', 'preparing'];
 
 function orderRefundAmount(order: { total: unknown; payment_status?: string }): number {

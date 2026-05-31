@@ -28,6 +28,7 @@ import '../../models/order.dart';
 import '../../models/vendor.dart';
 import '../../shared/delivery_pricing.dart';
 import '../../shared/format.dart';
+import '../../shared/driver_tier.dart';
 import '../../shared/ghana_regions.dart';
 import '../../shared/rider_trip.dart';
 import '../../shared/trip_chat_sheet.dart';
@@ -192,6 +193,11 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
     if (rated.isEmpty) return null;
     return rated.map((o) => o.rating!).reduce((a, b) => a + b) / rated.length;
   }
+
+  int get _ratingCount =>
+      _completedTrips.where((o) => o.rating != null && o.rating! > 0).length;
+
+  DriverTier get _driverTier => driverTierFrom(_avgRating, _ratingCount);
 
   @override
   void initState() {
@@ -2293,6 +2299,16 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
             '${trips.length} completed',
             style: TextStyle(color: Colors.white.withValues(alpha: 0.5)),
           ),
+          const SizedBox(height: 12),
+          DriverTierBadge(
+            tier: _driverTier,
+            avgRating: _avgRating,
+            ratingCount: _ratingCount,
+          ),
+          if (_driverTier != DriverTier.gold) ...[
+            const SizedBox(height: 12),
+            _tierProgressHint(),
+          ],
           const SizedBox(height: 16),
           if (trips.isEmpty)
             const BytzEmptyState(
@@ -2928,11 +2944,24 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
                     user.email,
                     style: TextStyle(color: Colors.white.withValues(alpha: 0.5)),
                   ),
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: DriverTierBadge(
+                      tier: _driverTier,
+                      avgRating: _avgRating,
+                      ratingCount: _ratingCount,
+                    ),
+                  ),
                 ],
               ),
             ),
           ],
         ),
+        if (_driverTier != DriverTier.gold) ...[
+          const SizedBox(height: 12),
+          _tierProgressHint(),
+        ],
         const SizedBox(height: 20),
         RiderVerificationSection(user: user),
         const SizedBox(height: 24),
@@ -3007,6 +3036,69 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
     } finally {
       if (mounted) setState(() => _profileSaving = false);
     }
+  }
+
+  Widget _tierProgressHint() {
+    final tier = _driverTier;
+    final String next;
+    final String how;
+    switch (tier) {
+      case DriverTier.fresh:
+        next = 'Bronze';
+        how = 'Keep a 4.0+ average over at least 3 rated trips.';
+        break;
+      case DriverTier.bronze:
+        next = 'Silver';
+        how = 'Reach a 4.5+ average across 8+ rated trips.';
+        break;
+      case DriverTier.silver:
+        next = 'Gold';
+        how = 'Hold a 4.8+ average across 20+ rated trips.';
+        break;
+      case DriverTier.gold:
+        next = 'Gold';
+        how = 'You are at the top tier — keep it up!';
+        break;
+    }
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(16),
+        color: const Color(0xFFF5B301).withValues(alpha: 0.08),
+        border: Border.all(color: const Color(0xFFF5B301).withValues(alpha: 0.3)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.workspace_premium, color: Color(0xFFF5B301), size: 22),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Next tier: $next',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w900,
+                    fontSize: 13,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  how,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.6),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _buildBottomNav() {

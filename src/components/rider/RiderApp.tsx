@@ -51,6 +51,7 @@ import {
   type RiderStats,
   type WalletTransaction,
 } from '../../lib/riderDriverApi';
+import { DriverTierBadge, driverTierFrom } from '../shared/DriverTier';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -165,6 +166,12 @@ export function RiderApp({
   }, [orders]);
   const activeOrders = orders.filter((o) => o.rider_id === user.id && o.status !== 'delivered');
   const completedTrips = orders.filter((o) => o.rider_id === user.id && o.status === 'delivered');
+  const ratedTrips = completedTrips.filter((o) => ((o as Order & { rating?: number }).rating ?? 0) > 0);
+  const ratingCount = ratedTrips.length;
+  const avgRating = ratingCount
+    ? ratedTrips.reduce((sum, o) => sum + ((o as Order & { rating?: number }).rating || 0), 0) / ratingCount
+    : null;
+  const riderTier = driverTierFrom(avgRating, ratingCount);
   const tripsToday = completedTrips.filter((o) => {
     const d = new Date(o.created_at || (o as Order & { createdAt?: string }).createdAt || 0);
     const now = new Date();
@@ -938,7 +945,17 @@ export function RiderApp({
               exit={{ opacity: 0 }}
             >
               <h2 className="text-xl font-black mb-1">Trip history</h2>
-              <p className="text-slate-500 text-sm mb-6">{completedTrips.length} completed deliveries</p>
+              <p className="text-slate-500 text-sm mb-3">{completedTrips.length} completed deliveries</p>
+              <div className="mb-6">
+                <DriverTierBadge tier={riderTier} avgRating={avgRating} ratingCount={ratingCount} />
+                {riderTier !== 'gold' && (
+                  <p className="text-[11px] text-slate-500 mt-2 font-semibold">
+                    {riderTier === 'new' && 'Keep a 4.0+ average over 3+ rated trips to reach Bronze.'}
+                    {riderTier === 'bronze' && 'Reach a 4.5+ average across 8+ rated trips for Silver.'}
+                    {riderTier === 'silver' && 'Hold a 4.8+ average across 20+ rated trips for Gold.'}
+                  </p>
+                )}
+              </div>
               {completedTrips.length === 0 ? (
                 <motion.div className="text-center py-16 rounded-2xl border border-dashed border-slate-800">
                   <Clock className="mx-auto text-slate-700 mb-3" size={40} />

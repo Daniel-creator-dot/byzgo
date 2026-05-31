@@ -204,8 +204,10 @@ class _TripRatingSheetState extends State<TripRatingSheet> {
               TextField(
                 controller: _commentCtrl,
                 maxLines: 2,
+                maxLength: 500,
                 decoration: InputDecoration(
-                  hintText: 'Add a comment (optional)',
+                  hintText: 'Add a note for your driver (optional)',
+                  counterText: '',
                   filled: true,
                   fillColor: BytzGoTheme.sheetDivider.withValues(alpha: 0.35),
                   border: OutlineInputBorder(

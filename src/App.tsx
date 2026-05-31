@@ -57,6 +57,7 @@ import {
 } from './lib/incomingRideAudio';
 import { DarkAppShell, type NavItem } from './components/shared/DarkAppShell';
 import { DarkCard, DarkButton, DarkInput, StatusBadge, EmptyState, ErrorBanner } from './components/shared/ui';
+import { DriverTierBadge, driverTierFrom } from './components/shared/DriverTier';
 
 // Helper for Tailwind classes
 function cn(...inputs: ClassValue[]) {
@@ -3893,7 +3894,20 @@ function AdminView({
                  <tbody>
                     {allUsers.map(u => (
                       <tr key={u.id} className="border-b border-slate-50 hover:bg-slate-50 transition-colors">
-                        <td className="px-8 py-6 font-bold text-sm">{u.name}</td>
+                        <td className="px-8 py-6 font-bold text-sm">
+                          <div className="flex flex-col gap-1.5">
+                            <span>{u.name}</span>
+                            {u.role === 'rider' && (
+                              <DriverTierBadge
+                                tier={u.riderTier || driverTierFrom(u.riderAvgRating, u.riderRatingCount ?? 0)}
+                                avgRating={u.riderAvgRating}
+                                ratingCount={u.riderRatingCount}
+                                className="self-start"
+                                light
+                              />
+                            )}
+                          </div>
+                        </td>
                         <td className="px-8 py-6"><span className={cn("px-3 py-1 rounded-lg text-[10px] font-black uppercase", u.role === 'admin' ? "bg-red-50 text-red-500" : "bg-slate-100 text-slate-500")}>{u.role}</span></td>
                         <td className="px-8 py-6 text-sm text-slate-500">{u.email}</td>
                         <td className="px-8 py-6 font-mono font-black text-brand-green">{formatCedis(u.balance)}</td>
@@ -3954,7 +3968,17 @@ function AdminView({
                        <h4 className="font-black text-sm uppercase tracking-tight">{u.name}</h4>
                        <span className={cn("px-3 py-1 rounded-lg text-[8px] font-black uppercase", u.role === 'admin' ? "bg-red-50 text-red-500" : "bg-slate-100 text-slate-500")}>{u.role}</span>
                     </div>
-                    <p className="text-[10px] text-slate-400 mb-4">{u.email}</p>
+                    <p className="text-[10px] text-slate-400 mb-2">{u.email}</p>
+                    {u.role === 'rider' && (
+                      <div className="mb-4">
+                        <DriverTierBadge
+                          tier={u.riderTier || driverTierFrom(u.riderAvgRating, u.riderRatingCount ?? 0)}
+                          avgRating={u.riderAvgRating}
+                          ratingCount={u.riderRatingCount}
+                          light
+                        />
+                      </div>
+                    )}
                     <div className="flex justify-between items-center">
                        <div className="flex flex-col">
                           <span className="text-[8px] font-black text-slate-300 uppercase tracking-widest">Balance</span>

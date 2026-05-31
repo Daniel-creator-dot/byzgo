@@ -12,6 +12,7 @@ import {
 import { TripTrackingMap } from './TripTrackingMap';
 import { TripCompletionCard } from './TripCompletionCard';
 import { getCustomerTripHeadline, TripProgressBar } from './tripUi';
+import { DriverTierBadge, RateDriverCard, driverTierForOrder } from '../shared/DriverTier';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -39,7 +40,9 @@ export function LiveTripTracker({
   refreshData: () => void | Promise<void>;
 }) {
   const [eta, setEta] = useState<string | null>(null);
-  const [sheetExpanded, setSheetExpanded] = useState(order.status === 'arrived');
+  const [sheetExpanded, setSheetExpanded] = useState(
+    order.status === 'arrived' || order.status === 'delivered'
+  );
 
   const isCourier = (order as Order & { order_type?: string }).order_type === 'courier';
   const pickup = getPickupCoordsForOrder(order, vendors);
@@ -115,6 +118,15 @@ export function LiveTripTracker({
                     Trip #{order.id.slice(-4)}
                   </p>
                   <p className="text-sm font-black text-white truncate">{headline}</p>
+                  {order.rider_id && (
+                    <div className="mt-1">
+                      <DriverTierBadge
+                        tier={driverTierForOrder(order)}
+                        avgRating={order.riderAvgRating}
+                        ratingCount={order.riderRatingCount}
+                      />
+                    </div>
+                  )}
                 </div>
               </motion.div>
               {eta && (
@@ -193,6 +205,19 @@ export function LiveTripTracker({
                     addNotification={addNotification}
                     refreshData={refreshData}
                     embedded
+                  />
+                </motion.div>
+              )}
+              {order.status === 'delivered' && (
+                <motion.div
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  exit={{ opacity: 0, height: 0 }}
+                >
+                  <RateDriverCard
+                    order={order}
+                    addNotification={addNotification}
+                    refreshData={refreshData}
                   />
                 </motion.div>
               )}

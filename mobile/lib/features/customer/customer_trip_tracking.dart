@@ -17,6 +17,7 @@ import '../../shared/trip_contact.dart';
 import '../../shared/pulse_guide.dart';
 import '../../shared/widgets/pulse_guide_button.dart';
 import '../../shared/widgets/ride_ui.dart';
+import '../../shared/driver_tier.dart';
 import '../orders/orders_repository.dart';
 import '../wallet/wallet_repository.dart';
 
@@ -153,7 +154,7 @@ class CustomerDeliveryTracker extends StatelessWidget {
         ],
         if (order.status == 'delivered') ...[
           const SizedBox(height: 16),
-          _DeliveredBanner(),
+          RateDriverCard(order: order, onOrderUpdated: onOrderUpdated),
         ],
       ],
     );
@@ -362,6 +363,17 @@ class _RiderLiveCard extends StatelessWidget {
                     color: BytzGoTheme.sheetText,
                   ),
                 ),
+                const SizedBox(height: 4),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: DriverTierBadge(
+                    tier: driverTierForOrder(order),
+                    avgRating: order.riderAvgRating,
+                    ratingCount: order.riderRatingCount,
+                    compact: true,
+                  ),
+                ),
+                const SizedBox(height: 4),
                 if (distanceKm != null)
                   Text(
                     '${distanceKm!.toStringAsFixed(1)} km · approaching on radar',
@@ -1259,29 +1271,187 @@ class _CancelledTripBanner extends StatelessWidget {
   }
 }
 
-class _DeliveredBanner extends StatelessWidget {
+class RateDriverCard extends StatefulWidget {
+  const RateDriverCard({
+    super.key,
+    required this.order,
+    required this.onOrderUpdated,
+  });
+
+  final Order order;
+  final ValueChanged<Order> onOrderUpdated;
+
+  @override
+  State<RateDriverCard> createState() => _RateDriverCardState();
+}
+
+class _RateDriverCardState extends State<RateDriverCard> {
+  int _stars = 0;
+  bool _submitting = false;
+  String? _error;
+  final _commentCtrl = TextEditingController();
+
+  bool get _alreadyRated => (widget.order.rating ?? 0) > 0;
+
+  @override
+  void dispose() {
+    _commentCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (_stars < 1) {
+      setState(() => _error = 'Tap a star to rate your driver');
+      return;
+    }
+    setState(() {
+      _submitting = true;
+      _error = null;
+    });
+    try {
+      final comment = _commentCtrl.text.trim();
+      final updated = await context.read<OrdersRepository>().rateOrder(
+            orderId: widget.order.id,
+            rating: _stars,
+            comment: comment.isNotEmpty ? comment : '',
+          );
+      if (!mounted) return;
+      widget.onOrderUpdated(updated);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Thanks for rating your driver!'),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: BytzGoTheme.accentDark,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = OrdersRepository.errorMessage(e));
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final order = widget.order;
+    final given = _alreadyRated ? order.rating! : _stars;
+    final driverName = order.riderName != null && order.riderName!.isNotEmpty
+        ? order.riderName!
+        : 'your driver';
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: BytzGoTheme.accent.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: BytzGoTheme.accent.withValues(alpha: 0.35)),
+        gradient: LinearGradient(
+          colors: [
+            BytzGoTheme.accent.withValues(alpha: 0.16),
+            BytzGoTheme.accent.withValues(alpha: 0.04),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: BytzGoTheme.accent.withValues(alpha: 0.4)),
       ),
-      child: const Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Icon(Icons.celebration, color: BytzGoTheme.accentDark),
-          SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              'Delivery complete — thank you!',
-              style: TextStyle(
-                fontWeight: FontWeight.w800,
-                color: BytzGoTheme.accentDark,
+          Row(
+            children: [
+              const Icon(Icons.celebration, color: BytzGoTheme.accentDark, size: 22),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  _alreadyRated ? 'Delivery complete — thank you!' : 'Delivered! Rate $driverName',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w900,
+                    fontSize: 15,
+                    color: BytzGoTheme.sheetText,
+                  ),
+                ),
+              ),
+              if (order.riderId != null)
+                DriverTierBadge(
+                  tier: driverTierForOrder(order),
+                  compact: true,
+                ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            _alreadyRated
+                ? 'You rated this trip ${order.rating} of 5 stars.'
+                : 'More stars help great drivers reach Gold status.',
+            style: BytzGoTheme.sheetBody(12),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: List.generate(5, (i) {
+              final filled = i < given;
+              return GestureDetector(
+                onTap: _alreadyRated || _submitting
+                    ? null
+                    : () => setState(() {
+                          _stars = i + 1;
+                          _error = null;
+                        }),
+                behavior: HitTestBehavior.opaque,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  child: Icon(
+                    filled ? Icons.star_rounded : Icons.star_outline_rounded,
+                    size: 40,
+                    color: filled ? const Color(0xFFF5B301) : BytzGoTheme.sheetMuted,
+                  ),
+                ),
+              );
+            }),
+          ),
+          if (!_alreadyRated) ...[
+            const SizedBox(height: 12),
+            TextField(
+              controller: _commentCtrl,
+              enabled: !_submitting,
+              maxLines: 2,
+              maxLength: 500,
+              style: BytzGoTheme.sheetBody(13),
+              decoration: InputDecoration(
+                hintText: 'Add a note for your driver (optional)',
+                hintStyle: TextStyle(color: BytzGoTheme.sheetMuted, fontSize: 13),
+                counterText: '',
+                filled: true,
+                fillColor: Colors.white.withValues(alpha: 0.6),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: BytzGoTheme.accent.withValues(alpha: 0.3)),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: BytzGoTheme.accent.withValues(alpha: 0.3)),
+                ),
               ),
             ),
-          ),
+            const SizedBox(height: 12),
+            RidePrimaryButton(
+              label: 'Submit rating',
+              icon: Icons.send_rounded,
+              loading: _submitting,
+              onPressed: _stars < 1 ? null : _submit,
+            ),
+          ],
+          if (_error != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              _error!,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: BytzGoTheme.danger,
+                fontWeight: FontWeight.w600,
+                fontSize: 12,
+              ),
+            ),
+          ],
         ],
       ),
     );
