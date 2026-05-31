@@ -1,6 +1,8 @@
 /**
- * One-time repair: older COD deliveries debited vendor share without crediting
- * cash collected first. Run: node backend/scripts/repair-rider-cod-wallets.mjs
+ * DEPRECATED — do not run on production after COD wallet fix (May 2026).
+ * Older COD deliveries debited vendor share without crediting cash first.
+ * Running this now adds COD credits that inflate wallet balance incorrectly.
+ * Use backend/scripts/repair-rider-spendable-balances.mjs instead if needed.
  */
 import pg from 'pg';
 import dotenv from 'dotenv';

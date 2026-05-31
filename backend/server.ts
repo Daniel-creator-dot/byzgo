@@ -255,6 +255,9 @@ async function userForAuthResponse(row: Record<string, unknown> | null | undefin
     u.cover_image = await resolveImageUrlForClient(u.cover_image);
     if (u.cover_image) u.has_cover_image = true;
   }
+  if (u.role === 'rider' && u.id) {
+    u.balance = await getRiderSpendableBalance(String(u.id));
+  }
   return u;
 }
 
@@ -422,6 +425,39 @@ function applyDeliveryFeeCaps(
 
 function moneyRound(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+/** Physical cash collected on delivery — audit only, not spendable wallet money. */
+const COD_WALLET_REFERENCE_SQL = `(reference LIKE 'COD collected%' OR reference LIKE 'COD vendor share%')`;
+
+type DbClient = { query: typeof pool.query };
+
+/** Net COD ledger entries still on file (historical deliveries credited balance incorrectly). */
+async function getRiderCodLedgerNet(riderId: string, client: DbClient = pool): Promise<number> {
+  const r = await client.query(
+    `SELECT COALESCE(SUM(amount), 0)::float AS cod_net
+     FROM wallet_transactions
+     WHERE user_id = $1 AND ${COD_WALLET_REFERENCE_SQL}`,
+    [riderId]
+  );
+  return moneyRound(parseFloat(String(r.rows[0]?.cod_net ?? 0)));
+}
+
+/** Rider wallet funds that can pay commission or be withdrawn (excludes COD cash in pocket). */
+async function getRiderSpendableBalance(riderId: string, client: DbClient = pool): Promise<number> {
+  const balRes = await client.query('SELECT balance FROM users WHERE id = $1', [riderId]);
+  const raw = parseFloat(String(balRes.rows[0]?.balance ?? 0));
+  const codNet = await getRiderCodLedgerNet(riderId, client);
+  return moneyRound(Math.max(0, raw - codNet));
+}
+
+async function emitWalletUpdated(userId: string, role?: string, client: DbClient = pool) {
+  const balance =
+    role === 'rider' ? await getRiderSpendableBalance(userId, client) : await (async () => {
+      const r = await client.query('SELECT balance FROM users WHERE id = $1', [userId]);
+      return parseFloat(String(r.rows[0]?.balance ?? 0));
+    })();
+  io.to(userId).emit('wallet:updated', { balance });
 }
 
 /** Ghana calendar date (GMT, no DST). */
@@ -1690,7 +1726,7 @@ async function settleOrderPayment(order: any) {
         'INSERT INTO wallet_transactions (user_id, amount, type, reference) VALUES ($1, $2, $3, $4)',
         [order.rider_id, riderAmount, 'payment', `Order #${order.id.slice(0, 8)} delivery fee`]
       );
-      io.to(order.rider_id).emit('wallet:updated', { balance: parseFloat(rRes.rows[0].balance) });
+      await emitWalletUpdated(order.rider_id, 'rider');
     }
     await recordTripCommission(order);
   } else if (order.rider_id) {
@@ -1700,50 +1736,44 @@ async function settleOrderPayment(order: any) {
         ? moneyRound(total * vendorSharePct)
         : 0;
     const shortId = order.id.slice(0, 8);
+    const collectRef = `COD collected · Order #${shortId}`;
 
-    const codCredit = await pool.query(
-      'UPDATE users SET balance = balance + $1 WHERE id = $2 RETURNING balance',
-      [totalCollected, order.rider_id]
+    const existing = await pool.query(
+      `SELECT 1 FROM wallet_transactions WHERE user_id = $1 AND reference = $2 LIMIT 1`,
+      [order.rider_id, collectRef]
     );
-    await pool.query(
-      'INSERT INTO wallet_transactions (user_id, amount, type, reference) VALUES ($1, $2, $3, $4)',
-      [
-        order.rider_id,
-        totalCollected,
-        'payment',
-        `COD collected · Order #${shortId}`,
-      ]
-    );
-    let riderBalance = parseFloat(codCredit.rows[0].balance);
-
-    if (vendorShare > 0) {
-      const rRes = await pool.query(
-        'UPDATE users SET balance = balance - $1 WHERE id = $2 RETURNING balance',
-        [vendorShare, order.rider_id]
-      );
+    if (!existing.rowCount) {
+      // Audit trail only — cash stays with the rider; do not credit users.balance.
       await pool.query(
         'INSERT INTO wallet_transactions (user_id, amount, type, reference) VALUES ($1, $2, $3, $4)',
-        [
-          order.rider_id,
-          -vendorShare,
-          'payment',
-          `COD vendor share · Order #${shortId}`,
-        ]
+        [order.rider_id, totalCollected, 'payment', collectRef]
       );
-      riderBalance = parseFloat(rRes.rows[0].balance);
 
-      const vRes = await pool.query(
-        'UPDATE users SET balance = balance + $1 WHERE id = $2 RETURNING balance',
-        [vendorShare, order.vendor_id]
-      );
-      await pool.query(
-        'INSERT INTO wallet_transactions (user_id, amount, type, reference) VALUES ($1, $2, $3, $4)',
-        [order.vendor_id, vendorShare, 'payment', `COD Order #${shortId} payment`]
-      );
-      io.to(order.vendor_id).emit('wallet:updated', { balance: parseFloat(vRes.rows[0].balance) });
+      if (vendorShare > 0) {
+        await pool.query(
+          'INSERT INTO wallet_transactions (user_id, amount, type, reference) VALUES ($1, $2, $3, $4)',
+          [
+            order.rider_id,
+            -vendorShare,
+            'payment',
+            `COD vendor share · Order #${shortId}`,
+          ]
+        );
+
+        const vRes = await pool.query(
+          'UPDATE users SET balance = balance + $1 WHERE id = $2 RETURNING balance',
+          [vendorShare, order.vendor_id]
+        );
+        await pool.query(
+          'INSERT INTO wallet_transactions (user_id, amount, type, reference) VALUES ($1, $2, $3, $4)',
+          [order.vendor_id, vendorShare, 'payment', `COD Order #${shortId} payment`]
+        );
+        io.to(order.vendor_id).emit('wallet:updated', {
+          balance: parseFloat(vRes.rows[0].balance),
+        });
+      }
     }
 
-    io.to(order.rider_id).emit('wallet:updated', { balance: riderBalance });
     await recordTripCommission(order);
   }
 }
@@ -3231,6 +3261,10 @@ app.patch('/api/auth/status', authenticateToken, async (req: any, res) => {
 // Wallet Routes
 app.get('/api/wallet', authenticateToken, async (req: any, res) => {
   try {
+    if (req.user.role === 'rider') {
+      const balance = await getRiderSpendableBalance(req.user.id);
+      return res.json({ balance });
+    }
     const result = await pool.query('SELECT balance FROM users WHERE id = $1', [req.user.id]);
     res.json({ balance: parseFloat(result.rows[0].balance) });
   } catch (err) {
@@ -3573,9 +3607,14 @@ app.post('/api/wallet/topup', authenticateToken, async (req: any, res) => {
       [reference, req.user.id]
     );
     if (existing.rowCount && existing.rowCount > 0) {
-      const balanceRes = await client.query('SELECT balance FROM users WHERE id = $1', [req.user.id]);
-      const balance = parseFloat(balanceRes.rows[0].balance);
-      io.to(req.user.id).emit('wallet:updated', { balance });
+      const balance =
+        req.user.role === 'rider'
+          ? await getRiderSpendableBalance(req.user.id, client)
+          : parseFloat(
+              (await client.query('SELECT balance FROM users WHERE id = $1', [req.user.id])).rows[0]
+                .balance
+            );
+      await emitWalletUpdated(req.user.id, req.user.role, client);
       return res.json({ balance, alreadyProcessed: true });
     }
 
@@ -3598,9 +3637,12 @@ app.post('/api/wallet/topup', authenticateToken, async (req: any, res) => {
 
     await client.query('COMMIT');
 
-    const balance = parseFloat(result.rows[0].balance);
+    const balance =
+      req.user.role === 'rider'
+        ? await getRiderSpendableBalance(req.user.id)
+        : parseFloat(result.rows[0].balance);
     res.json({ balance });
-    io.to(req.user.id).emit('wallet:updated', { balance });
+    await emitWalletUpdated(req.user.id, req.user.role);
   } catch (err: unknown) {
     await client.query('ROLLBACK').catch(() => {});
     const message = err instanceof Error ? err.message : 'Server error during verification';
@@ -3941,8 +3983,12 @@ app.post('/api/wallet/withdraw', authenticateToken, async (req: any, res) => {
       return res.status(403).json({ message: 'Your account is pending approval.' });
     }
     
-    // Check if user has enough balance
-    if (parseFloat(userData.balance) < amount) {
+    // Check if user has enough spendable balance (riders: excludes COD cash in pocket)
+    const available =
+      req.user.role === 'rider'
+        ? await getRiderSpendableBalance(req.user.id)
+        : parseFloat(userData.balance);
+    if (available < amount) {
       return res.status(400).json({ message: 'Insufficient balance' });
     }
     
@@ -3958,9 +4004,12 @@ app.post('/api/wallet/withdraw', authenticateToken, async (req: any, res) => {
       [req.user.id, amount, 'withdrawal', `Withdrawal to ${phone} (${network})`]
     );
 
-    const newBalance = parseFloat(result.rows[0].balance);
+    const newBalance =
+      req.user.role === 'rider'
+        ? await getRiderSpendableBalance(req.user.id)
+        : parseFloat(result.rows[0].balance);
     res.json({ balance: newBalance, message: 'Withdrawal successful' });
-    io.to(req.user.id).emit('wallet:updated', { balance: newBalance });
+    await emitWalletUpdated(req.user.id, req.user.role);
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
   }
@@ -4740,8 +4789,7 @@ app.get('/api/rider/commission/summary', authenticateToken, async (req: any, res
       settlements.reduce((sum: number, s: any) => sum + s.amount_owed, 0)
     );
     const overdue = settlements.some((s: any) => s.is_overdue);
-    const balRes = await pool.query('SELECT balance FROM users WHERE id = $1', [req.user.id]);
-    const walletBalance = parseFloat(balRes.rows[0]?.balance ?? 0);
+    const walletBalance = await getRiderSpendableBalance(req.user.id);
     res.json({
       commission_percent: settings.totalPercent,
       insurance_percent: settings.insurancePercent,
@@ -4754,7 +4802,8 @@ app.get('/api/rider/commission/summary', authenticateToken, async (req: any, res
       settlements,
       policy:
         `BytzGo takes ${settings.totalPercent}% commission per trip. ` +
-        'Cash trips: pay commission with Mobile Money or card, or from wallet, by 8:00 AM Ghana time the next day.',
+        'Cash trips: pay commission with Mobile Money or card by 8:00 AM Ghana time the next day. ' +
+        'Cash collected from customers is not added to your wallet.',
     });
   } catch (err) {
     console.error('[rider/commission/summary]', err);
@@ -4815,10 +4864,9 @@ async function applyRiderCommissionSettlement(
       [riderId, ref]
     );
     if (used.rowCount && used.rowCount > 0) {
-      const balRes = await client.query('SELECT balance FROM users WHERE id = $1', [riderId]);
       return {
         paid: 0,
-        balance: parseFloat(balRes.rows[0]?.balance ?? 0),
+        balance: await getRiderSpendableBalance(riderId, client),
         alreadyProcessed: true,
       };
     }
@@ -4827,8 +4875,8 @@ async function applyRiderCommissionSettlement(
       [riderId, -totalDue, 'payment', `MoMo/card commission · ${ref}`]
     );
   } else {
-    const balRes = await client.query('SELECT balance FROM users WHERE id = $1 FOR UPDATE', [riderId]);
-    const balance = parseFloat(balRes.rows[0]?.balance ?? 0);
+    await client.query('SELECT id FROM users WHERE id = $1 FOR UPDATE', [riderId]);
+    const balance = await getRiderSpendableBalance(riderId, client);
     if (balance < totalDue - 0.01) {
       const err = new Error(
         `Insufficient wallet balance. Need ₵${totalDue.toFixed(2)}, have ₵${balance.toFixed(2)}. Pay with Mobile Money or card instead.`
@@ -4860,10 +4908,9 @@ async function applyRiderCommissionSettlement(
     );
   }
 
-  const newBal = await client.query('SELECT balance FROM users WHERE id = $1', [riderId]);
   return {
     paid: totalDue,
-    balance: parseFloat(newBal.rows[0]?.balance ?? 0),
+    balance: await getRiderSpendableBalance(riderId, client),
     alreadyProcessed: false,
   };
 }
@@ -4886,7 +4933,7 @@ app.post('/api/rider/commission/pay', authenticateToken, async (req: any, res) =
     }
     const result = await applyRiderCommissionSettlement(client, req.user.id, settlements, 'wallet');
     await client.query('COMMIT');
-    io.to(req.user.id).emit('wallet:updated', { balance: result.balance });
+    await emitWalletUpdated(req.user.id, req.user.role);
     res.json({
       success: true,
       paid: result.paid,
@@ -4978,7 +5025,7 @@ app.post('/api/rider/commission/paystack/verify', authenticateToken, async (req:
       reference
     );
     await client.query('COMMIT');
-    io.to(req.user.id).emit('wallet:updated', { balance: result.balance });
+    await emitWalletUpdated(req.user.id, req.user.role);
     res.json({
       success: true,
       paid: result.paid,

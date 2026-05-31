@@ -2541,7 +2541,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
               if (balance < 0) ...[
                 const SizedBox(height: 8),
                 Text(
-                  'Negative balance is usually from older cash trips before ledger fix. New deliveries credit cash collected first. Top up or pay commission with Mobile Money or card.',
+                  'Negative balance is from older cash trips before the wallet fix. Top up with Mobile Money or card, or pay commission with MoMo/card. Cash collected from customers is not wallet money.',
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     color: Colors.white.withValues(alpha: 0.55),
