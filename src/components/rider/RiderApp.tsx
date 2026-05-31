@@ -1015,9 +1015,12 @@ export function RiderApp({
             >
               <div className="text-center py-8 mb-6 rounded-3xl bg-gradient-to-b from-brand-green/20 to-transparent border border-brand-green/20">
                 <CreditCard className="mx-auto text-brand-green mb-3" size={32} />
-                <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Available</p>
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Withdrawable</p>
                 <p className="text-4xl font-black font-mono text-brand-green mt-1">
                   ₵{Number(user.balance || 0).toFixed(2)}
+                </p>
+                <p className="text-[11px] text-slate-500 mt-3 px-4 leading-relaxed">
+                  Cash collected from customers stays with you in person — it is not in this balance and cannot be withdrawn here.
                 </p>
               </div>
               {commission && (commission.total_owed > 0.01 || commission.settlements.length > 0) && (

@@ -488,6 +488,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
       }
       unawaited(_loadCommission());
       if (_tab == _RiderTab.wallet) {
+        unawaited(_loadWalletBalance());
         unawaited(_loadWalletTransactions(silent: true));
       }
     }
@@ -495,6 +496,17 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
       _snack(OrdersRepository.errorMessage(ordersErr));
     }
     if (mounted && !silent) setState(() => _refreshing = false);
+  }
+
+  Future<void> _loadWalletBalance() async {
+    try {
+      final balance = await _wallet.fetchBalance();
+      if (!mounted) return;
+      _session.patchBalance(balance);
+      setState(() {});
+    } catch (_) {
+      /* keep previous balance */
+    }
   }
 
   Future<void> _loadWalletTransactions({bool silent = false}) async {
@@ -1153,13 +1165,14 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
       case _RiderTab.trips:
         return _buildTripsTab();
       case _RiderTab.wallet:
-        if (_walletTransactions.isEmpty && !_walletExtrasLoading) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted && _tab == _RiderTab.wallet) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && _tab == _RiderTab.wallet) {
+            unawaited(_loadWalletBalance());
+            if (_walletTransactions.isEmpty && !_walletExtrasLoading) {
               unawaited(_loadWalletTransactions(silent: true));
             }
-          });
-        }
+          }
+        });
         return _buildWalletTab(user);
       case _RiderTab.profile:
         return _buildProfileTab(user);
@@ -2523,7 +2536,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
               const Icon(Icons.account_balance_wallet, color: BytzGoTheme.accent, size: 36),
               const SizedBox(height: 8),
               Text(
-                'WALLET BALANCE',
+                'WITHDRAWABLE BALANCE',
                 style: TextStyle(
                   fontSize: 10,
                   fontWeight: FontWeight.w800,
@@ -2538,10 +2551,20 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
                   color: balanceColor,
                 ),
               ),
+              const SizedBox(height: 6),
+              Text(
+                'Cash collected from customers is physical money in your pocket — it is not shown here and cannot be withdrawn through the app.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.5),
+                  fontSize: 11,
+                  height: 1.35,
+                ),
+              ),
               if (balance < 0) ...[
                 const SizedBox(height: 8),
                 Text(
-                  'Negative balance is from older cash trips before the wallet fix. Top up with Mobile Money or card, or pay commission with MoMo/card. Cash collected from customers is not wallet money.',
+                  'Negative balance is from older cash trips before the wallet fix. Top up with Mobile Money or card, or pay commission with MoMo/card.',
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     color: Colors.white.withValues(alpha: 0.55),
@@ -2610,10 +2633,11 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
           Padding(
             padding: const EdgeInsets.only(bottom: 10),
             child: Text(
-              'Nothing to withdraw yet — complete trips or top up your wallet first.',
+              'Nothing to withdraw yet — top up your wallet or complete prepaid trips first. Cash-on-delivery collections are not withdrawable here.',
               style: TextStyle(
                 color: Colors.white.withValues(alpha: 0.5),
                 fontSize: 11,
+                height: 1.35,
               ),
             ),
           ),
@@ -2866,6 +2890,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
   }
 
   Future<void> _handleWithdraw() async {
+    await _loadWalletBalance();
     final amount = double.tryParse(_withdrawAmount.text.trim());
     final available = (_session.user?.balance ?? 0) > 0 ? _session.user!.balance : 0.0;
     if (amount == null || amount <= 0) {
@@ -3124,6 +3149,10 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
                 onTap: () {
           setState(() => _tab = tab);
           _syncOfferTimer();
+          if (tab == _RiderTab.wallet) {
+            unawaited(_loadWalletBalance());
+            unawaited(_loadWalletTransactions(silent: true));
+          }
         },
                 child: Padding(
                   padding: const EdgeInsets.symmetric(vertical: 10),

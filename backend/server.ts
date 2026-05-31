@@ -430,7 +430,15 @@ function moneyRound(n: number): number {
 /** Physical cash collected on delivery — audit only, not spendable wallet money. */
 const COD_WALLET_REFERENCE_SQL = `(reference LIKE 'COD collected%' OR reference LIKE 'COD vendor share%')`;
 
+/** Paystack/MoMo commission lines are audit-only; they do not change spendable wallet funds. */
+const EXTERNAL_COMMISSION_REFERENCE_SQL = `(reference LIKE 'MoMo/card commission%')`;
+
 type DbClient = { query: typeof pool.query };
+
+function isCodLedgerReference(reference: unknown): boolean {
+  const ref = String(reference ?? '');
+  return ref.startsWith('COD collected') || ref.startsWith('COD vendor share');
+}
 
 /** Net COD ledger entries still on file (historical deliveries credited balance incorrectly). */
 async function getRiderCodLedgerNet(riderId: string, client: DbClient = pool): Promise<number> {
@@ -445,6 +453,25 @@ async function getRiderCodLedgerNet(riderId: string, client: DbClient = pool): P
 
 /** Rider wallet funds that can pay commission or be withdrawn (excludes COD cash in pocket). */
 async function getRiderSpendableBalance(riderId: string, client: DbClient = pool): Promise<number> {
+  const countRes = await client.query(
+    'SELECT COUNT(*)::int AS n FROM wallet_transactions WHERE user_id = $1',
+    [riderId]
+  );
+  const hasLedger = parseInt(String(countRes.rows[0]?.n ?? 0), 10) > 0;
+
+  if (hasLedger) {
+    const ledgerRes = await client.query(
+      `SELECT COALESCE(SUM(amount), 0)::float AS spendable
+       FROM wallet_transactions
+       WHERE user_id = $1
+         AND NOT ${COD_WALLET_REFERENCE_SQL}
+         AND NOT ${EXTERNAL_COMMISSION_REFERENCE_SQL}`,
+      [riderId]
+    );
+    return moneyRound(Math.max(0, parseFloat(String(ledgerRes.rows[0]?.spendable ?? 0))));
+  }
+
+  // Fallback for legacy accounts with balance but no transaction rows yet
   const balRes = await client.query('SELECT balance FROM users WHERE id = $1', [riderId]);
   const raw = parseFloat(String(balRes.rows[0]?.balance ?? 0));
   const codNet = await getRiderCodLedgerNet(riderId, client);
@@ -3262,11 +3289,16 @@ app.patch('/api/auth/status', authenticateToken, async (req: any, res) => {
 app.get('/api/wallet', authenticateToken, async (req: any, res) => {
   try {
     if (req.user.role === 'rider') {
-      const balance = await getRiderSpendableBalance(req.user.id);
-      return res.json({ balance });
+      const withdrawable = await getRiderSpendableBalance(req.user.id);
+      return res.json({
+        balance: withdrawable,
+        withdrawable,
+        cash_not_withdrawable: true,
+      });
     }
     const result = await pool.query('SELECT balance FROM users WHERE id = $1', [req.user.id]);
-    res.json({ balance: parseFloat(result.rows[0].balance) });
+    const balance = parseFloat(result.rows[0].balance);
+    res.json({ balance, withdrawable: balance });
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
   }
@@ -3275,10 +3307,14 @@ app.get('/api/wallet', authenticateToken, async (req: any, res) => {
 app.get('/api/wallet/transactions', authenticateToken, async (req: any, res) => {
   const limit = Math.min(Math.max(parseInt(String(req.query.limit || '50'), 10) || 50, 1), 100);
   try {
+    const riderFilter =
+      req.user.role === 'rider'
+        ? ` AND NOT ${COD_WALLET_REFERENCE_SQL} AND NOT ${EXTERNAL_COMMISSION_REFERENCE_SQL}`
+        : '';
     const result = await pool.query(
       `SELECT id, amount, type, status, reference, created_at
        FROM wallet_transactions
-       WHERE user_id = $1
+       WHERE user_id = $1${riderFilter}
        ORDER BY created_at DESC
        LIMIT $2`,
       [req.user.id, limit]
@@ -3291,6 +3327,7 @@ app.get('/api/wallet/transactions', authenticateToken, async (req: any, res) => 
         status: row.status,
         reference: row.reference,
         createdAt: row.created_at,
+        ledgerOnly: isCodLedgerReference(row.reference),
       }))
     );
   } catch (err) {
@@ -4798,6 +4835,7 @@ app.get('/api/rider/commission/summary', authenticateToken, async (req: any, res
       has_overdue: overdue,
       can_go_online: !overdue,
       wallet_balance: walletBalance,
+      withdrawable_balance: walletBalance,
       can_pay_from_wallet: walletBalance >= totalOwed - 0.01,
       settlements,
       policy:
