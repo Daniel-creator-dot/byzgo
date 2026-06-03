@@ -1402,12 +1402,58 @@ function tripAllowsContact(order: any): boolean {
   return Boolean(order?.rider_id) && TRIP_CONTACT_STATUSES.has(order.status);
 }
 
+/** Human-friendly name for chat, push, and UI (hides email stubs and broken placeholders). */
+function displayUserName(
+  raw: string | null | undefined,
+  opts?: { role?: string | null; fallback?: string }
+): string {
+  const fallback = opts?.fallback ?? 'BytzGo user';
+  let name = String(raw ?? '').trim();
+  const role = opts?.role ?? null;
+
+  const looksPlaceholder =
+    !name ||
+    /\$/.test(name) ||
+    /^(user|sender|test|guest)(\d+)?$/i.test(name) ||
+    /^user[a-f0-9]{6,}$/i.test(name);
+
+  if (looksPlaceholder) {
+    if (role === 'rider') return 'Your biker';
+    if (role === 'customer') return 'Customer';
+    if (role === 'admin') return 'BytzGo Support';
+    if (role === 'vendor') return 'Shop partner';
+    return fallback;
+  }
+
+  if (name.includes('@')) {
+    name = name
+      .split('@')[0]
+      .replace(/[._-]+/g, ' ')
+      .trim();
+    if (!name || /^(user|sender)(\d+)?$/i.test(name)) {
+      if (role === 'rider') return 'Your biker';
+      if (role === 'customer') return 'Customer';
+      return fallback;
+    }
+  }
+
+  return name
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
+}
+
 function formatOrderMessage(row: any, viewerId: string) {
   return {
     id: row.id,
     orderId: row.order_id,
     senderId: row.sender_id,
-    senderName: row.sender_name || 'User',
+    senderName: displayUserName(row.sender_name, {
+      role: row.sender_role,
+      fallback: 'Trip contact',
+    }),
+    senderRole: row.sender_role || null,
     body: row.body,
     createdAt: row.created_at,
     isMine: row.sender_id === viewerId,
@@ -1426,7 +1472,10 @@ function formatSupportMessage(row: any, viewerId: string) {
     id: row.id,
     ticketId: row.ticket_id,
     senderId: row.sender_id,
-    senderName: row.sender_name || 'User',
+    senderName: displayUserName(row.sender_name, {
+      role: row.sender_role,
+      fallback: 'BytzGo Support',
+    }),
     senderRole: row.sender_role || null,
     body: row.body,
     createdAt: row.created_at,
@@ -1511,7 +1560,10 @@ async function emitSupportMessage(ticket: any, messageRow: any, senderId: string
   }
 
   if (notifyIds.size > 0) {
-    const senderName = nameRes.rows[0]?.name || 'Support';
+    const senderName = displayUserName(nameRes.rows[0]?.name, {
+      role: nameRes.rows[0]?.role,
+      fallback: 'BytzGo Support',
+    });
     const body = String(messageRow.body || '');
     void sendPushToUserIds([...notifyIds], {
       title: `Support · ${ticket.display_id}`,
@@ -3006,7 +3058,9 @@ app.post('/api/auth/google', async (req, res) => {
     }
 
     const googleId = payload.sub || (payload as { user_id?: string }).user_id;
-    const displayName = payload.name || payload.email.split('@')[0];
+    const displayName = displayUserName(payload.name || payload.email.split('@')[0], {
+      fallback: 'BytzGo member',
+    });
     
     // Check if user exists
     let result = await pool.query('SELECT * FROM users WHERE email = $1', [payload.email]);
@@ -6118,7 +6172,7 @@ app.get('/api/orders/:id/messages', authenticateToken, async (req: any, res) => 
   try {
     await assertOrderChatAccess(orderId, req.user.id);
     const result = await pool.query(
-      `SELECT m.*, u.name AS sender_name
+      `SELECT m.*, u.name AS sender_name, u.role AS sender_role
        FROM order_messages m
        JOIN users u ON u.id = m.sender_id
        WHERE m.order_id = $1
@@ -6151,8 +6205,11 @@ app.post('/api/orders/:id/messages', authenticateToken, async (req: any, res) =>
       [orderId, req.user.id, body]
     );
     const row = inserted.rows[0];
-    const nameRes = await pool.query('SELECT name FROM users WHERE id = $1', [req.user.id]);
+    const nameRes = await pool.query('SELECT name, role FROM users WHERE id = $1', [
+      req.user.id,
+    ]);
     row.sender_name = nameRes.rows[0]?.name;
+    row.sender_role = nameRes.rows[0]?.role;
 
     const payload = formatOrderMessage(row, req.user.id);
     if (order.customer_id) {
@@ -6171,9 +6228,12 @@ app.post('/api/orders/:id/messages', authenticateToken, async (req: any, res) =>
     const recipientId =
       req.user.id === order.customer_id ? order.rider_id : order.customer_id;
     if (recipientId) {
-      const senderName = nameRes.rows[0]?.name || 'Someone';
+      const senderName = displayUserName(nameRes.rows[0]?.name, {
+        role: nameRes.rows[0]?.role,
+        fallback: 'Someone',
+      });
       void sendPushToUserIds([recipientId], {
-        title: `Message from $senderName`,
+        title: `Message from ${senderName}`,
         body: body.length > 140 ? `${body.slice(0, 137)}…` : body,
         type: 'trip-message',
         orderId,
@@ -6250,7 +6310,10 @@ app.post('/api/support/tickets', authenticateToken, async (req: any, res) => {
         if (adminIds.length > 0) {
           void sendPushToUserIds(adminIds, {
             title: `New support case · ${ticketPayload.displayId}`,
-            body: `${nameRes.rows[0]?.name || 'User'}: ${subject}`,
+            body: `${displayUserName(nameRes.rows[0]?.name, {
+              role: nameRes.rows[0]?.role,
+              fallback: 'BytzGo user',
+            })}: ${subject}`,
             type: 'support-ticket',
             ticketId: ticketPayload.id,
             channelId: 'support_updates',
