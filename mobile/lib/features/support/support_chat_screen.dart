@@ -360,7 +360,7 @@ class _MessageBubble extends StatelessWidget {
           children: [
             if (!mine)
               Text(
-                message.senderName,
+                message.displaySenderName,
                 style: const TextStyle(
                   color: BytzGoTheme.brandBlue,
                   fontSize: 11,

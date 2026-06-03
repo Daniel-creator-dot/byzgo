@@ -1,10 +1,12 @@
 import 'dart:async';
 
+import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
-import '../../core/delivery_pricing_config.dart';
+import '../../core/config_repository.dart';
 import '../../core/directions_service.dart';
 import '../../core/location_service.dart';
 import '../../core/places_service.dart';
@@ -26,7 +28,6 @@ import '../../shared/widgets/live_trip_map_overlay.dart';
 import '../../shared/widgets/ride_google_map.dart';
 import '../../shared/widgets/bytz_scaffold.dart';
 import '../../shared/widgets/ride_ui.dart';
-import '../../shared/widgets/trip_rating_sheet.dart';
 import '../orders/orders_repository.dart';
 import '../riders/riders_repository.dart';
 import '../../shared/widgets/location_autocomplete_field.dart';
@@ -60,7 +61,6 @@ class CustomerHomeScreen extends StatefulWidget {
 }
 
 class CustomerHomeScreenState extends State<CustomerHomeScreen> {
-  DeliveryPricingConfig? _pricingConfig;
   final _pickupCtrl = TextEditingController();
   final _dropoffCtrl = TextEditingController();
   final _itemCtrl = TextEditingController(text: 'Package');
@@ -82,6 +82,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
   double? _quoteDistanceKm;
   bool _surgeActive = false;
   bool _quoteLoading = false;
+  String? _quoteError;
   Timer? _quoteDebounce;
   LocationPoint? _riderPosition;
   List<LocationPoint> _nearbyRiders = [];
@@ -96,12 +97,9 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
   Timer? _etaPoll;
   DateTime? _lastEtaFetch;
   LocationPoint? _lastEtaOrigin;
-  String? _lastEtaOrderStatus;
-  String? _lastEtaTargetKey;
   SocketService? _socket;
   OrderMessageHandler? _chatNotifyHandler;
   final _mapKey = GlobalKey<RideGoogleMapState>();
-  String? _ratingPromptOrderId;
 
   OrdersRepository get _ordersRepo => context.read<OrdersRepository>();
   RidersRepository get _ridersRepo => context.read<RidersRepository>();
@@ -114,37 +112,14 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
   void didChangeDependencies() {
     super.didChangeDependencies();
     _socket ??= context.read<SocketService>();
-    final pricing = context.read<DeliveryPricingConfig>();
-    if (!identical(pricing, _pricingConfig)) {
-      _pricingConfig?.removeListener(_onLivePricingUpdated);
-      _pricingConfig = pricing..addListener(_onLivePricingUpdated);
-      _pricePerKm = pricing.pricePerKm;
-      _surgeActive = pricing.surgeActive;
-    }
-  }
-
-  void _onLivePricingUpdated() {
-    if (!mounted || _pricingConfig == null) return;
-    setState(() {
-      _pricePerKm = _pricingConfig!.pricePerKm;
-      _surgeActive = _pricingConfig!.surgeActive;
-      _quotedFee = null;
-    });
-    _scheduleDeliveryQuote();
   }
 
   double get _deliveryFee {
     if (_quotedFee != null) return _quotedFee!;
+    if (_quoteError != null) return 0;
     if (_pickup == null || _destination == null) return 0;
     if (!_pickup!.hasCoords || !_destination!.hasCoords) return 0;
-    final bounds = _pricingConfig?.boundsForRegion(_session.user?.region);
-    return courierFeeBetween(
-      _pickup!,
-      _destination!,
-      _pricePerKm,
-      minFee: bounds?.min,
-      maxFee: bounds?.max,
-    );
+    return courierFeeBetween(_pickup!, _destination!, _pricePerKm);
   }
 
   double get _routeDistanceKm {
@@ -164,38 +139,16 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
   Order? get _activeCourier {
     final userId = _session.user?.id;
     if (userId == null) return null;
-    bool isRelevant(Order o) {
+    final list = _orders.where((o) {
       if (o.customerId != userId) return false;
+      if (['delivered', 'cancelled'].contains(o.status)) return false;
       final type = o.orderType ?? '';
       return type == 'courier' ||
           type == 'food' ||
           customerOrderHasShopPickup(o) ||
           (o.pickup != null && o.pickup!.trim().isNotEmpty);
-    }
-
-    final relevant = _orders.where(isRelevant).toList()
-      ..sort((a, b) {
-        try {
-          return DateTime.parse(b.createdAt).compareTo(DateTime.parse(a.createdAt));
-        } catch (_) {
-          return b.id.compareTo(a.id);
-        }
-      });
-    if (relevant.isEmpty) return null;
-    // A trip with an assigned rider that hasn't finished is always the live
-    // trip — never hide it behind a newer order.
-    for (final o in relevant) {
-      if (o.riderId != null && !['delivered', 'cancelled'].contains(o.status)) {
-        return o;
-      }
-    }
-    // Otherwise only the customer's most recent order can be the active trip.
-    // Once that trip is delivered/cancelled we return to idle instead of
-    // resurrecting an older, abandoned "pending" order — which would otherwise
-    // wrongly re-show the "searching for a rider" radar after a trip ends.
-    final newest = relevant.first;
-    if (['delivered', 'cancelled'].contains(newest.status)) return null;
-    return newest;
+    });
+    return list.isEmpty ? null : list.first;
   }
 
   /// After marketplace checkout — show trip on map and in lists.
@@ -228,8 +181,9 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
 
   Future<void> _init() async {
     _wireSocket();
-    _pricePerKm = context.read<DeliveryPricingConfig>().pricePerKm;
-    _surgeActive = context.read<DeliveryPricingConfig>().surgeActive;
+    try {
+      _pricePerKm = await context.read<ConfigRepository>().fetchPricePerKm();
+    } catch (_) {}
     await _loadOrders();
     await _detectPickup();
     if (!mounted) return;
@@ -315,7 +269,10 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
       return;
     }
     if (!mounted) return;
-    setState(() => _quoteLoading = true);
+    setState(() {
+      _quoteLoading = true;
+      _quoteError = null;
+    });
     try {
       final region = _session.user?.region;
       final q = await _ordersRepo.calculateRouteDelivery(
@@ -333,17 +290,23 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
         _pricePerKm = q.pricePerKm;
         _surgeActive = q.surgeActive;
         _quoteLoading = false;
+        _quoteError = null;
       });
       _revealQuoteInSheet();
-    } catch (_) {
+    } catch (e) {
       if (!mounted) return;
-      setState(() => _quoteLoading = false);
+      final msg = OrdersRepository.errorMessage(e);
+      setState(() {
+        _quotedFee = null;
+        _quoteLoading = false;
+        _quoteError = msg;
+      });
+      _snack(msg);
     }
   }
 
   @override
   void dispose() {
-    _pricingConfig?.removeListener(_onLivePricingUpdated);
     _quoteDebounce?.cancel();
     _nearbyPoll?.cancel();
     _etaPoll?.cancel();
@@ -404,8 +367,6 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
     socket.onOrderUpdated = (order) {
       if (!mounted) return;
       final prev = _orders.where((o) => o.id == order.id).firstOrNull;
-      final wasCancelled =
-          order.status == 'cancelled' && prev?.status != 'cancelled';
       setState(() {
         final i = _orders.indexWhere((o) => o.id == order.id);
         if (i >= 0) {
@@ -413,23 +374,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
         } else {
           _orders = [order, ..._orders];
         }
-        if (order.status == 'cancelled') {
-          _riderPosition = null;
-          _nearbyRiders = [];
-          _etaPhrase = null;
-          _routePoints = [];
-          _etaMinutes = null;
-          _etaDistanceText = null;
-          _etaExpiresAt = null;
-        }
       });
-      if (wasCancelled && order.customerId == _session.user?.id) {
-        _etaPoll?.cancel();
-        _etaPoll = null;
-        _nearbyPoll?.cancel();
-        _nearbyPoll = null;
-        _snack('Delivery request cancelled', success: true);
-      }
       if (order.customerId == _session.user?.id) {
         if (order.status == 'delivered' && prev?.status != 'delivered') {
           unawaited(PushNotificationService.instance.showTripAlert(
@@ -452,7 +397,6 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
                 ? 'Going to ${customerShopLabel(order)} to pick up your order'
                 : 'Your biker is on the way',
             orderId: order.id,
-            highPriority: true,
           ));
         } else if (order.status == 'picked_up' && prev?.status != 'picked_up') {
           final shop = customerOrderHasShopPickup(order);
@@ -468,9 +412,6 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
       }
       if (order.status == 'delivered' && prev?.status != 'delivered') {
         _snack('Delivered — thanks for using BytzGO!', success: true);
-        if (order.customerId == _session.user?.id) {
-          _promptDeliveryRating(order);
-        }
       } else if (order.status == 'arrived' && prev?.status != 'arrived') {
         _snack('Driver arrived — complete payment for your PIN', success: true);
       } else if (order.status == 'picked_up' && prev?.status != 'picked_up') {
@@ -514,7 +455,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
         );
       });
       _mapKey.currentState?.fitAllMarkers();
-      if (active != null) unawaited(_refreshEta(active, force: true));
+      if (active != null) unawaited(_refreshEta(active));
     };
   }
 
@@ -526,7 +467,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
         ? '${message.body.substring(0, 117)}…'
         : message.body;
     unawaited(PushNotificationService.instance.showTripAlert(
-      title: 'New message',
+      title: message.displaySenderName,
       body: preview,
       type: 'trip-message',
       orderId: orderId,
@@ -576,27 +517,15 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
     final hasRider = order.riderId != null &&
         !['delivered', 'cancelled'].contains(order.status);
     if (hasRider) {
-      final target = customerRiderNavTarget(order);
-      final targetKey = target != null && target.hasCoords
-          ? '${target.lat.toStringAsFixed(5)},${target.lng.toStringAsFixed(5)}'
-          : null;
-      if (_lastEtaOrderStatus != order.status || targetKey != _lastEtaTargetKey) {
-        _lastEtaOrderStatus = order.status;
-        _lastEtaTargetKey = targetKey;
-        _lastEtaFetch = null;
-        _lastEtaOrigin = null;
-      }
       if (_etaPoll == null) {
-        unawaited(_refreshEta(order, force: true));
+        unawaited(_refreshEta(order));
         _etaPoll = Timer.periodic(
-          const Duration(seconds: 6),
+          const Duration(seconds: 12),
           (_) {
             final active = _activeCourier;
             if (active != null) unawaited(_refreshEta(active));
           },
         );
-      } else if (_lastEtaFetch == null) {
-        unawaited(_refreshEta(order, force: true));
       }
     } else {
       _etaPoll?.cancel();
@@ -615,24 +544,23 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
     }
   }
 
-  Future<void> _refreshEta(Order order, {bool force = false}) async {
+  Future<void> _refreshEta(Order order) async {
     if (_riderPosition == null || !(_riderPosition!.hasCoords)) return;
     final target = customerRiderNavTarget(order);
     if (target == null || !target.hasCoords) return;
 
     final origin = _riderPosition!;
     final now = DateTime.now();
-    if (!force &&
-        _lastEtaFetch != null &&
+    if (_lastEtaFetch != null &&
         _lastEtaOrigin != null &&
-        now.difference(_lastEtaFetch!) < const Duration(seconds: 6)) {
+        now.difference(_lastEtaFetch!) < const Duration(seconds: 12)) {
       final moved = haversineDistanceKm(
         _lastEtaOrigin!.lat,
         _lastEtaOrigin!.lng,
         origin.lat,
         origin.lng,
       );
-      if (moved < 0.015) return;
+      if (moved < 0.03) return;
     }
 
     final summary = await _directions.fetchRoute(
@@ -686,7 +614,6 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
   }
 
   void _replaceOrder(Order order) {
-    final wasCancelled = order.status == 'cancelled';
     setState(() {
       final i = _orders.indexWhere((o) => o.id == order.id);
       if (i >= 0) {
@@ -694,27 +621,17 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
       } else {
         _orders = [order, ..._orders];
       }
-      if (wasCancelled) {
+      if (order.status == 'cancelled') {
         _riderPosition = null;
         _nearbyRiders = [];
-        _etaPhrase = null;
-        _routePoints = [];
-        _etaMinutes = null;
-        _etaDistanceText = null;
-        _etaExpiresAt = null;
-        _trackingPickupLabel = null;
-        _trackingDropoffLabel = null;
       }
     });
     _syncNearbyPoll();
     _syncEtaPoll(order);
-    if (wasCancelled) {
+    if (order.status == 'cancelled') {
       _etaPoll?.cancel();
       _etaPoll = null;
-      _nearbyPoll?.cancel();
-      _nearbyPoll = null;
       _snack('Delivery request cancelled', success: true);
-      unawaited(_loadOrders());
     }
   }
 
@@ -738,6 +655,9 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
           lat: user.lat!,
           lng: user.lng!,
         );
+      }
+      if (loc == null && kDebugMode) {
+        loc = accraDefaultPoint();
       }
       if (loc == null) {
         if (mounted) {
@@ -907,7 +827,48 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
     });
   }
 
+  double? _expectedTotalFromOrderError(Object err) {
+    if (err is! DioException || err.response?.statusCode != 400) return null;
+    final data = err.response?.data;
+    if (data is! Map) return null;
+    final expected = data['expected_total'];
+    if (expected is num && expected > 0) return expected.toDouble();
+    return null;
+  }
+
+  Future<double?> _fetchFreshDeliveryQuote() async {
+    if (_pickup == null ||
+        _destination == null ||
+        !_pickup!.hasCoords ||
+        !_destination!.hasCoords) {
+      return null;
+    }
+    final region = _session.user?.region;
+    final q = await _ordersRepo.calculateRouteDelivery(
+      pickupLat: _pickup!.lat,
+      pickupLng: _pickup!.lng,
+      destLat: _destination!.lat,
+      destLng: _destination!.lng,
+      pickupRegion: region,
+      destinationRegion: region,
+    );
+    if (!mounted) return null;
+    setState(() {
+      _quotedFee = q.deliveryFee;
+      _quoteDistanceKm = q.distanceKm;
+      _pricePerKm = q.pricePerKm;
+      _surgeActive = q.surgeActive;
+      _quoteLoading = false;
+      _quoteError = null;
+    });
+    return q.deliveryFee;
+  }
+
   Future<void> _requestDelivery() async {
+    if (_session.user == null) {
+      _snack('Sign in to request a delivery');
+      return;
+    }
     if (_pickup == null || !_pickup!.hasCoords) {
       _snack('Set pickup — allow location, search, or pick a shop');
       return;
@@ -916,15 +877,39 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
       _snack('Choose a drop-off from search or tap the map');
       return;
     }
-    final fee = _deliveryFee;
-    if (fee <= 0) {
-      _snack('Could not calculate delivery fee');
-      return;
-    }
 
     setState(() => _booking = true);
     HapticFeedback.mediumImpact();
     try {
+      _quoteDebounce?.cancel();
+      if (mounted) {
+        setState(() {
+          _quoteLoading = true;
+          _quoteError = null;
+        });
+      }
+
+      double? fee;
+      try {
+        fee = await _fetchFreshDeliveryQuote();
+      } catch (e) {
+        if (mounted) {
+          final msg = OrdersRepository.errorMessage(e);
+          setState(() {
+            _quotedFee = null;
+            _quoteLoading = false;
+            _quoteError = msg;
+          });
+        }
+        _snack(OrdersRepository.errorMessage(e));
+        return;
+      }
+
+      if (fee == null || fee <= 0) {
+        _snack('Could not calculate delivery fee. Check your connection and try again.');
+        return;
+      }
+
       final pickup = _pickup!.copyWith(
         address: _pickupCtrl.text.trim().isEmpty
             ? _pickup!.address
@@ -935,44 +920,58 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
             ? _destination!.address
             : _dropoffCtrl.text.trim(),
       );
-      final order = await _ordersRepo.createCourierOrder(
-        pickup: pickup,
-        destination: dest,
-        deliveryFee: fee,
-        region: _session.user?.region,
-        itemDescription: _itemCtrl.text.trim().isEmpty
-            ? 'Package'
-            : _itemCtrl.text.trim(),
-      );
-      if (!mounted) return;
-      setState(() {
-        _orders = [order, ..._orders];
-      });
-      _syncNearbyPoll();
-      _snack('Bike requested — waiting for a rider', success: true);
-    } catch (e) {
-      _snack(OrdersRepository.errorMessage(e));
-    } finally {
-      if (mounted) setState(() => _booking = false);
-    }
-  }
+      final itemDescription = _itemCtrl.text.trim().isEmpty
+          ? 'Package'
+          : _itemCtrl.text.trim();
 
-  void _promptDeliveryRating(Order order) {
-    if (!mounted) return;
-    if (_ratingPromptOrderId == order.id) return;
-    if (order.rating != null && order.rating! > 0) return;
-    _ratingPromptOrderId = order.id;
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      if (!mounted) return;
-      await TripRatingSheet.showCustomerRating(
-        context,
-        order: order,
-        orders: _ordersRepo,
-        onDone: () {
-          if (mounted) setState(() => _ratingPromptOrderId = null);
-        },
-      );
-    });
+      try {
+        final order = await _ordersRepo.createCourierOrder(
+          pickup: pickup,
+          destination: dest,
+          deliveryFee: fee,
+          region: _session.user?.region,
+          itemDescription: itemDescription,
+        );
+        if (!mounted) return;
+        setState(() {
+          _orders = [order, ..._orders];
+        });
+        _syncNearbyPoll();
+        _snack('Bike requested — waiting for a rider', success: true);
+      } catch (e) {
+        final retryFee = _expectedTotalFromOrderError(e);
+        if (retryFee != null) {
+          try {
+            final order = await _ordersRepo.createCourierOrder(
+              pickup: pickup,
+              destination: dest,
+              deliveryFee: retryFee,
+              region: _session.user?.region,
+              itemDescription: itemDescription,
+            );
+            if (!mounted) return;
+            setState(() {
+              _quotedFee = retryFee;
+              _orders = [order, ..._orders];
+            });
+            _syncNearbyPoll();
+            _snack('Bike requested — waiting for a rider', success: true);
+            return;
+          } catch (e2) {
+            _snack(OrdersRepository.errorMessage(e2));
+            return;
+          }
+        }
+        _snack(OrdersRepository.errorMessage(e));
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _booking = false;
+          _quoteLoading = false;
+        });
+      }
+    }
   }
 
   void _snack(String msg, {bool success = false}) {
@@ -997,36 +996,9 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
     final navTarget = tracking ? customerRiderNavTarget(active) : null;
     final showRiderOnMap = hasRider && !searching;
 
-    // Keep the rider/route framed in the band above the sheet and below the
-    // floating trip HUD so the customer always sees the biker approaching.
-    final media = MediaQuery.of(context);
-    final screenH = media.size.height;
-    final sheetFrac = tracking
-        ? customerTrackingSheetFraction(
-            active,
-            embedded: widget.embedded,
-            searching: searching,
-          )
-        : (widget.embedded ? (fee > 0 ? 0.64 : 0.58) : (fee > 0 ? 0.78 : 0.72));
-    final effFrac = sheetFrac;
-    final isArrived = tracking && active.status == 'arrived';
-    final paymentFooter = isArrived &&
-            (customerNeedsPayment(active) || customerCanShowDeliveryPin(active))
-        ? CustomerTripPaymentCard(
-            order: active,
-            onOrderUpdated: _replaceOrder,
-            pinned: true,
-          )
-        : null;
-    final mapPadding = EdgeInsets.only(
-      top: media.padding.top + (tracking ? 64.0 : 8.0),
-      bottom: screenH * effFrac + 12.0,
-    );
-
     return RideShell(
       mapChild: RideGoogleMap(
         key: _mapKey,
-        padding: mapPadding,
         pickup: mapPickup,
         destination: mapDest,
         riderPosition: showRiderOnMap ? _riderPosition : null,
@@ -1064,19 +1036,23 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
               etaExpiresAt: _etaExpiresAt,
               riderPosition: _riderPosition,
               navTarget: navTarget,
-              minimalChrome: isArrived,
               onRecenter: () => _mapKey.currentState?.fitAllMarkers(),
             )
           : null,
       sheet: RideSheet(
         scrollController: _sheetScrollCtrl,
-        maxHeightFraction: sheetFrac,
+        collapsible: tracking,
+        collapsedHeight: 234,
+        initiallyExpanded: active != null &&
+            (active.status == 'arrived' || active.status == 'delivered'),
+        maxHeightFraction: tracking
+            ? (widget.embedded ? 0.72 : 0.8)
+            : (widget.embedded ? (fee > 0 ? 0.64 : 0.58) : (fee > 0 ? 0.78 : 0.72)),
         bottomInset: widget.embedded ? 12 : 0,
         padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
         footerPadding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
         scrollBottomPadding: !tracking && fee > 0 ? 12 : 0,
-        footer: paymentFooter ??
-            (!tracking
+        footer: !tracking
             ? Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1104,7 +1080,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
                   ),
                 ],
               )
-            : null),
+            : null,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           mainAxisSize: MainAxisSize.min,
@@ -1135,8 +1111,6 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
                 navTarget: navTarget,
                 searching: searching,
                 nearbyCount: _nearbyRiders.length,
-                omitPayment: isArrived,
-                mapHudActive: true,
               ),
             ],
             if (!tracking) ...[

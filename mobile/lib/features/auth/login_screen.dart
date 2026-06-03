@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../../core/env.dart';
 import '../../core/session.dart';
 import '../../models/role.dart';
+import '../../shared/responsive_layout.dart';
 import '../../shared/theme.dart';
 import '../../shared/widgets/bytz_brand.dart';
 import '../../shared/widgets/ride_ui.dart';
@@ -35,6 +36,7 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
   _AuthMode _mode = _AuthMode.signIn;
   AppRole _signupRole = AppRole.customer;
   bool _loading = false;
+  bool _googleLoading = false;
   bool _obscure = true;
   String? _error;
   late final AnimationController _heroAnim;
@@ -152,6 +154,30 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
     }
   }
 
+  Future<void> _submitGoogle() async {
+    setState(() {
+      _googleLoading = true;
+      _error = null;
+    });
+    try {
+      final result = await context.read<AuthRepository>().signInWithGoogle();
+      await context.read<Session>().setSession(
+        token: result.token,
+        user: result.user,
+      );
+      if (!mounted) return;
+      context.go(_homePathFor(result.user.role));
+    } catch (e) {
+      final msg = AuthRepository.errorMessage(e);
+      if (msg.toLowerCase().contains('cancel')) {
+        return;
+      }
+      setState(() => _error = msg);
+    } finally {
+      if (mounted) setState(() => _googleLoading = false);
+    }
+  }
+
   String _homePathFor(AppRole role) {
     switch (role) {
       case AppRole.customer:
@@ -179,7 +205,7 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
   String get _sheetTitle {
     switch (_mode) {
       case _AuthMode.signIn:
-        return 'Welcome back';
+        return 'Sign in to BytzGo';
       case _AuthMode.signUp:
         return 'Join BytzGo';
       case _AuthMode.forgot:
@@ -190,7 +216,7 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
   String? get _sheetSubtitle {
     switch (_mode) {
       case _AuthMode.signIn:
-        return 'Sign in with phone, email, or Google';
+        return 'Continue with your phone, email, or Google account';
       case _AuthMode.signUp:
         return 'Deliveries, rides, and shops in one app';
       case _AuthMode.forgot:
@@ -377,6 +403,14 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
               color: BytzGoTheme.accent,
               onPressed: _submit,
             ),
+            if (!isForgot && Env.isGoogleSignInEnabled) ...[
+              const SizedBox(height: 14),
+              AuthLoginExtras(
+                showGoogle: true,
+                onGoogle: _loading ? null : _submitGoogle,
+                googleLoading: _googleLoading,
+              ),
+            ],
             if (_mode == _AuthMode.signIn) ...[
               Align(
                 alignment: Alignment.centerRight,
@@ -394,11 +428,9 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                 onPressed: () => _setMode(_AuthMode.signIn),
                 child: const Text('Back to sign in'),
               ),
-            if (!isForgot) ...[
+            if (!isForgot && !Env.isGoogleSignInEnabled) ...[
               const SizedBox(height: 6),
-              AuthLoginExtras(
-                showGoogle: Env.isGoogleSignInEnabled,
-              ),
+              const AuthLoginExtras(showGoogle: false, onGoogle: null),
             ],
             const SizedBox(height: 8),
           ],
@@ -422,7 +454,11 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
         children: [
           const BrandHeroBackground(bottomFade: 0.82),
           SafeArea(
-            child: Theme(
+            child: BytzLayout.constrainContent(
+              context,
+              maxWidth: BytzLayout.phoneContentMaxWidth,
+              fillHeight: true,
+              child: Theme(
               data: BytzGoTheme.sheetTheme(),
               child: CustomScrollView(
                 physics: const BouncingScrollPhysics(
@@ -449,7 +485,7 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                               Text(
                                 isForgot
                                     ? 'Reset your password'
-                                    : 'Fast bike delivery,\non demand.',
+                                    : 'Sign in to continue to BytzGo.\nFast bike delivery, on demand.',
                                 style: TextStyle(
                                   fontSize: 18,
                                   fontWeight: FontWeight.w700,
@@ -491,6 +527,7 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                   ),
                 ],
               ),
+            ),
             ),
           ),
         ],

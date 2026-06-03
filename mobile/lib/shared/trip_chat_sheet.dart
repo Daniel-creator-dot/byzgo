@@ -299,7 +299,7 @@ class _MessageBubble extends StatelessWidget {
           children: [
             if (!mine)
               Text(
-                message.senderName,
+                message.displaySenderName,
                 style: BytzGoTheme.sheetBody(11).copyWith(
                   fontWeight: FontWeight.w800,
                   color: BytzGoTheme.brandBlue,

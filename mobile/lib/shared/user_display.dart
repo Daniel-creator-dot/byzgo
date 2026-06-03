@@ -1,9 +1,14 @@
 import '../models/auth_user.dart';
+import 'display_name.dart';
 
 String userFirstName(AuthUser user) {
-  final parts = user.name.trim().split(RegExp(r'\s+'));
+  final friendly = displayPersonName(user.name, role: user.role.name, fallback: '');
+  if (friendly.isEmpty) return 'there';
+  final parts = friendly.split(RegExp(r'\s+'));
   if (parts.isEmpty || parts.first.isEmpty) return 'there';
-  return parts.first;
+  final first = parts.first;
+  if (first == 'Your' || first == 'BytzGo') return 'there';
+  return first;
 }
 
 String userInitials(AuthUser user) {

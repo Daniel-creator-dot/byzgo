@@ -10,6 +10,8 @@ import { twMerge } from 'tailwind-merge';
 import { Map, Marker, useMap, useMapsLibrary } from '@vis.gl/react-google-maps';
 import { MapsProvider } from './components/MapsProvider';
 import { Modal, ConfirmationModal, LoadingIndicator } from './components/UI';
+import { GoogleLogin } from '@react-oauth/google';
+import { isGoogleSignInConfigured } from './lib/googleAuth';
 import { supabase } from './lib/supabase';
 import {
   subscribeRiderPush,
@@ -23,7 +25,6 @@ import { ProfileAvatarUpload } from './components/ProfileAvatarUpload';
 import { CustomerShell } from './components/customer/CustomerShell';
 import { CustomerDeliveryHome } from './components/customer/CustomerDeliveryHome';
 import { CustomerTripsView } from './components/customer/CustomerTripsView';
-import { TripRatingModal } from './components/customer/TripRatingModal';
 import { LocationAutocompleteInput } from './components/LocationAutocompleteInput';
 import { GHANA_REGIONS } from './lib/constants';
 import {
@@ -44,7 +45,6 @@ import {
 import { formatCedis } from './lib/format';
 import {
   DEFAULT_DELIVERY_PRICE_PER_KM,
-  deliveryFeeBoundsForRegion,
   deliveryFeeFromDistanceKm,
   haversineDistanceKm,
 } from './lib/deliveryPricing';
@@ -55,9 +55,9 @@ import {
   playIncomingRidePulse,
   closeIncomingRideAudio,
 } from './lib/incomingRideAudio';
+import { DriverTierBadge, driverTierFrom } from './components/shared/DriverTier';
 import { DarkAppShell, type NavItem } from './components/shared/DarkAppShell';
 import { DarkCard, DarkButton, DarkInput, StatusBadge, EmptyState, ErrorBanner } from './components/shared/ui';
-import { DriverTierBadge, driverTierFrom } from './components/shared/DriverTier';
 
 // Helper for Tailwind classes
 function cn(...inputs: ClassValue[]) {
@@ -228,8 +228,6 @@ function MainApp() {
   const [activeTab, setActiveTab] = useState<string>('courier');
   const [zones, setZones] = useState<any[]>([]);
   const [deliveryPricePerKm, setDeliveryPricePerKm] = useState(DEFAULT_DELIVERY_PRICE_PER_KM);
-  const [globalDeliveryMinFee, setGlobalDeliveryMinFee] = useState<number | null>(null);
-  const [globalDeliveryMaxFee, setGlobalDeliveryMaxFee] = useState<number | null>(null);
   const [cart, setCart] = useState<any[]>(() => {
     try {
       const saved = localStorage.getItem('bytzgo_cart');
@@ -248,10 +246,10 @@ function MainApp() {
     if (cart.length === 0 || !user) return 0;
     const vendorId = cart[0].vendor_id;
     const vendor = vendors.find(v => v.id === vendorId);
-    const bounds = deliveryFeeBoundsForRegion(user.region, zones, {
-      min: globalDeliveryMinFee,
-      max: globalDeliveryMaxFee,
-    });
+    const zone = zones.find(z => z.region === user.region && z.is_active);
+    const bounds = zone
+      ? { min: Number(zone.min_price), max: zone.max_price ? Number(zone.max_price) : null }
+      : undefined;
     if (!vendor?.lat || !vendor?.lng || !user.lat || !user.lng) {
       return deliveryFeeFromDistanceKm(5, deliveryPricePerKm, bounds);
     }
@@ -263,7 +261,6 @@ function MainApp() {
   const [riderLocations, setRiderLocations] = useState<{ [key: string]: { lat: number, lng: number } }>({});
   const [notifications, setNotifications] = useState<{ id: string, message: string, type: 'info' | 'success' | 'warning' }[]>([]);
   const [incomingRideOffer, setIncomingRideOffer] = useState<Order | null>(null);
-  const [ratingOrder, setRatingOrder] = useState<Order | null>(null);
   const [paystackKey, setPaystackKey] = useState<string>('');
   const [refreshing, setRefreshing] = useState(false);
   const [showDeviceSetup, setShowDeviceSetup] = useState(false);
@@ -297,21 +294,16 @@ function MainApp() {
     if (!u || u.role !== 'rider' || u.status !== 'active' || !isOfferableToRider(order)) return;
     if (order.expiresAt && new Date(order.expiresAt).getTime() <= Date.now()) return;
     let isNewOffer = false;
-    let isRefresh = false;
     setIncomingRideOffer((prev) => {
-      if (prev?.id === order.id) {
-        isRefresh = true;
-        return { ...prev, ...order };
-      }
+      if (prev?.id === order.id) return { ...prev, ...order };
       isNewOffer = true;
       return order;
     });
-    if (!isNewOffer && !isRefresh) return;
+    if (!isNewOffer) return;
+    setActiveTab('dashboard');
     unlockIncomingRideAudio();
     playIncomingRidePulse();
     if (navigator.vibrate) navigator.vibrate([400, 200, 400, 200, 400]);
-    if (!isNewOffer) return;
-    setActiveTab('dashboard');
     if (typeof document !== 'undefined' && document.hidden && Notification.permission === 'granted') {
       const earnings = (order as Order & { delivery_fee?: number }).delivery_fee ?? order.total;
       try {
@@ -337,12 +329,7 @@ function MainApp() {
       // Always fetch wallet and paystack config
       const walletPromise = axios.get('/api/wallet');
       const paystackPromise = axios.get('/api/config/paystack').catch(() => ({ data: { publicKey: '' } }));
-      const pricingPromise = axios
-        .get('/api/config/pricing', {
-          params: { _: Date.now() },
-          headers: { 'Cache-Control': 'no-cache' },
-        })
-        .catch(() => ({ data: { price_per_km: DEFAULT_DELIVERY_PRICE_PER_KM } }));
+      const pricingPromise = axios.get('/api/config/pricing').catch(() => ({ data: { price_per_km: DEFAULT_DELIVERY_PRICE_PER_KM } }));
 
       // Conditional promises based on role
       const ordersPromise = axios.get('/api/orders'); // Everyone needs orders
@@ -375,13 +362,6 @@ function MainApp() {
       setPaystackKey(configRes.data.publicKey);
       const rate = Number(pricingRes.data?.price_per_km);
       setDeliveryPricePerKm(rate > 0 ? rate : DEFAULT_DELIVERY_PRICE_PER_KM);
-      const gMin = Number(pricingRes.data?.min_fee);
-      const gMax = Number(pricingRes.data?.max_fee);
-      setGlobalDeliveryMinFee(Number.isFinite(gMin) && gMin > 0 ? gMin : null);
-      setGlobalDeliveryMaxFee(Number.isFinite(gMax) && gMax > 0 ? gMax : null);
-      if (Array.isArray(pricingRes.data?.zones)) {
-        setZones(pricingRes.data.zones);
-      }
       setUser(prev => prev ? { ...prev, balance: profileRes.data.balance } : { ...storedUser, balance: profileRes.data.balance });
       setOrders(ordersRes.data);
       setProducts(productsRes.data);
@@ -470,7 +450,7 @@ function MainApp() {
     if (showDeviceSetup || user?.role !== 'rider' || user.status !== 'active' || !user.is_online || !token) return;
     const poll = setInterval(() => {
       axios.get<Order[]>('/api/orders').then((res) => setOrders(res.data)).catch(() => {});
-    }, 3000);
+    }, 6000);
     return () => clearInterval(poll);
   }, [user?.role, user?.status, user?.is_online, token, showDeviceSetup]);
 
@@ -505,8 +485,7 @@ function MainApp() {
     const interceptor = axios.interceptors.response.use(
       (response) => response,
       (error) => {
-        // Only 401 indicates invalid/expired credentials; 403 is often role or feature gate.
-        if (error.response?.status === 401) {
+        if (error.response && (error.response.status === 401 || error.response.status === 403)) {
           console.warn('Session expired or unauthorized. Logging out.');
           handleLogout();
         }
@@ -548,7 +527,7 @@ function MainApp() {
         }
 
       } catch (err) {
-        console.error('Redirect result failed', err);
+        console.error('Auth redirect failed', err);
       } finally {
         if (!localStorage.getItem('token')) {
           setLoading(false);
@@ -585,7 +564,7 @@ function MainApp() {
         joinSocketRoom();
       } catch (err: any) {
         console.error('Initialization failed', err);
-        if (err.response?.status === 401) {
+        if (err.response && (err.response.status === 401 || err.response.status === 403)) {
           handleLogout();
         }
       } finally {
@@ -599,14 +578,14 @@ function MainApp() {
 
     socket.on('ride:incoming', (order: Order) => {
       if (order.expiresAt && new Date(order.expiresAt).getTime() <= Date.now()) return;
-      const u = userRef.current;
-      if (u?.role === 'rider' && u.status === 'active' && isOfferableToRider(order)) {
-        triggerIncomingRideCall(order);
-      }
       setOrders(prev => {
         const exists = prev.some(o => o.id === order.id);
         return exists ? prev.map(o => (o.id === order.id ? { ...o, ...order } : o)) : [order, ...prev];
       });
+      const u = userRef.current;
+      if (u?.role === 'rider' && u.status === 'active' && isOfferableToRider(order)) {
+        triggerIncomingRideCall(order);
+      }
     });
 
     socket.on('ride:taken', ({ orderId }: { orderId: string }) => {
@@ -662,10 +641,6 @@ function MainApp() {
       }
       if (u?.role === 'customer' && updatedOrder.status === 'delivered' && updatedOrder.customer_id === u.id) {
         addNotification('Your order has been delivered!', 'success');
-        const rated = (updatedOrder as Order & { rating?: number }).rating;
-        if (!rated || rated < 1) {
-          setRatingOrder(updatedOrder);
-        }
       }
       if (
         u?.role === 'vendor' &&
@@ -714,28 +689,6 @@ function MainApp() {
       setUser(prev => prev ? { ...prev, balance: data.balance } : null);
     });
 
-    socket.on('pricing:updated', (payload: { price_per_km?: number; min_fee?: number; max_fee?: number; zones?: unknown[] }) => {
-      const rate = Number(payload?.price_per_km);
-      if (rate > 0) setDeliveryPricePerKm(rate);
-      const pMin = Number(payload?.min_fee);
-      const pMax = Number(payload?.max_fee);
-      if (Number.isFinite(pMin)) setGlobalDeliveryMinFee(pMin > 0 ? pMin : null);
-      if (Number.isFinite(pMax)) setGlobalDeliveryMaxFee(pMax > 0 ? pMax : null);
-      if (Array.isArray(payload?.zones)) setZones(payload.zones);
-      axios
-        .get('/api/config/pricing', { params: { _: Date.now() }, headers: { 'Cache-Control': 'no-cache' } })
-        .then((res) => {
-          const r = Number(res.data?.price_per_km);
-          if (r > 0) setDeliveryPricePerKm(r);
-          const gMin = Number(res.data?.min_fee);
-          const gMax = Number(res.data?.max_fee);
-          setGlobalDeliveryMinFee(Number.isFinite(gMin) && gMin > 0 ? gMin : null);
-          setGlobalDeliveryMaxFee(Number.isFinite(gMax) && gMax > 0 ? gMax : null);
-          if (Array.isArray(res.data?.zones)) setZones(res.data.zones);
-        })
-        .catch(() => {});
-    });
-
     socket.on('status:updated', (payload: { status: string; is_online?: boolean }) => {
       setUser(prev => (prev ? { ...prev, status: payload.status, is_online: payload.is_online ?? prev.is_online } : null));
       const stored = JSON.parse(localStorage.getItem('user') || '{}');
@@ -750,7 +703,6 @@ function MainApp() {
       socket.off('order:updated');
       socket.off('location:updated');
       socket.off('wallet:updated');
-      socket.off('pricing:updated');
       socket.off('status:updated');
     };
   }, [token, triggerIncomingRideCall]);
@@ -904,6 +856,8 @@ function MainApp() {
             pendingApproval={user.status === 'pending' || user.status === 'rejected'}
             addNotification={addNotification}
             refreshData={refreshData}
+            paystackKey={paystackKey}
+            setPaystackKey={setPaystackKey}
           />
         </PullToRefresh>
       </MapsProvider>
@@ -933,12 +887,6 @@ function MainApp() {
           message="Are you sure you want to log out of BytzGo?"
           confirmLabel="Sign Out"
           type="danger"
-        />
-        <TripRatingModal
-          order={ratingOrder}
-          onClose={() => setRatingOrder(null)}
-          addNotification={addNotification}
-          refreshData={refreshData}
         />
         <PullToRefresh onRefresh={refreshData} refreshing={refreshing}>
           <CustomerShell
@@ -1013,8 +961,6 @@ function MainApp() {
               }}
               zones={zones}
               deliveryPricePerKm={deliveryPricePerKm}
-              globalDeliveryMinFee={globalDeliveryMinFee}
-              globalDeliveryMaxFee={globalDeliveryMaxFee}
               subtotal={subtotal}
               deliveryFee={deliveryFee}
               total={total}
@@ -1095,7 +1041,7 @@ function MainApp() {
             )}
             <AnimatePresence mode="wait">
               {user.role === 'vendor' && (
-                <VendorView user={user} orders={orders} products={products} riderLocations={riderLocations} zones={zones} deliveryPricePerKm={deliveryPricePerKm} globalDeliveryMinFee={globalDeliveryMinFee} globalDeliveryMaxFee={globalDeliveryMaxFee} paystackKey={paystackKey} setPaystackKey={setPaystackKey} onPlaceOrder={async (items, totalAmt, vendorId, extra = {}) => {
+                <VendorView user={user} orders={orders} products={products} riderLocations={riderLocations} zones={zones} deliveryPricePerKm={deliveryPricePerKm} paystackKey={paystackKey} setPaystackKey={setPaystackKey} onPlaceOrder={async (items, totalAmt, vendorId, extra = {}) => {
                   try {
                     const vendor = vendorId ? vendors.find((v) => v.id === vendorId) : undefined;
                     const payload = vendorId
@@ -1111,7 +1057,7 @@ function MainApp() {
                 }} onUpdateStatus={updateOrderStatus} addNotification={addNotification} onBalanceUpdate={(bal) => setUser((prev) => (prev ? { ...prev, balance: bal } : prev))} onAddProduct={(p) => setProducts((prev) => { const exists = prev.find((item) => item.id === p.id); if (exists) return prev.map((item) => (item.id === p.id ? p : item)); return [...prev, p]; })} onDeleteProduct={async (id) => { await axios.delete(`/api/products/${id}`); setProducts((prev) => prev.filter((p) => p.id !== id)); }} activeTab={activeTab} setActiveTab={setActiveTab} refreshData={refreshData} onUserUpdate={(updatedUser, newToken) => { setUser(updatedUser); setToken(newToken); localStorage.setItem('user', JSON.stringify(updatedUser)); localStorage.setItem('token', newToken); }} />
               )}
               {user.role === 'admin' && (
-                <AdminView user={user} orders={orders} addNotification={addNotification} activeTab={activeTab} setActiveTab={setActiveTab} onPendingCountChange={setAdminPendingCount} onPendingRiderCountChange={setAdminPendingRiderCount} onPricingUpdated={(rate) => { if (rate > 0) setDeliveryPricePerKm(rate); }} />
+                <AdminView user={user} orders={orders} addNotification={addNotification} activeTab={activeTab} setActiveTab={setActiveTab} onPendingCountChange={setAdminPendingCount} onPendingRiderCountChange={setAdminPendingRiderCount} />
               )}
             </AnimatePresence>
           </div>
@@ -1317,6 +1263,31 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
     }
   };
 
+  const finishGoogleLogin = async (idToken: string) => {
+    const res = await axios.post('/api/auth/google', {
+      credential: idToken,
+      role,
+    });
+    const accepted = onLogin(res.data.user, res.data.token);
+    if (accepted === false) {
+      setError(loginRejectedMessage(res.data.user.role as Role, forcedRole || role));
+    }
+  };
+
+  const onGoogleCredential = async (credential: string) => {
+    setLoading(true);
+    setError('');
+    try {
+      localStorage.setItem('google_login_role', role);
+      await finishGoogleLogin(credential);
+    } catch (err: unknown) {
+      console.error('Google sign-in failed:', err);
+      setError(mapAuthError(err, 'Google sign-in failed. Try email and password instead.'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const heroImage =
     forcedRole === 'rider'
       ? '/branding/hero_rider.png'
@@ -1346,11 +1317,20 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
           />
           <p className="text-white/90 font-semibold text-sm sm:text-base drop-shadow">
             {forcedRole === 'rider'
-              ? 'Rider driver app'
+              ? 'Sign in to continue to BytzGo Rider'
               : forcedRole === 'vendor'
-                ? 'Vendor portal'
+                ? 'Sign in to continue to BytzGo Vendor'
                 : forcedRole === 'admin'
-                  ? 'Platform admin — approve vendors, menu items, and settings'
+                  ? 'Sign in to continue to BytzGo Admin'
+                  : 'Sign in to continue to BytzGo'}
+          </p>
+          <p className="text-white/70 text-xs sm:text-sm mt-1 drop-shadow">
+            {forcedRole === 'admin'
+              ? 'Approve vendors, menu items, and platform settings'
+              : forcedRole === 'rider'
+                ? 'Accept jobs, navigate trips, and get paid'
+                : forcedRole === 'vendor'
+                  ? 'Manage your shop and incoming orders'
                   : 'Fast bike delivery — track every trip live'}
           </p>
           {forcedRole === 'admin' && (
@@ -1367,7 +1347,7 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
             <motion.div className="mt-4 mx-auto max-w-sm p-3 rounded-2xl bg-black/50 backdrop-blur-md text-left border border-white/10">
               <p className="text-[10px] font-black uppercase tracking-widest text-brand-green mb-1">Rider sign-in</p>
               <p className="text-xs text-slate-200 leading-relaxed">
-                Use a <strong className="text-white">rider</strong> account here. Sign in with the email and password you registered with.
+                Use a <strong className="text-white">rider</strong> account here. A Google account registered as customer must use the home app, or tap Join to register as rider.
               </p>
               <p className="text-[10px] text-slate-400 mt-2 font-mono">Demo: rider@bytzgo.net / Rider@2026</p>
             </motion.div>
@@ -1635,6 +1615,38 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
                 </button>
               </form>
 
+              {forcedRole !== 'admin' && (
+              <div className="mt-6">
+                <div className="flex items-center gap-4 mb-5">
+                  <div className="flex-1 h-px bg-slate-200"></div>
+                  <span className="text-[10px] font-black uppercase tracking-widest text-slate-300">or</span>
+                  <div className="flex-1 h-px bg-slate-200"></div>
+                </div>
+                <div className="flex justify-center">
+                  {isGoogleSignInConfigured ? (
+                    <GoogleLogin
+                      onSuccess={(res) => {
+                        if (res.credential) void onGoogleCredential(res.credential);
+                        else setError('Google sign-in failed. Try email and password instead.');
+                      }}
+                      onError={() =>
+                        setError('Google sign-in failed. Try email and password instead.')
+                      }
+                      useOneTap={false}
+                      theme="outline"
+                      size="large"
+                      shape="pill"
+                      text={isLogin ? 'signin_with' : 'signup_with'}
+                      width={320}
+                    />
+                  ) : (
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest text-center">
+                      Google sign-in not configured
+                    </p>
+                  )}
+                </div>
+              </div>
+              )}
             </>
           )}
         </motion.div>
@@ -1741,7 +1753,7 @@ function productFallbackImage(item: { image_url?: string; category?: string; nam
 // Location Autocomplete Component (Ghana-only Places search)
 // REST OF THE VIEW COMPONENTS (CustomerView, VendorView, etc.) 
 // UPDATED TO USE REAL DATA FROM PROPS AND API
-function CustomerView({ user, orders, products, vendors, riderLocations, paystackKey, setPaystackKey, onPlaceOrder, addNotification, cart, setCart, isCartOpen, setIsCartOpen, activeTab, setActiveTab, zones, deliveryPricePerKm, globalDeliveryMinFee, globalDeliveryMaxFee, subtotal, deliveryFee, total, refreshData, onUserUpdate }: { user: AuthUser, orders: Order[], products: any[], vendors: any[], riderLocations: { [key: string]: { lat: number, lng: number } }, paystackKey: string, setPaystackKey: (k: string) => void, onPlaceOrder: (items: any[], total: number, vendorId?: string, extra?: any) => void, addNotification: (m: string, t?: 'info' | 'success' | 'warning') => void, cart: any[], setCart: React.Dispatch<React.SetStateAction<any[]>>, isCartOpen: boolean, setIsCartOpen: (v: boolean) => void, activeTab: string, setActiveTab: (v: any) => void, zones: any[], deliveryPricePerKm: number, globalDeliveryMinFee: number | null, globalDeliveryMaxFee: number | null, subtotal: number, deliveryFee: number, total: number, refreshData: () => Promise<void>, onUserUpdate: (user: AuthUser, token: string) => void }) {
+function CustomerView({ user, orders, products, vendors, riderLocations, paystackKey, setPaystackKey, onPlaceOrder, addNotification, cart, setCart, isCartOpen, setIsCartOpen, activeTab, setActiveTab, zones, deliveryPricePerKm, subtotal, deliveryFee, total, refreshData, onUserUpdate }: { user: AuthUser, orders: Order[], products: any[], vendors: any[], riderLocations: { [key: string]: { lat: number, lng: number } }, paystackKey: string, setPaystackKey: (k: string) => void, onPlaceOrder: (items: any[], total: number, vendorId?: string, extra?: any) => void, addNotification: (m: string, t?: 'info' | 'success' | 'warning') => void, cart: any[], setCart: React.Dispatch<React.SetStateAction<any[]>>, isCartOpen: boolean, setIsCartOpen: (v: boolean) => void, activeTab: string, setActiveTab: (v: any) => void, zones: any[], deliveryPricePerKm: number, subtotal: number, deliveryFee: number, total: number, refreshData: () => Promise<void>, onUserUpdate: (user: AuthUser, token: string) => void }) {
   const [selectedVendor, setSelectedVendor] = useState<any | null>(null);
   const [isTopUpOpen, setIsTopUpOpen] = useState(false);
   const [topUpAmount, setTopUpAmount] = useState('50');
@@ -1814,10 +1826,10 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
       courierForm.pickup.lat, courierForm.pickup.lng,
       courierForm.destination.lat, courierForm.destination.lng
     );
-    const bounds = deliveryFeeBoundsForRegion(user.region, zones, {
-      min: globalDeliveryMinFee,
-      max: globalDeliveryMaxFee,
-    });
+    const zone = zones.find(z => z.region === user.region && z.is_active) || zones[0];
+    const bounds = zone
+      ? { min: Number(zone.min_price), max: zone.max_price ? Number(zone.max_price) : null }
+      : undefined;
     return deliveryFeeFromDistanceKm(distance, deliveryPricePerKm, bounds);
   };
   const courierFee = calculateCourierFee();
@@ -1912,7 +1924,7 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
       }
     }
     if (!currentKey) {
-      addNotification('Payment system is offline. Try again later or contact support.', 'warning');
+      addNotification('Payment system is offline. Check Paystack keys in admin settings.', 'warning');
       return;
     }
 
@@ -2002,7 +2014,7 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
   const creditPendingOrManual = () => {
     const ref = (manualTopupRef || pendingTopupRef).trim();
     if (!ref) {
-      addNotification('Paste your payment reference (e.g. T1234567890) or pay again below.', 'warning');
+      addNotification('Paste your Paystack reference (e.g. T1234567890) or pay again below.', 'warning');
       return;
     }
     const hint = walletTopupReferenceHint(ref);
@@ -2054,13 +2066,13 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
                      (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') &&
                      paystackKey.startsWith('pk_live_') && (
                        <p className="mb-4 p-3 rounded-xl bg-amber-500/15 border border-amber-500/40 text-[11px] text-amber-200 leading-relaxed">
-                         Live payment keys often fail on localhost. For local testing, use test keys in Admin → Settings.
+                         Live Paystack keys often fail on localhost. For local testing, set <strong>pk_test_</strong> keys in Admin → Settings.
                        </p>
                      )}
                    <div className="mb-5 p-4 rounded-2xl bg-slate-800/80 border border-slate-700">
                      <p className="text-[10px] font-black uppercase tracking-widest text-amber-400 mb-2">Already paid?</p>
                      <p className="text-[11px] text-slate-500 mb-2">
-                       Use your <strong className="text-slate-400">payment reference</strong> (starts with{' '}
+                       Use the <strong className="text-slate-400">Paystack</strong> reference (starts with{' '}
                        <span className="font-mono text-slate-400">T</span> or{' '}
                        <span className="font-mono text-slate-400">bytzgo_</span>), not your MTN/Vodafone MoMo ID.
                      </p>
@@ -2493,8 +2505,6 @@ function VendorView({
   riderLocations,
   zones,
   deliveryPricePerKm,
-  globalDeliveryMinFee,
-  globalDeliveryMaxFee,
   paystackKey,
   setPaystackKey,
   onPlaceOrder,
@@ -2514,8 +2524,6 @@ function VendorView({
   riderLocations: { [key: string]: { lat: number; lng: number } };
   zones: any[];
   deliveryPricePerKm: number;
-  globalDeliveryMinFee: number | null;
-  globalDeliveryMaxFee: number | null;
   paystackKey: string;
   setPaystackKey: (k: string) => void;
   onPlaceOrder: (items: unknown[], total: number, vendorId?: string, extra?: Record<string, unknown>) => void | Promise<void>;
@@ -2617,10 +2625,10 @@ function VendorView({
       courierForm.destination.lat,
       courierForm.destination.lng
     );
-    const bounds = deliveryFeeBoundsForRegion(user.region, zones, {
-      min: globalDeliveryMinFee,
-      max: globalDeliveryMaxFee,
-    });
+    const zone = zones.find((z) => z.region === user.region && z.is_active) || zones[0];
+    const bounds = zone
+      ? { min: Number(zone.min_price), max: zone.max_price ? Number(zone.max_price) : null }
+      : undefined;
     return deliveryFeeFromDistanceKm(distance, deliveryPricePerKm, bounds);
   };
   const courierFee = calculateCourierFee();
@@ -3261,18 +3269,11 @@ function Directions({ origin, destination, onETAUpdate }: { origin: google.maps.
     directionsService.route({
       origin,
       destination,
-      travelMode: google.maps.TravelMode.DRIVING,
-      region: 'GH',
-      drivingOptions: {
-        departureTime: new Date(),
-        trafficModel: google.maps.TrafficModel.BEST_GUESS,
-      },
+      travelMode: google.maps.TravelMode.DRIVING
     }).then(response => {
       directionsRenderer.setDirections(response);
-      if (onETAUpdate) {
-        const leg = response.routes[0]?.legs[0];
-        const duration = leg?.duration_in_traffic ?? leg?.duration;
-        if (duration) onETAUpdate(duration.text);
+      if (onETAUpdate && response.routes[0]?.legs[0]?.duration) {
+        onETAUpdate(response.routes[0].legs[0].duration.text);
       }
       lastOriginRef.current = origin;
     }).catch(err => console.warn("Routing failed", err));
@@ -3351,7 +3352,7 @@ function IncomingRideCallModal({
       if (ringStopRef.current) return;
       playIncomingRidePulse();
       if (navigator.vibrate) navigator.vibrate([300, 150, 300]);
-    }, 1000);
+    }, 1400);
 
     const countdown = setInterval(() => {
       setSecondsLeft(prev => {
@@ -3454,14 +3455,6 @@ function IncomingRideCallModal({
             >
               <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">You earn</p>
               <p className="text-4xl font-black text-brand-green font-mono">{formatCedis(earnings)}</p>
-              <p className="mt-2 text-[10px] font-black uppercase tracking-widest">
-                {(order as Order & { payment_status?: string }).payment_status === 'paid' ||
-                order.payment_status === 'paid' ? (
-                  <span className="text-brand-green">Prepaid</span>
-                ) : (
-                  <span className="text-amber-400">Cash on delivery</span>
-                )}
-              </p>
             </motion.div>
             <motion.div className="flex items-start gap-3" initial={{ x: -8, opacity: 0.8 }} animate={{ x: 0, opacity: 1 }}>
               <div className="w-9 h-9 rounded-xl bg-brand-blue/20 flex items-center justify-center shrink-0">
@@ -3527,7 +3520,6 @@ function AdminView({
   setActiveTab,
   onPendingCountChange,
   onPendingRiderCountChange,
-  onPricingUpdated,
 }: {
   user: AuthUser;
   orders: Order[];
@@ -3536,7 +3528,6 @@ function AdminView({
   setActiveTab: (v: any) => void;
   onPendingCountChange?: (count: number) => void;
   onPendingRiderCountChange?: (count: number) => void;
-  onPricingUpdated?: (rate: number) => void;
 }) {
   const [allUsers, setAllUsers] = useState<any[]>([]);
   const [adminVendors, setAdminVendors] = useState<any[]>([]);
@@ -3546,9 +3537,6 @@ function AdminView({
   const [ridersLoading, setRidersLoading] = useState(false);
   const [rejectRiderId, setRejectRiderId] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState('');
-  const [profileRiderId, setProfileRiderId] = useState<string | null>(null);
-  const [riderProfile, setRiderProfile] = useState<any>(null);
-  const [riderProfileLoading, setRiderProfileLoading] = useState(false);
   const [zones, setZones] = useState<any[]>([]);
   const [pendingProducts, setPendingProducts] = useState<any[]>([]);
   const [revenueData, setRevenueData] = useState<any>(null);
@@ -3558,12 +3546,7 @@ function AdminView({
     paystack_public_key: '',
     paystack_secret_key: '',
     platform_fee_percent: '10',
-    commission_percent: '10',
-    commission_insurance_percent: '3',
-    commission_platform_percent: '7',
     delivery_price_per_km: '4',
-    delivery_min_fee: '',
-    delivery_max_fee: '',
     surge_enabled: false,
     surge_multiplier: '1.5',
     surge_start_time: '17:00',
@@ -3579,7 +3562,7 @@ function AdminView({
   const [smsTestPhone, setSmsTestPhone] = useState('');
   const [smsTestLoading, setSmsTestLoading] = useState(false);
   const [editingZone, setEditingZone] = useState<any | null>(null);
-  const [zoneForm, setZoneForm] = useState({ name: '', region: '', min_price: '5', max_price: '' });
+  const [zoneForm, setZoneForm] = useState({ name: '', region: '', base_price: '10', price_per_km: '2', min_price: '5', max_price: '' });
   const [showZoneForm, setShowZoneForm] = useState(false);
   const [zoneToDelete, setZoneToDelete] = useState<any | null>(null);
 
@@ -3595,20 +3578,6 @@ function AdminView({
     }).catch(() => {});
     axios.get('/api/delivery-zones').then((res) => setZones(res.data)).catch(() => {});
   }, []);
-
-  useEffect(() => {
-    if (!profileRiderId) return;
-    setRiderProfileLoading(true);
-    setRiderProfile(null);
-    axios
-      .get(`/api/admin/riders/${profileRiderId}/profile`)
-      .then((res) => setRiderProfile(res.data))
-      .catch((err) => {
-        addNotification(getApiError(err, 'Could not load driver profile'), 'warning');
-        setProfileRiderId(null);
-      })
-      .finally(() => setRiderProfileLoading(false));
-  }, [profileRiderId]);
 
   useEffect(() => {
     if (activeTab === 'products') {
@@ -3630,12 +3599,7 @@ function AdminView({
         paystack_public_key: res.data.paystack_public_key || '',
         paystack_secret_key: '',
         platform_fee_percent: res.data.platform_fee_percent || '10',
-        commission_percent: res.data.commission_percent || '10',
-        commission_insurance_percent: res.data.commission_insurance_percent || '3',
-        commission_platform_percent: res.data.commission_platform_percent || '7',
         delivery_price_per_km: res.data.delivery_price_per_km || '4',
-        delivery_min_fee: res.data.delivery_min_fee ?? '',
-        delivery_max_fee: res.data.delivery_max_fee ?? '',
         surge_enabled: res.data.surge_enabled === 'true' || res.data.surge_enabled === true,
         surge_multiplier: res.data.surge_multiplier || '1.5',
         surge_start_time: res.data.surge_start_time || '17:00',
@@ -3681,27 +3645,22 @@ function AdminView({
     try {
       if (editingZone) {
         const res = await axios.patch(`/api/delivery-zones/${editingZone.id}`, {
-          name: zoneForm.name,
-          region: zoneForm.region,
-          price_per_km: Number(settings.delivery_price_per_km) || 4,
-          min_price: Number(zoneForm.min_price),
-          max_price: zoneForm.max_price ? Number(zoneForm.max_price) : null,
+          name: zoneForm.name, region: zoneForm.region,
+          base_price: Number(zoneForm.base_price), price_per_km: Number(zoneForm.price_per_km),
+          min_price: Number(zoneForm.min_price), max_price: zoneForm.max_price ? Number(zoneForm.max_price) : null
         });
         setZones(zones.map(z => z.id === editingZone.id ? res.data : z));
       } else {
         const res = await axios.post('/api/delivery-zones', {
-          name: zoneForm.name,
-          region: zoneForm.region,
-          base_price: Number(zoneForm.min_price) || 5,
-          price_per_km: Number(settings.delivery_price_per_km) || 4,
-          min_price: Number(zoneForm.min_price),
-          max_price: zoneForm.max_price ? Number(zoneForm.max_price) : null,
+          name: zoneForm.name, region: zoneForm.region,
+          base_price: Number(zoneForm.base_price), price_per_km: Number(zoneForm.price_per_km),
+          min_price: Number(zoneForm.min_price), max_price: zoneForm.max_price ? Number(zoneForm.max_price) : null
         });
         setZones([...zones, res.data]);
       }
       setShowZoneForm(false);
       setEditingZone(null);
-      setZoneForm({ name: '', region: '', min_price: '5', max_price: '' });
+      setZoneForm({ name: '', region: '', base_price: '10', price_per_km: '2', min_price: '5', max_price: '' });
     } catch (err) {
       console.error('Save zone failed', err);
     }
@@ -3930,14 +3889,6 @@ function AdminView({
                          </td>
                          <td className="px-8 py-6">
                            <div className="flex gap-2">
-                             {u.role === 'rider' && (
-                               <button
-                                 onClick={() => setProfileRiderId(u.id)}
-                                 className="px-3 py-1.5 bg-slate-900 text-white rounded-lg text-[10px] font-black uppercase hover:scale-105 transition-all"
-                               >
-                                 Profile
-                               </button>
-                             )}
                              {u.status === 'pending' && (
                                <button 
                                  onClick={async () => {
@@ -3992,14 +3943,6 @@ function AdminView({
                           <span className="font-mono font-black text-brand-green text-sm">{formatCedis(u.balance)}</span>
                        </div>
                        <div className="flex gap-2">
-                           {u.role === 'rider' && (
-                             <button
-                               onClick={() => setProfileRiderId(u.id)}
-                               className="px-4 py-2 bg-slate-900 text-white rounded-xl text-[8px] font-black uppercase tracking-widest"
-                             >
-                               Profile
-                             </button>
-                           )}
                            {u.status === 'pending' && (
                              <button 
                                onClick={async () => {
@@ -4027,90 +3970,6 @@ function AdminView({
                  </div>
                ))}
             </div>
-            {profileRiderId && (
-              <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => setProfileRiderId(null)}>
-                <div className="bg-white rounded-[2rem] p-6 sm:p-8 max-w-lg w-full max-h-[90vh] overflow-y-auto shadow-xl" onClick={(e) => e.stopPropagation()}>
-                  <div className="flex justify-between items-start mb-4">
-                    <h4 className="font-black text-lg text-slate-800 uppercase tracking-tight">Driver profile</h4>
-                    <button type="button" onClick={() => setProfileRiderId(null)} className="text-slate-400 hover:text-slate-600 font-black text-xl leading-none">×</button>
-                  </div>
-                  {riderProfileLoading || !riderProfile ? (
-                    <p className="text-slate-400 text-sm font-bold py-8 text-center">Loading…</p>
-                  ) : (
-                    <div className="space-y-5">
-                      <div>
-                        <p className="font-black text-slate-800">{riderProfile.driver?.name}</p>
-                        <p className="text-xs text-slate-500">{riderProfile.driver?.phone || riderProfile.driver?.email}</p>
-                        <div className="flex flex-wrap gap-2 mt-2">
-                          <span className={cn('px-3 py-1 rounded-lg text-[9px] font-black uppercase', riderProfile.driver?.is_online ? 'bg-brand-green/10 text-brand-green' : 'bg-slate-100 text-slate-500')}>{riderProfile.driver?.is_online ? 'Online' : 'Offline'}</span>
-                          <span className="px-3 py-1 rounded-lg text-[9px] font-black uppercase bg-slate-100 text-slate-500">{riderProfile.driver?.status}</span>
-                          {riderProfile.driver?.region && <span className="px-3 py-1 rounded-lg text-[9px] font-black uppercase bg-slate-100 text-slate-500">{riderProfile.driver.region}</span>}
-                        </div>
-                      </div>
-                      <div className="grid grid-cols-3 gap-2">
-                        <div className="p-3 rounded-2xl bg-slate-50 border border-slate-100">
-                          <p className="text-[8px] font-black uppercase text-slate-400">Trips</p>
-                          <p className="font-black text-slate-800">{riderProfile.stats?.trips_delivered ?? 0}</p>
-                        </div>
-                        <div className="p-3 rounded-2xl bg-slate-50 border border-slate-100">
-                          <p className="text-[8px] font-black uppercase text-slate-400">Rating</p>
-                          <p className="font-black text-slate-800">{(riderProfile.stats?.rating_count ?? 0) > 0 ? `${Number(riderProfile.stats?.avg_rating || 0).toFixed(1)} (${riderProfile.stats?.rating_count})` : '—'}</p>
-                        </div>
-                        <div className="p-3 rounded-2xl bg-slate-50 border border-slate-100">
-                          <p className="text-[8px] font-black uppercase text-slate-400">Balance</p>
-                          <p className="font-black font-mono text-brand-green">{formatCedis(riderProfile.driver?.balance || 0)}</p>
-                        </div>
-                      </div>
-                      <div className="p-4 rounded-2xl bg-slate-900 text-white">
-                        <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-2">Commission breakdown (admin only)</p>
-                        <div className="grid grid-cols-3 gap-2 mb-3">
-                          <div>
-                            <p className="text-[8px] font-black uppercase text-slate-500">Total</p>
-                            <p className="font-black">{riderProfile.commission_policy?.totalPercent ?? 10}%</p>
-                          </div>
-                          <div>
-                            <p className="text-[8px] font-black uppercase text-slate-500">Driver insurance</p>
-                            <p className="font-black">{riderProfile.commission_policy?.insurancePercent ?? 3}%</p>
-                          </div>
-                          <div>
-                            <p className="text-[8px] font-black uppercase text-slate-500">Platform</p>
-                            <p className="font-black">{riderProfile.commission_policy?.platformPercent ?? 7}%</p>
-                          </div>
-                        </div>
-                        <div className="grid grid-cols-3 gap-2 pt-3 border-t border-slate-700">
-                          <div>
-                            <p className="text-[8px] font-black uppercase text-slate-500">Commission accrued</p>
-                            <p className="font-black font-mono">{formatCedis(riderProfile.commission_totals?.commission_accrued || 0)}</p>
-                          </div>
-                          <div>
-                            <p className="text-[8px] font-black uppercase text-slate-500">Insurance pool</p>
-                            <p className="font-black font-mono text-amber-300">{formatCedis(riderProfile.commission_totals?.insurance_accrued || 0)}</p>
-                          </div>
-                          <div>
-                            <p className="text-[8px] font-black uppercase text-slate-500">Platform</p>
-                            <p className="font-black font-mono text-brand-blue">{formatCedis(riderProfile.commission_totals?.platform_accrued || 0)}</p>
-                          </div>
-                        </div>
-                      </div>
-                      {Array.isArray(riderProfile.settlements) && riderProfile.settlements.length > 0 && (
-                        <div>
-                          <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-2">Recent settlements</p>
-                          <div className="space-y-1.5">
-                            {riderProfile.settlements.slice(0, 7).map((s: any) => (
-                              <div key={s.id} className="flex items-center justify-between text-xs p-2 rounded-lg bg-slate-50 border border-slate-100">
-                                <span className="font-bold text-slate-600">{new Date(s.settlement_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</span>
-                                <span className="text-slate-400">ins {formatCedis(s.insurance_total)} · plat {formatCedis(s.platform_total)}</span>
-                                <span className={cn('font-black font-mono', s.amount_owed > 0.01 ? (s.status === 'overdue' ? 'text-red-500' : 'text-slate-700') : 'text-brand-green')}>{s.amount_owed > 0.01 ? formatCedis(s.amount_owed) : 'Paid'}</span>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
          </div>
        ) : activeTab === 'drivers' ? (
          <div className="space-y-6">
@@ -4361,22 +4220,8 @@ function AdminView({
                e.preventDefault();
                setSettingsSaving(true);
                try {
-                 const res = await axios.patch('/api/admin/settings', {
-                   ...settings,
-                   delivery_min_fee: settings.delivery_min_fee?.trim() ?? '',
-                   delivery_max_fee: settings.delivery_max_fee?.trim() ?? '',
-                 });
-                 const rate = Number(res.data?.pricing?.price_per_km);
-                 if (rate > 0) onPricingUpdated?.(rate);
-                 else {
-                   const pr = await axios.get('/api/config/pricing', {
-                     params: { _: Date.now() },
-                     headers: { 'Cache-Control': 'no-cache' },
-                   });
-                   const r = Number(pr.data?.price_per_km);
-                   if (r > 0) onPricingUpdated?.(r);
-                 }
-                 addNotification('Settings saved — pricing is live on web and mobile', 'success');
+                 await axios.patch('/api/admin/settings', settings);
+                 addNotification('Settings saved', 'success');
                } catch (err) {
                  addNotification(getApiError(err, 'Failed to save settings'), 'warning');
                } finally {
@@ -4387,17 +4232,6 @@ function AdminView({
              <DarkInput label="Paystack public key" value={settings.paystack_public_key} onChange={(e) => setSettings({ ...settings, paystack_public_key: e.target.value })} placeholder="pk_test_..." />
              <DarkInput label="Paystack secret key" type="password" value={settings.paystack_secret_key} onChange={(e) => setSettings({ ...settings, paystack_secret_key: e.target.value })} placeholder="sk_test_... (leave blank to keep)" />
              <DarkInput label="Platform fee %" value={settings.platform_fee_percent} onChange={(e) => setSettings({ ...settings, platform_fee_percent: e.target.value })} />
-             <div className="rounded-2xl border border-slate-700 bg-slate-900/50 p-4 space-y-3">
-               <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Trip commission (per delivery)</p>
-               <p className="text-[10px] text-slate-500 font-bold">
-                 Cash trips: drivers pay total commission from wallet by 8:00 AM Ghana time the next day or cannot go online. Insurance % is tracked for backend payouts.
-               </p>
-               <div className="grid grid-cols-3 gap-3">
-                 <DarkInput label="Total %" type="number" min="0" max="100" step="0.1" value={settings.commission_percent} onChange={(e) => setSettings({ ...settings, commission_percent: e.target.value })} />
-                 <DarkInput label="Insurance %" type="number" min="0" max="100" step="0.1" value={settings.commission_insurance_percent} onChange={(e) => setSettings({ ...settings, commission_insurance_percent: e.target.value })} />
-                 <DarkInput label="BytzGo %" type="number" min="0" max="100" step="0.1" value={settings.commission_platform_percent} onChange={(e) => setSettings({ ...settings, commission_platform_percent: e.target.value })} />
-               </div>
-             </div>
              <DarkInput
                label="Delivery price per km (₵)"
                type="number"
@@ -4408,30 +4242,7 @@ function AdminView({
                placeholder="4.00"
              />
              <p className="text-[10px] text-slate-500 font-bold">
-               Fee = distance (km) × this rate, then clamped by global and regional min/max below.
-             </p>
-             <div className="grid grid-cols-2 gap-3">
-               <DarkInput
-                 label="Global minimum fee (₵)"
-                 type="number"
-                 step="0.01"
-                 min="0"
-                 value={settings.delivery_min_fee}
-                 onChange={(e) => setSettings({ ...settings, delivery_min_fee: e.target.value })}
-                 placeholder="Optional"
-               />
-               <DarkInput
-                 label="Global maximum fee (₵)"
-                 type="number"
-                 step="0.01"
-                 min="0"
-                 value={settings.delivery_max_fee}
-                 onChange={(e) => setSettings({ ...settings, delivery_max_fee: e.target.value })}
-                 placeholder="Optional"
-               />
-             </div>
-             <p className="text-[10px] text-slate-500 font-bold -mt-2">
-               Used when no delivery zone matches the customer region. Leave empty for no cap.
+               Courier and food delivery fees = distance (km) × this rate. Zone min/max caps still apply when set.
              </p>
 
              <div className="pt-4 border-t border-slate-700 space-y-3">
@@ -4524,12 +4335,6 @@ function AdminView({
          </DarkCard>
        ) : activeTab === 'zones' ? (
          <div className="space-y-6">
-           <div className="bg-slate-900/80 border border-slate-700 rounded-2xl p-4">
-             <p className="text-[10px] text-slate-400 font-bold leading-relaxed">
-               Each zone sets <strong className="text-white">minimum</strong> and <strong className="text-white">maximum</strong> delivery fees for a Ghana region.
-               The ₵/km rate is the global value from Settings ({formatCedis(Number(settings.delivery_price_per_km) || 4)}/km).
-             </p>
-           </div>
            {/* Zone Form Modal */}
            {showZoneForm && (
              <div className="bg-white rounded-[2rem] border border-slate-100 shadow-lg p-4 sm:p-8">
@@ -4549,12 +4354,20 @@ function AdminView({
                      {GHANA_REGIONS.map(r => <option key={r} value={r}>{r}</option>)}
                    </select>
                  </div>
-                 <div className="space-y-1.5 sm:col-span-2">
-                   <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Minimum delivery fee (₵)</label>
+                 <div className="space-y-1.5">
+                   <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Base Price (?)</label>
+                   <input type="number" step="0.01" placeholder="10.00" value={zoneForm.base_price} onChange={e => setZoneForm({...zoneForm, base_price: e.target.value})} className="w-full bg-slate-50 border border-slate-100 rounded-xl py-3 px-4 font-bold text-sm focus:outline-none focus:border-brand-blue focus:ring-4 focus:ring-brand-blue/10 transition-all" />
+                 </div>
+                 <div className="space-y-1.5">
+                   <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Price per KM (?)</label>
+                   <input type="number" step="0.01" placeholder="2.00" value={zoneForm.price_per_km} onChange={e => setZoneForm({...zoneForm, price_per_km: e.target.value})} className="w-full bg-slate-50 border border-slate-100 rounded-xl py-3 px-4 font-bold text-sm focus:outline-none focus:border-brand-blue focus:ring-4 focus:ring-brand-blue/10 transition-all" />
+                 </div>
+                 <div className="space-y-1.5">
+                   <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Minimum Price (?)</label>
                    <input type="number" step="0.01" placeholder="5.00" value={zoneForm.min_price} onChange={e => setZoneForm({...zoneForm, min_price: e.target.value})} className="w-full bg-slate-50 border border-slate-100 rounded-xl py-3 px-4 font-bold text-sm focus:outline-none focus:border-brand-blue focus:ring-4 focus:ring-brand-blue/10 transition-all" />
                  </div>
-                 <div className="space-y-1.5 sm:col-span-2">
-                   <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Maximum delivery fee (₵) <span className="text-slate-300">optional</span></label>
+                 <div className="space-y-1.5">
+                   <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Maximum Price (?) <span className="text-slate-300">? optional</span></label>
                    <input type="number" step="0.01" placeholder="No limit" value={zoneForm.max_price} onChange={e => setZoneForm({...zoneForm, max_price: e.target.value})} className="w-full bg-slate-50 border border-slate-100 rounded-xl py-3 px-4 font-bold text-sm focus:outline-none focus:border-brand-blue focus:ring-4 focus:ring-brand-blue/10 transition-all" />
                  </div>
                </div>
@@ -4569,7 +4382,7 @@ function AdminView({
 
            {/* Add Zone Button */}
            {!showZoneForm && (
-             <button onClick={() => { setShowZoneForm(true); setEditingZone(null); setZoneForm({ name: '', region: '', min_price: '5', max_price: '' }); }} className="w-full py-4 bg-brand-blue/5 border-2 border-dashed border-brand-blue/20 rounded-2xl text-brand-blue font-black uppercase tracking-widest text-xs hover:bg-brand-blue/10 hover:border-brand-blue/40 transition-all flex items-center justify-center gap-2">
+             <button onClick={() => { setShowZoneForm(true); setEditingZone(null); setZoneForm({ name: '', region: '', base_price: '10', price_per_km: '2', min_price: '5', max_price: '' }); }} className="w-full py-4 bg-brand-blue/5 border-2 border-dashed border-brand-blue/20 rounded-2xl text-brand-blue font-black uppercase tracking-widest text-xs hover:bg-brand-blue/10 hover:border-brand-blue/40 transition-all flex items-center justify-center gap-2">
                <MapPin size={16} /> Add Delivery Zone
              </button>
            )}
@@ -4597,17 +4410,25 @@ function AdminView({
                      </div>
                      <div className="grid grid-cols-2 gap-3 mt-4">
                        <div className="bg-slate-50 rounded-xl p-3">
-                         <span className="text-[8px] font-black uppercase tracking-widest text-slate-400 block">Min fee</span>
-                         <span className="font-mono font-black text-brand-blue text-sm">{formatCedis(zone.min_price)}</span>
+                         <span className="text-[8px] font-black uppercase tracking-widest text-slate-400 block">Base</span>
+                         <span className="font-mono font-black text-brand-blue text-sm">{formatCedis(zone.base_price)}</span>
                        </div>
                        <div className="bg-slate-50 rounded-xl p-3">
-                         <span className="text-[8px] font-black uppercase tracking-widest text-slate-400 block">Max fee</span>
+                         <span className="text-[8px] font-black uppercase tracking-widest text-slate-400 block">Per KM</span>
+                         <span className="font-mono font-black text-brand-blue text-sm">{formatCedis(zone.price_per_km)}</span>
+                       </div>
+                       <div className="bg-slate-50 rounded-xl p-3">
+                         <span className="text-[8px] font-black uppercase tracking-widest text-slate-400 block">Min</span>
+                         <span className="font-mono font-black text-slate-600 text-sm">{formatCedis(zone.min_price)}</span>
+                       </div>
+                       <div className="bg-slate-50 rounded-xl p-3">
+                         <span className="text-[8px] font-black uppercase tracking-widest text-slate-400 block">Max</span>
                          <span className="font-mono font-black text-slate-600 text-sm">{zone.max_price ? formatCedis(zone.max_price) : 'No limit'}</span>
                        </div>
                      </div>
                    </div>
                    <div className="flex gap-2 mt-4 pt-4 border-t border-slate-100">
-                     <button onClick={() => { setEditingZone(zone); setZoneForm({ name: zone.name, region: zone.region, min_price: String(zone.min_price), max_price: zone.max_price ? String(zone.max_price) : '' }); setShowZoneForm(true); }} className="flex-1 py-2.5 bg-slate-100 text-slate-600 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-200 transition-all flex items-center justify-center gap-1.5">
+                     <button onClick={() => { setEditingZone(zone); setZoneForm({ name: zone.name, region: zone.region, base_price: String(zone.base_price), price_per_km: String(zone.price_per_km), min_price: String(zone.min_price), max_price: zone.max_price ? String(zone.max_price) : '' }); setShowZoneForm(true); }} className="flex-1 py-2.5 bg-slate-100 text-slate-600 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-200 transition-all flex items-center justify-center gap-1.5">
                        <Edit3 size={12} /> Edit
                      </button>
                      <button onClick={() => setZoneToDelete(zone)} className="px-4 py-2.5 bg-red-50 text-red-500 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-red-100 transition-all flex items-center justify-center gap-1.5">
