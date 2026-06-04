@@ -268,7 +268,7 @@ class _AdminTicketCard extends StatelessWidget {
               Row(
                 children: [
                   Text(
-                    ticket.displayId,
+                    ticket.displayLabel,
                     style: const TextStyle(
                       color: BytzGoTheme.brandBlueBright,
                       fontWeight: FontWeight.w900,

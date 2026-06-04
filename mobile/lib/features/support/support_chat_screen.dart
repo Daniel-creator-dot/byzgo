@@ -155,7 +155,7 @@ class _SupportChatScreenState extends State<SupportChatScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              _ticket.displayId,
+              _ticket.displayLabel,
               style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
             ),
             Text(

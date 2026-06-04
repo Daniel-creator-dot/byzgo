@@ -1464,7 +1464,15 @@ const SUPPORT_CATEGORIES = new Set(['order', 'payment', 'account', 'delivery', '
 const SUPPORT_STATUSES = new Set(['open', 'pending', 'resolved', 'closed']);
 
 function generateSupportDisplayId(): string {
-  return `SUP-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+  return `BYTZGO-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+}
+
+/** User-facing case reference (legacy SUP-* rows are normalized). */
+function formatSupportDisplayLabel(raw: string | null | undefined): string {
+  const id = String(raw ?? '').trim();
+  if (/^bytzgo(\s|#)/i.test(id)) return id.replace(/^bytzgo/i, 'BytzGo');
+  const code = id.replace(/^(SUP|BYTZGO)-/i, '');
+  return code ? `BytzGo #${code}` : 'BytzGo Support';
 }
 
 function formatSupportMessage(row: any, viewerId: string) {
@@ -1486,7 +1494,7 @@ function formatSupportMessage(row: any, viewerId: string) {
 function formatSupportTicket(row: any) {
   return {
     id: row.id,
-    displayId: row.display_id,
+    displayId: formatSupportDisplayLabel(row.display_id),
     category: row.category,
     subject: row.subject,
     status: row.status,
@@ -1566,7 +1574,7 @@ async function emitSupportMessage(ticket: any, messageRow: any, senderId: string
     });
     const body = String(messageRow.body || '');
     void sendPushToUserIds([...notifyIds], {
-      title: `Support · ${ticket.display_id}`,
+      title: `BytzGo Support · ${formatSupportDisplayLabel(ticket.display_id)}`,
       body: `${senderName}: ${body.length > 120 ? `${body.slice(0, 117)}…` : body}`,
       type: 'support-message',
       ticketId: ticket.id,

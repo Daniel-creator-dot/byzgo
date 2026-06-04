@@ -39,6 +39,20 @@ class SupportTicket {
 
   bool get isOpen => status == 'open' || status == 'pending';
 
+  /// Branded label for lists and chat headers (e.g. BytzGo #A1B2C3).
+  String get displayLabel => SupportTicket.formatDisplayLabel(displayId);
+
+  static String formatDisplayLabel(String raw) {
+    final id = raw.trim();
+    final lower = id.toLowerCase();
+    if (lower.startsWith('bytzgo ') || lower.startsWith('bytzgo#')) {
+      return id.replaceFirst(RegExp(r'^bytzgo', caseSensitive: false), 'BytzGo');
+    }
+    final code = id.replaceFirst(RegExp(r'^(SUP|BYTZGO)-', caseSensitive: false), '');
+    if (code.isEmpty) return 'BytzGo Support';
+    return 'BytzGo #$code';
+  }
+
   factory SupportTicket.fromJson(Map<String, dynamic> json) {
     return SupportTicket(
       id: json['id']?.toString() ?? '',

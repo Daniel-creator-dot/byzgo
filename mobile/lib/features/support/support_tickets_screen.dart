@@ -192,7 +192,7 @@ class _TicketTile extends StatelessWidget {
               Row(
                 children: [
                   Text(
-                    ticket.displayId,
+                    ticket.displayLabel,
                     style: const TextStyle(
                       color: BytzGoTheme.brandBlue,
                       fontWeight: FontWeight.w900,
