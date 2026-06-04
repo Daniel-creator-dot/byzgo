@@ -56,6 +56,7 @@ import {
   closeIncomingRideAudio,
 } from './lib/incomingRideAudio';
 import { DriverTierBadge, driverTierFrom } from './components/shared/DriverTier';
+import { isOfferableToRider } from './lib/riderTrip';
 import { DarkAppShell, type NavItem } from './components/shared/DarkAppShell';
 import { DarkCard, DarkButton, DarkInput, StatusBadge, EmptyState, ErrorBanner } from './components/shared/ui';
 
@@ -271,9 +272,6 @@ function MainApp() {
   const riderTrackingNotifiedRef = useRef(new Set<string>());
   useEffect(() => { userRef.current = user; }, [user]);
   useEffect(() => { ordersRef.current = orders; }, [orders]);
-
-  const isOfferableToRider = (order: Order) =>
-    order.status === 'ready' && !order.rider_id && !(order as Order & { riderId?: string }).riderId;
 
   const pickBestRideOffer = useCallback((list: Order[]) => {
     return list
@@ -588,8 +586,11 @@ function MainApp() {
       }
     });
 
-    socket.on('ride:taken', ({ orderId }: { orderId: string }) => {
+    socket.on('ride:taken', ({ orderId, reason }: { orderId: string; reason?: string }) => {
       const u = userRef.current;
+      const wasIncoming = ordersRef.current.some(
+        (o) => o.id === orderId && isOfferableToRider(o)
+      );
       setIncomingRideOffer(prev => (prev?.id === orderId ? null : prev));
       setOrders(prev =>
         prev.filter(o => {
@@ -597,8 +598,13 @@ function MainApp() {
           return u?.role === 'rider' && (o.rider_id === u.id || (o as Order & { riderId?: string }).riderId === u.id);
         })
       );
-      if (u?.role === 'rider' && u.status === 'active') {
-        addNotification('Another driver took this ride', 'info');
+      if (u?.role === 'rider' && u.status === 'active' && wasIncoming) {
+        addNotification(
+          reason === 'cancelled'
+            ? 'Customer cancelled this request'
+            : 'Another driver took this ride',
+          'info'
+        );
       }
     });
 
@@ -3310,6 +3316,12 @@ function IncomingRideCallModal({
   const onDeclineRef = useRef(onDecline);
   onDeclineRef.current = onDecline;
 
+  const dismissOfferUi = useCallback(async () => {
+    ringStopRef.current = true;
+    ringCleanupRef.current?.();
+    await onDeclineRef.current();
+  }, []);
+
   const handleDecline = useCallback(async () => {
     if (!order || declining) return;
     setDeclining(true);
@@ -3337,7 +3349,7 @@ function IncomingRideCallModal({
     setOfferTtlSec(initialSec > 0 ? initialSec : INCOMING_RIDE_TIMEOUT_SEC);
     setSecondsLeft(initialSec);
     if (initialSec <= 0) {
-      void handleDecline();
+      void dismissOfferUi();
       return;
     }
 
@@ -3357,7 +3369,7 @@ function IncomingRideCallModal({
     const countdown = setInterval(() => {
       setSecondsLeft(prev => {
         if (prev <= 1) {
-          void handleDecline();
+          void dismissOfferUi();
           return 0;
         }
         return prev - 1;
@@ -3372,7 +3384,7 @@ function IncomingRideCallModal({
     };
 
     return ringCleanupRef.current;
-  }, [order?.id, order?.expiresAt, handleDecline]);
+  }, [order?.id, order?.expiresAt, dismissOfferUi]);
 
   if (!order) return null;
 

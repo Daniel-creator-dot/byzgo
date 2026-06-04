@@ -94,7 +94,29 @@ export function CustomerDeliveryHome({
         : null,
   });
 
+  const activeCourierTrip = liveOrders.find(
+    (o) =>
+      o.customer_id === user.id &&
+      !['delivered', 'cancelled'].includes(o.status) &&
+      ((o as Order & { order_type?: string }).order_type === 'courier' ||
+        (o as Order & { orderType?: string }).orderType === 'courier')
+  );
+  const tripSearching =
+    activeCourierTrip &&
+    !activeCourierTrip.rider_id &&
+    ['pending', 'ready', 'preparing'].includes(activeCourierTrip.status);
+
   const submitCourier = async (extra: Record<string, unknown>) => {
+    if (tripSearching) {
+      addNotification('You already have a ride in progress — open Tracking', 'warning');
+      setActiveTab('tracking');
+      return;
+    }
+    if (activeCourierTrip?.rider_id) {
+      addNotification('Finish or cancel your current trip before booking another', 'warning');
+      setActiveTab('tracking');
+      return;
+    }
     await onPlaceOrder(
       [{ id: 'courier-1', name: `Delivery: ${courierForm.itemDesc}`, quantity: 1, price: 0 }],
       courierFee,

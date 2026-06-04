@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../responsive_layout.dart';
 import '../theme.dart';
 import 'bytz_brand.dart';
 
@@ -118,7 +119,11 @@ class _AppLaunchCarouselState extends State<AppLaunchCarousel>
         children: [
           const _AmbientGlow(),
           SafeArea(
-            child: Column(
+            child: BytzLayout.constrainContent(
+              context,
+              maxWidth: BytzLayout.phoneContentMaxWidth,
+              fillHeight: true,
+              child: Column(
               children: [
                 const SizedBox(height: 12),
                 const Padding(
@@ -160,6 +165,7 @@ class _AppLaunchCarouselState extends State<AppLaunchCarousel>
                 ),
                 SizedBox(height: 16 + bottomPad),
               ],
+            ),
             ),
           ),
         ],

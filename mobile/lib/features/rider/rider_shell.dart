@@ -340,7 +340,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
       _alertedOfferIds.add(order.id);
       _presentIncoming(order);
     };
-    _socket.onRideTaken = (orderId) {
+    _socket.onRideTaken = (orderId, {String? reason}) {
       if (!mounted) return;
       final wasIncoming = _incoming?.id == orderId;
       if (wasIncoming) unawaited(IncomingRideAlert.dismiss(orderId: orderId));
@@ -350,7 +350,12 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
             .where((o) => o.id != orderId || o.riderId == _user.id)
             .toList();
       });
-      if (wasIncoming) _snack('Another rider took this job');
+      if (wasIncoming) {
+        final msg = reason == 'cancelled'
+            ? 'Customer cancelled this request'
+            : 'Another rider took this job';
+        _snack(msg);
+      }
     };
     _socket.onOrderUpdated = (order) {
       if (!mounted) return;
@@ -413,7 +418,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
     _offerTimer?.cancel();
     if (_tab != _RiderTab.drive) return;
     final hasExpiring = _orders.any(
-      (o) => o.status == 'ready' && o.riderId == null && o.expiresAt != null,
+      (o) => isOfferableOrder(o) && o.expiresAt != null,
     );
     if (!hasExpiring) return;
     _offerTimer = Timer.periodic(const Duration(seconds: 1), (_) {
@@ -541,6 +546,13 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
     } finally {
       if (mounted) setState(() => _accepting = false);
     }
+  }
+
+  void _dismissIncomingOffer() {
+    final order = _incoming;
+    if (order == null) return;
+    unawaited(IncomingRideAlert.dismiss(orderId: order.id));
+    if (mounted) setState(() => _incoming = null);
   }
 
   Future<void> _declineRide() async {
@@ -822,6 +834,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
                 accepting: _accepting,
                 onAccept: () => _acceptOrder(_incoming!),
                 onDecline: _declineRide,
+                onOfferExpired: _dismissIncomingOffer,
               ),
           ],
         ),
@@ -2152,10 +2165,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
       _payMsg = null;
     });
     try {
-      final session = await _wallet.initializeTopup(
-        amount,
-        phone: _payPhone.text.trim(),
-      );
+      final session = await _wallet.initializeTopup(amount);
       if (!mounted) return;
 
       final reference = await PaystackCheckoutScreen.open(

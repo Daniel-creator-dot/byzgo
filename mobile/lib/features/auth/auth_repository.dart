@@ -1,6 +1,11 @@
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 
 import '../../core/api_client.dart';
+import '../../core/env.dart';
+import '../../core/oauth_config.dart';
 import '../../models/auth_user.dart';
 import '../../models/role.dart';
 
@@ -125,6 +130,48 @@ class AuthRepository {
         'newPassword': newPassword,
       },
     );
+  }
+
+  Future<AuthResult> signInWithGoogle({AppRole role = AppRole.customer}) async {
+    if (!Env.isGoogleSignInEnabled) {
+      throw Exception(
+        'Google Sign-In is not configured. Set GOOGLE_WEB_CLIENT_ID and run flutterfire configure.',
+      );
+    }
+
+    final googleSignIn = GoogleSignIn(
+      clientId: defaultTargetPlatform == TargetPlatform.iOS
+          ? kGoogleIosClientId
+          : null,
+      serverClientId: Env.googleWebClientId,
+      scopes: const ['email', 'profile', 'openid'],
+    );
+    late final GoogleSignInAccount? account;
+    try {
+      account = await googleSignIn.signIn();
+    } on PlatformException catch (e) {
+      if (e.code == 'sign_in_failed' && (e.message?.contains(': 10') ?? false)) {
+        throw Exception(
+          'Google Sign-In is not set up for this build. '
+          'Contact support or sign in with your phone or email instead.',
+        );
+      }
+      rethrow;
+    }
+    if (account == null) {
+      throw Exception('Google sign-in cancelled');
+    }
+    final auth = await account.authentication;
+    final idToken = auth.idToken;
+    if (idToken == null) {
+      throw Exception('No Google ID token — check GOOGLE_WEB_CLIENT_ID');
+    }
+
+    final res = await _api.dio.post<Map<String, dynamic>>(
+      '/api/auth/google',
+      data: {'credential': idToken, 'role': role.name},
+    );
+    return _parseAuthResponse(res.data);
   }
 
   Future<void> deleteAccount() async {

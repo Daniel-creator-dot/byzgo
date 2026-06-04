@@ -7,7 +7,7 @@ import '../firebase_options.dart';
 import 'incoming_ride_notifications.dart';
 import 'push_session_context.dart';
 
-/// FCM while app is backgrounded or screen is off — local notification on Android & iOS.
+/// FCM while app is backgrounded or screen is off — one alarm notification (no in-app ring).
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -32,9 +32,17 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
   final plugin = FlutterLocalNotificationsPlugin();
   const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
-  const iosInit = DarwinInitializationSettings();
+  const darwinInit = DarwinInitializationSettings(
+    requestAlertPermission: false,
+    requestBadgePermission: false,
+    requestSoundPermission: false,
+  );
   await plugin.initialize(
-    const InitializationSettings(android: androidInit, iOS: iosInit),
+    const InitializationSettings(
+      android: androidInit,
+      iOS: darwinInit,
+      macOS: darwinInit,
+    ),
   );
 
   final android = plugin.resolvePlatformSpecificImplementation<
@@ -53,7 +61,7 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     notifId,
     title,
     body,
-    platformTripNotificationDetails(
+    NotificationDetails(
       android: isRide
           ? incomingRideAndroidDetails(playSound: true)
           : AndroidNotificationDetails(
@@ -64,7 +72,6 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
               priority: Priority.high,
               visibility: NotificationVisibility.public,
             ),
-      incomingRide: isRide,
     ),
   );
 }

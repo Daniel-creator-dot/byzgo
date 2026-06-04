@@ -7,6 +7,7 @@ import '../../models/location_point.dart';
 import '../../models/order.dart';
 import '../../shared/format.dart';
 import '../../shared/system_chrome.dart';
+import '../../shared/responsive_layout.dart';
 import '../../shared/theme.dart';
 import '../../shared/user_display.dart';
 import '../../shared/widgets/user_avatar.dart';
@@ -80,50 +81,57 @@ class _CustomerShellState extends State<CustomerShell> {
     final firstName = userFirstName(user);
     final bottomPad = MediaQuery.paddingOf(context).bottom;
 
+    final onMap = _tab == CustomerTab.courier;
+    final body = Column(
+      children: [
+        _CustomerHeader(
+          tab: _tab,
+          firstName: firstName,
+          user: user,
+          onWallet: () => showCustomerWalletSheet(context),
+          onProfile: () => _goTab(CustomerTab.profile),
+          onNotifications: () => _goTab(CustomerTab.activity),
+        ),
+        if (!onMap)
+          _walletBanner(user.balance, onTap: () => showCustomerWalletSheet(context)),
+        Expanded(
+          child: IndexedStack(
+            index: _tab.index,
+            children: [
+              CustomerHomeScreen(
+                key: _homeKey,
+                initialPickup: _shopPickup,
+                embedded: true,
+                onOpenShops: () => _goTab(CustomerTab.shops),
+                onOpenWallet: () => showCustomerWalletSheet(context),
+                onOpenActivity: () => _goTab(CustomerTab.activity),
+                onOpenProfile: () => _goTab(CustomerTab.profile),
+              ),
+              CustomerShopsTab(
+                onShopPickup: _onShopPickup,
+                onShopOrderPlaced: _onShopOrderPlaced,
+              ),
+              CustomerActivityTab(
+                key: _activityKey,
+                onTrackOrder: () => _goTab(CustomerTab.courier),
+              ),
+              const CustomerProfileTab(),
+            ],
+          ),
+        ),
+      ],
+    );
+
     return SheetThemeScope(
       child: Scaffold(
-      backgroundColor: _tab == CustomerTab.courier
-          ? BytzGoTheme.background
-          : BytzGoTheme.sheetBg,
-      body: Column(
-        children: [
-          _CustomerHeader(
-            tab: _tab,
-            firstName: firstName,
-            user: user,
-            onWallet: () => showCustomerWalletSheet(context),
-            onProfile: () => _goTab(CustomerTab.profile),
-            onNotifications: () => _goTab(CustomerTab.activity),
-          ),
-          if (_tab != CustomerTab.courier)
-            _walletBanner(user.balance, onTap: () => showCustomerWalletSheet(context)),
-          Expanded(
-            child: IndexedStack(
-              index: _tab.index,
-              children: [
-                CustomerHomeScreen(
-                  key: _homeKey,
-                  initialPickup: _shopPickup,
-                  embedded: true,
-                  onOpenShops: () => _goTab(CustomerTab.shops),
-                  onOpenWallet: () => showCustomerWalletSheet(context),
-                  onOpenActivity: () => _goTab(CustomerTab.activity),
-                  onOpenProfile: () => _goTab(CustomerTab.profile),
-                ),
-                CustomerShopsTab(
-                  onShopPickup: _onShopPickup,
-                  onShopOrderPlaced: _onShopOrderPlaced,
-                ),
-                CustomerActivityTab(
-                  key: _activityKey,
-                  onTrackOrder: () => _goTab(CustomerTab.courier),
-                ),
-                const CustomerProfileTab(),
-              ],
+      backgroundColor: onMap ? BytzGoTheme.background : BytzGoTheme.sheetBg,
+      body: onMap
+          ? body
+          : BytzLayout.tabletFrame(
+              context,
+              backgroundColor: BytzGoTheme.sheetBg,
+              child: body,
             ),
-          ),
-        ],
-      ),
       bottomNavigationBar: Container(
         decoration: BoxDecoration(
           color: BytzGoTheme.sheetBg,
@@ -137,7 +145,10 @@ class _CustomerShellState extends State<CustomerShell> {
           ],
         ),
         padding: EdgeInsets.fromLTRB(12, 8, 12, bottomPad > 0 ? bottomPad : 12),
-        child: Row(
+        child: BytzLayout.constrainContent(
+          context,
+          maxWidth: BytzLayout.contentMaxWidth(context),
+          child: Row(
           children: CustomerTab.values.map((t) {
             final selected = _tab == t;
             return Expanded(
@@ -148,6 +159,7 @@ class _CustomerShellState extends State<CustomerShell> {
               ),
             );
           }).toList(),
+        ),
         ),
       ),
     ),

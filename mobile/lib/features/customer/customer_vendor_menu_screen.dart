@@ -11,6 +11,7 @@ import '../../models/vendor.dart';
 import '../../shared/format.dart';
 import '../../shared/pharmacy_display.dart';
 import '../../shared/theme.dart';
+import '../../shared/external_navigation.dart';
 import '../../shared/vendor_contact.dart';
 import '../../shared/vendor_pickup.dart';
 import '../../shared/widgets/product_tile_image.dart';
@@ -436,8 +437,8 @@ class _CustomerVendorMenuScreenState extends State<CustomerVendorMenuScreen>
                   ),
                 ActionChip(
                   avatar: const Icon(Icons.map, size: 18, color: BytzGoTheme.accentDark),
-                  label: const Text('Open in Google Maps'),
-                  onPressed: () => openVendorInGoogleMaps(v),
+                  label: const Text('Open in Maps'),
+                  onPressed: () => showVendorMapPicker(context, v),
                 ),
               ],
             ),

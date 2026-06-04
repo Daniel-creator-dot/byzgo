@@ -173,7 +173,7 @@ class SocketService {
       try {
         if (DateTime.parse(order.expiresAt!).isBefore(DateTime.now())) return;
       } catch (_) {
-        return;
+        // Keep offer if timestamp is malformed (parity with isOfferableOrder).
       }
     }
     onRideIncoming?.call(order);

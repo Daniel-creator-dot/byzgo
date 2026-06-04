@@ -46,6 +46,8 @@ import {
   getPickupCoordsForOrder,
   getTripPhase,
   hasValidCoords,
+  isActiveDispatchOffer,
+  isOfferableToRider,
   openTurnByTurnNavigation,
   type TripStop,
 } from '../../lib/riderTrip';
@@ -155,16 +157,14 @@ export function RiderApp({
   const [pinModalOrder, setPinModalOrder] = useState<Order | null>(null);
 
   const [offerTick, setOfferTick] = useState(0);
-  const isActiveDispatchOffer = (o: Order) =>
-    !o.expiresAt || new Date(o.expiresAt).getTime() > Date.now();
   const availableOrders = orders.filter((o) => {
     void offerTick;
-    return o.status === 'ready' && !o.rider_id && isActiveDispatchOffer(o);
+    return isOfferableToRider(o) && isActiveDispatchOffer(o);
   });
 
   useEffect(() => {
     const hasExpiringOffers = orders.some(
-      (o) => o.status === 'ready' && !o.rider_id && o.expiresAt && isActiveDispatchOffer(o)
+      (o) => isOfferableToRider(o) && o.expiresAt && isActiveDispatchOffer(o)
     );
     if (!hasExpiringOffers) return;
     const t = setInterval(() => setOfferTick((n) => n + 1), 1000);

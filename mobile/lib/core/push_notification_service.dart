@@ -56,13 +56,17 @@ class PushNotificationService {
     _initialized = true;
 
     const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
-    const iosInit = DarwinInitializationSettings(
-      requestAlertPermission: true,
-      requestBadgePermission: true,
-      requestSoundPermission: true,
+    const darwinInit = DarwinInitializationSettings(
+      requestAlertPermission: false,
+      requestBadgePermission: false,
+      requestSoundPermission: false,
     );
     await _local.initialize(
-      const InitializationSettings(android: androidInit, iOS: iosInit),
+      const InitializationSettings(
+        android: androidInit,
+        iOS: darwinInit,
+        macOS: darwinInit,
+      ),
       onDidReceiveNotificationResponse: _onNotificationTap,
     );
 
@@ -74,11 +78,6 @@ class PushNotificationService {
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
       await android?.requestNotificationsPermission();
       await android?.requestFullScreenIntentPermission();
-    }
-    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
-      final ios = _local.resolvePlatformSpecificImplementation<
-          IOSFlutterLocalNotificationsPlugin>();
-      await ios?.requestPermissions(alert: true, badge: true, sound: true);
     }
 
     if (!DefaultFirebaseOptions.isConfigured) {
@@ -131,7 +130,7 @@ class PushNotificationService {
         sound: true,
         criticalAlert: false,
       );
-      if (!kIsWeb) {
+      if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
         await messaging.setAutoInitEnabled(true);
       }
       final token = await messaging.getToken();
@@ -161,9 +160,8 @@ class PushNotificationService {
       incomingRideNotificationId(orderId),
       title,
       body,
-      platformTripNotificationDetails(
+      NotificationDetails(
         android: incomingRideAndroidDetails(playSound: playSound),
-        incomingRide: true,
       ),
       payload: jsonEncode({'type': 'incoming-ride', 'orderId': orderId}),
     );
@@ -204,7 +202,7 @@ class PushNotificationService {
       DateTime.now().millisecondsSinceEpoch.remainder(100000),
       title,
       body,
-      platformTripNotificationDetails(
+      NotificationDetails(
         android: AndroidNotificationDetails(
           channel.id,
           channel.name,
@@ -284,7 +282,7 @@ class PushNotificationService {
       DateTime.now().millisecondsSinceEpoch.remainder(100000),
       title,
       body,
-      platformTripNotificationDetails(
+      NotificationDetails(
         android: AndroidNotificationDetails(
           channel.id,
           channel.name,
@@ -293,7 +291,6 @@ class PushNotificationService {
           priority: isRide ? Priority.max : Priority.high,
           visibility: NotificationVisibility.public,
         ),
-        incomingRide: isRide,
       ),
       payload: jsonEncode(message.data),
     );

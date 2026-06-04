@@ -5321,7 +5321,14 @@ app.get('/api/orders', authenticateToken, async (req: any, res) => {
         WHERE (
           o.rider_id = $1
         ) OR (
-          o.status = 'ready'
+          (
+            o.status = 'ready'
+            OR (
+              o.status = 'pending'
+              AND o.vendor_id IS NOT NULL
+              AND o.order_type IN ('food', 'courier')
+            )
+          )
           AND o.rider_id IS NULL
           AND odo.order_id IS NOT NULL
           AND $2 = true

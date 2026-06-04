@@ -57,6 +57,29 @@ export function hasValidCoords(lat: number, lng: number): boolean {
   return Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) > 0.001 && Math.abs(lng) > 0.001;
 }
 
+/** Matches backend/mobile dispatch: open jobs riders can accept. */
+export function isOfferableToRider(order: Order): boolean {
+  const riderId =
+    order.rider_id ?? (order as Order & { riderId?: string }).riderId ?? null;
+  if (riderId) return false;
+  if (order.status === 'ready') return true;
+  const type =
+    (order as Order & { order_type?: string }).order_type ??
+    (order as Order & { orderType?: string }).orderType ??
+    '';
+  return (
+    order.status === 'pending' &&
+    Boolean(order.vendor_id) &&
+    (type === 'food' || type === 'courier')
+  );
+}
+
+export function isActiveDispatchOffer(order: Order, now = Date.now()): boolean {
+  if (!order.expiresAt) return true;
+  const t = new Date(order.expiresAt).getTime();
+  return Number.isFinite(t) && t > now;
+}
+
 export function googleMapsNavUrl(
   destLat: number,
   destLng: number,

@@ -17,6 +17,7 @@ class IncomingRideOverlay extends StatefulWidget {
     required this.vendors,
     required this.onAccept,
     required this.onDecline,
+    required this.onOfferExpired,
     this.accepting = false,
   });
 
@@ -24,6 +25,8 @@ class IncomingRideOverlay extends StatefulWidget {
   final List<Vendor> vendors;
   final VoidCallback onAccept;
   final VoidCallback onDecline;
+  /// Timer ran out — dismiss UI only (server already expired the wave).
+  final VoidCallback onOfferExpired;
   final bool accepting;
 
   @override
@@ -56,7 +59,7 @@ class _IncomingRideOverlayState extends State<IncomingRideOverlay>
     if (!mounted) return;
     final secs = offerSecondsRemaining(widget.order);
     if (secs != null && secs <= 0) {
-      _handleDecline();
+      widget.onOfferExpired();
       return;
     }
     setState(() => _secs = secs);

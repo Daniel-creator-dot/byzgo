@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import 'biker_search_radar.dart';
 import 'ride_map_background.dart';
+import '../responsive_layout.dart';
 import '../theme.dart';
 
 /// Full-screen ride shell: map + optional top bar + bottom sheet.
@@ -25,28 +26,72 @@ class RideShell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final split = BytzLayout.useTabletSplit(context);
+
+    final mapLayer = Stack(
+      fit: StackFit.expand,
+      children: [
+        if (mapChild != null)
+          mapChild!
+        else ...[
+          const RideMapBackground(),
+          if (showRoute) const MapRouteArc(),
+        ],
+        if (floatingMapChild != null) floatingMapChild!,
+        if (topBar != null)
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: topBar!,
+            ),
+          ),
+      ],
+    );
+
+    final sheetSlot = BytzLayout.constrainBottomSheet(context, sheet);
+
+    if (split) {
+      return Scaffold(
+        backgroundColor: BytzGoTheme.background,
+        body: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(flex: 58, child: mapLayer),
+            Expanded(
+              flex: 42,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: BytzGoTheme.sheetBg,
+                  border: Border(
+                    left: BorderSide(
+                      color: BytzGoTheme.sheetDivider.withValues(alpha: 0.9),
+                    ),
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.12),
+                      blurRadius: 16,
+                      offset: const Offset(-4, 0),
+                    ),
+                  ],
+                ),
+                child: sheet,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
     return Scaffold(
       backgroundColor: BytzGoTheme.background,
       body: Stack(
         fit: StackFit.expand,
         children: [
-          if (mapChild != null)
-            mapChild!
-          else ...[
-            const RideMapBackground(),
-            if (showRoute) const MapRouteArc(),
-          ],
-          if (floatingMapChild != null) floatingMapChild!,
-          if (topBar != null)
-            SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                child: topBar!,
-              ),
-            ),
+          mapLayer,
           Align(
             alignment: Alignment.bottomCenter,
-            child: sheet,
+            child: sheetSlot,
           ),
         ],
       ),
@@ -55,7 +100,11 @@ class RideShell extends StatelessWidget {
 }
 
 /// White rounded bottom sheet — scrollable body + optional pinned footer (CTA).
-class RideSheet extends StatelessWidget {
+///
+/// When [collapsible] is true it behaves like the Bolt Food / Uber Eats tracking
+/// sheet: it peeks at [collapsedHeight] so the map stays visible, and the user
+/// can drag the grab-handle (or tap it) to expand to the full height.
+class RideSheet extends StatefulWidget {
   const RideSheet({
     super.key,
     required this.child,
@@ -67,6 +116,10 @@ class RideSheet extends StatelessWidget {
     this.maxHeightFraction = 0.62,
     this.bottomInset = 0,
     this.minSheetHeight = 220,
+    this.collapsible = false,
+    this.collapsedHeight = 210,
+    this.initiallyExpanded = false,
+    this.layout = RideSheetLayout.auto,
   });
 
   final Widget child;
@@ -82,52 +135,87 @@ class RideSheet extends StatelessWidget {
   /// Subtract from max height (e.g. tab bar overlap).
   final double bottomInset;
   final double minSheetHeight;
+  /// Peek-and-expand behaviour so the map underneath stays visible.
+  final bool collapsible;
+  /// Peek height when collapsed (only used when [collapsible]).
+  final double collapsedHeight;
+  /// Whether the sheet starts expanded (only used when [collapsible]).
+  final bool initiallyExpanded;
+  final RideSheetLayout layout;
+
+  @override
+  State<RideSheet> createState() => _RideSheetState();
+}
+
+class _RideSheetState extends State<RideSheet> {
+  late bool _expanded = widget.initiallyExpanded;
+
+  @override
+  void didUpdateWidget(covariant RideSheet oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // When a sheet becomes non-collapsible (e.g. booking flow), keep it open.
+    if (!widget.collapsible && !_expanded) _expanded = true;
+  }
+
+  void _toggle() {
+    if (!widget.collapsible) return;
+    setState(() => _expanded = !_expanded);
+  }
+
+  void _onDrag(DragEndDetails details) {
+    if (!widget.collapsible) return;
+    final v = details.primaryVelocity ?? 0;
+    if (v < -120 && !_expanded) {
+      setState(() => _expanded = true);
+    } else if (v > 120 && _expanded) {
+      setState(() => _expanded = false);
+    }
+  }
+
+  RideSheetLayout get _layout {
+    if (widget.layout != RideSheetLayout.auto) return widget.layout;
+    return BytzLayout.useTabletSplit(context)
+        ? RideSheetLayout.side
+        : RideSheetLayout.bottom;
+  }
 
   @override
   Widget build(BuildContext context) {
     final media = MediaQuery.of(context);
+    final side = _layout == RideSheetLayout.side;
 
     return LayoutBuilder(
       builder: (context, constraints) {
         final screenH = media.size.height;
         final parentH = constraints.maxHeight;
-        final capFromScreen = screenH * maxHeightFraction - bottomInset;
+        final capFromScreen = side
+            ? screenH - widget.bottomInset
+            : screenH * widget.maxHeightFraction - widget.bottomInset;
         final capFromParent = parentH.isFinite && parentH > 0
-            ? parentH - bottomInset
+            ? parentH - widget.bottomInset
             : capFromScreen;
-        final maxH = (capFromParent < capFromScreen ? capFromParent : capFromScreen)
-            .clamp(minSheetHeight, screenH);
+        final double maxH = (capFromParent < capFromScreen ? capFromParent : capFromScreen)
+            .clamp(widget.minSheetHeight, screenH)
+            .toDouble();
 
-        return Container(
-          width: double.infinity,
-          constraints: BoxConstraints(maxHeight: maxH),
-          decoration: BoxDecoration(
-            color: BytzGoTheme.sheetBg,
-            borderRadius: const BorderRadius.vertical(
-              top: Radius.circular(BytzGoTheme.sheetRadius),
-            ),
-            border: Border(
-              top: BorderSide(color: BytzGoTheme.sheetDivider.withValues(alpha: 0.8)),
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.22),
-                blurRadius: 32,
-                offset: const Offset(0, -10),
-              ),
-              BoxShadow(
-                color: BytzGoTheme.brandBlue.withValues(alpha: 0.06),
-                blurRadius: 24,
-                offset: const Offset(0, -4),
-              ),
-            ],
-          ),
+        final double collapsedH = widget.collapsedHeight.clamp(120.0, maxH).toDouble();
+        final double targetH = side
+            ? maxH
+            : (widget.collapsible && !_expanded ? collapsedH : maxH);
+
+        final handle = GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: _toggle,
+          onVerticalDragEnd: _onDrag,
           child: Column(
-            mainAxisSize: MainAxisSize.max,
+            mainAxisSize: MainAxisSize.min,
             children: [
               const SizedBox(height: 10),
               Semantics(
-                label: 'Ride options sheet',
+                label: widget.collapsible
+                    ? (_expanded ? 'Collapse trip details' : 'Expand trip details')
+                    : 'Ride options sheet',
+                button: widget.collapsible,
                 child: Container(
                   width: 44,
                   height: 5,
@@ -137,27 +225,85 @@ class RideSheet extends StatelessWidget {
                   ),
                 ),
               ),
-              const SizedBox(height: 8),
+              if (widget.collapsible) ...[
+                const SizedBox(height: 4),
+                Icon(
+                  _expanded ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_up,
+                  size: 18,
+                  color: BytzGoTheme.sheetMuted.withValues(alpha: 0.7),
+                ),
+              ],
+              const SizedBox(height: 6),
+            ],
+          ),
+        );
+
+        final radius = side
+            ? const BorderRadius.horizontal(
+                left: Radius.circular(BytzGoTheme.sheetRadius),
+              )
+            : const BorderRadius.vertical(
+                top: Radius.circular(BytzGoTheme.sheetRadius),
+              );
+
+        return AnimatedContainer(
+          duration: const Duration(milliseconds: 260),
+          curve: Curves.easeOutCubic,
+          width: double.infinity,
+          height: targetH,
+          decoration: BoxDecoration(
+            color: BytzGoTheme.sheetBg,
+            borderRadius: radius,
+            border: side
+                ? Border(
+                    left: BorderSide(
+                      color: BytzGoTheme.sheetDivider.withValues(alpha: 0.8),
+                    ),
+                  )
+                : Border(
+                    top: BorderSide(
+                      color: BytzGoTheme.sheetDivider.withValues(alpha: 0.8),
+                    ),
+                  ),
+            boxShadow: side
+                ? null
+                : [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.22),
+                      blurRadius: 32,
+                      offset: const Offset(0, -10),
+                    ),
+                    BoxShadow(
+                      color: BytzGoTheme.brandBlue.withValues(alpha: 0.06),
+                      blurRadius: 24,
+                      offset: const Offset(0, -4),
+                    ),
+                  ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.max,
+            children: [
+              handle,
               Expanded(
                 child: SingleChildScrollView(
-                  controller: scrollController,
+                  controller: widget.scrollController,
                   physics: const BouncingScrollPhysics(
                     parent: AlwaysScrollableScrollPhysics(),
                   ),
-                  padding: padding.add(
-                    EdgeInsets.only(bottom: scrollBottomPadding),
+                  padding: widget.padding.add(
+                    EdgeInsets.only(bottom: widget.scrollBottomPadding),
                   ),
-                  child: child,
+                  child: widget.child,
                 ),
               ),
-              if (footer != null)
+              if (widget.footer != null)
                 Padding(
-                  padding: footerPadding.add(
+                  padding: widget.footerPadding.add(
                     EdgeInsets.only(
                       bottom: 8 + media.padding.bottom,
                     ),
                   ),
-                  child: footer!,
+                  child: widget.footer!,
                 ),
             ],
           ),

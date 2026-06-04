@@ -139,16 +139,29 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
   Order? get _activeCourier {
     final userId = _session.user?.id;
     if (userId == null) return null;
-    final list = _orders.where((o) {
-      if (o.customerId != userId) return false;
-      if (['delivered', 'cancelled'].contains(o.status)) return false;
+    Order? newest;
+    for (final o in _orders) {
+      if (o.customerId != userId) continue;
+      if (['delivered', 'cancelled'].contains(o.status)) continue;
       final type = o.orderType ?? '';
-      return type == 'courier' ||
+      final active = type == 'courier' ||
           type == 'food' ||
           customerOrderHasShopPickup(o) ||
           (o.pickup != null && o.pickup!.trim().isNotEmpty);
-    });
-    return list.isEmpty ? null : list.first;
+      if (!active) continue;
+      if (newest == null) {
+        newest = o;
+        continue;
+      }
+      try {
+        final a = DateTime.parse(o.createdAt);
+        final b = DateTime.parse(newest.createdAt);
+        if (a.isAfter(b)) newest = o;
+      } catch (_) {
+        newest = o;
+      }
+    }
+    return newest;
   }
 
   /// After marketplace checkout — show trip on map and in lists.
@@ -867,6 +880,15 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
   Future<void> _requestDelivery() async {
     if (_session.user == null) {
       _snack('Sign in to request a delivery');
+      return;
+    }
+    final inProgress = _activeCourier;
+    if (inProgress != null && customerIsSearchingBiker(inProgress)) {
+      _snack('You already have a ride in progress — track it on the map');
+      return;
+    }
+    if (inProgress != null && inProgress.riderId != null) {
+      _snack('Finish or cancel your current trip before booking another');
       return;
     }
     if (_pickup == null || !_pickup!.hasCoords) {

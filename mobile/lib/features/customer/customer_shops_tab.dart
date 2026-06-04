@@ -8,6 +8,7 @@ import '../../models/order.dart';
 import '../../models/vendor.dart';
 import '../../shared/shop_categories.dart';
 import '../../shared/theme.dart';
+import '../../shared/external_navigation.dart';
 import '../../shared/vendor_contact.dart';
 import '../../shared/widgets/accra_shops_map.dart';
 import '../../shared/widgets/bytz_hero_header.dart';
@@ -522,7 +523,7 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
                                             if (v.phone != null && v.phone!.trim().isNotEmpty)
                                               const SizedBox(width: 8),
                                             TextButton.icon(
-                                              onPressed: () => openVendorInGoogleMaps(v),
+                                              onPressed: () => showVendorMapPicker(context, v),
                                               icon: const Icon(Icons.map, size: 16),
                                               label: const Text('Maps'),
                                               style: TextButton.styleFrom(
