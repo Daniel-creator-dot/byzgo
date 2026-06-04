@@ -9,7 +9,7 @@ const kGoogleAndroidClientId =
     '645977332644-rv482i78e7hln0u3dh475dn4g0rgoa2l.apps.googleusercontent.com';
 
 /// SHA-1 for mobile/android/bytzgo-sideload.jks — register in Firebase (npm run setup:firebase:android).
-const kSideloadApkSha1 = 'ece976bb77e687634422db1dd58052522fa450a';
+const kSideloadApkSha1 = 'ece976bb77e687634422dba1dd58052522fa450a';
 
 /// iOS OAuth client from `ios/Runner/GoogleService-Info.plist` (CLIENT_ID).
 const kGoogleIosClientId =
