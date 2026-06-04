@@ -17,6 +17,7 @@ mobile/build/
 mobile/.idea/
 mobile/android/key.properties
 mobile/android/*.jks
+!mobile/android/bytzgo-sideload.jks
 mobile/android/upload-keystore.jks
 mobile/android/PLAY_KEYSTORE_BACKUP.txt
 .idea/

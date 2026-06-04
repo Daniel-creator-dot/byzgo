@@ -48,6 +48,16 @@ if (-not (Test-Path $flutter)) {
   $flutter = "flutter"
 }
 
+$sideloadProps = Join-Path $mobileRoot "android\sideload-signing.properties"
+$sideloadJks = Join-Path $mobileRoot "android\bytzgo-sideload.jks"
+$keyProps = Join-Path $mobileRoot "android\key.properties"
+if ((Test-Path $sideloadProps) -and (Test-Path $sideloadJks)) {
+  Copy-Item $sideloadProps $keyProps -Force
+  Write-Host "BytzGo: signing APK with bytzgo-sideload.jks (Google Sign-In)" -ForegroundColor Cyan
+} else {
+  Write-Host "BytzGo: WARNING — bytzgo-sideload.jks missing; Google Sign-In may fail (error 10)" -ForegroundColor Yellow
+}
+
 Push-Location $mobileRoot
 try {
   & $flutter pub get

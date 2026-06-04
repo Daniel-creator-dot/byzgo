@@ -71,6 +71,16 @@ if [[ ! -x "$FLUTTER" ]]; then
   FLUTTER="flutter"
 fi
 
+# Sideload APKs must use the committed keystore whose SHA-1 is registered for Google Sign-In.
+SIDELOAD_PROPS="$MOBILE_ROOT/android/sideload-signing.properties"
+SIDELOAD_JKS="$MOBILE_ROOT/android/bytzgo-sideload.jks"
+if [[ -f "$SIDELOAD_PROPS" && -f "$SIDELOAD_JKS" ]]; then
+  cp "$SIDELOAD_PROPS" "$MOBILE_ROOT/android/key.properties"
+  echo "BytzGo: signing APK with bytzgo-sideload.jks (Google Sign-In)"
+else
+  echo "BytzGo: WARNING — bytzgo-sideload.jks missing; Google Sign-In may fail (error 10)"
+fi
+
 echo "BytzGo APK — API_URL=$API_URL"
 cd "$MOBILE_ROOT"
 "$FLUTTER" pub get

@@ -139,8 +139,7 @@ class AuthRepository {
       );
     }
 
-    // Android: package net.bytzgo.app + SHA-1 in google-services.json (see print_google_signin_android).
-    // iOS: explicit clientId; both need serverClientId (web client) for backend ID token.
+    // Android: package net.bytzgo.app + signing SHA-1 in google-services.json (bytzgo-sideload.jks for download APK).
     final googleSignIn = GoogleSignIn(
       clientId: defaultTargetPlatform == TargetPlatform.iOS ? kGoogleIosClientId : null,
       serverClientId: Env.googleWebClientId.trim().isNotEmpty
@@ -154,8 +153,8 @@ class AuthRepository {
     } on PlatformException catch (e) {
       if (e.code == 'sign_in_failed' && (e.message?.contains(': 10') ?? false)) {
         throw Exception(
-          'Google Sign-In is not set up for this build. '
-          'Contact support or sign in with your phone or email instead.',
+          'Google Sign-In is not set up for this APK yet. '
+          'Use phone or email to sign in, or install a newer APK from bytzgo.net after the app update.',
         );
       }
       rethrow;

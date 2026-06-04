@@ -26,6 +26,8 @@ const RELEASE_SHA256 =
 const DEBUG_SHA1_ALT = '844C315C994787502E212EC2715DF5DED74FCC50';
 /** Default Android Studio debug keystore on this PC (emulator / flutter run). */
 const DEBUG_SHA1_LOCAL = '95F4D85777F2D006C131C4644D047627E2AA737';
+/** Committed mobile/android/bytzgo-sideload.jks — used for https://www.bytzgo.net/download/android APKs. */
+const SIDELOAD_APK_SHA1 = 'ECE976BB77E687634422DBA1DD58052522FA450A';
 const FIREBASE_WEB_CLIENT_ID =
   '645977332644-4gjjf08268b3irafs4bh8b7guct1i1jb.apps.googleusercontent.com';
 
@@ -106,7 +108,9 @@ async function createAndroidApp(token) {
 }
 
 async function patchShaHashes(token, appName) {
-  const hashes = [...new Set([RELEASE_SHA1, DEBUG_SHA1_ALT, DEBUG_SHA1_LOCAL])];
+  const hashes = [...new Set([RELEASE_SHA1, DEBUG_SHA1_ALT, DEBUG_SHA1_LOCAL, SIDELOAD_APK_SHA1])];
+  const extra = process.env.ANDROID_EXTRA_SHA1?.trim().toUpperCase().replace(/:/g, '');
+  if (extra) hashes.push(extra);
   for (const sha1 of hashes) {
     let added = false;
     for (const fmt of shaFormats(sha1)) {
