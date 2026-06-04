@@ -241,7 +241,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
       if (_nearbyPoll == null) {
         _fetchNearbyRiders();
         _nearbyPoll = Timer.periodic(
-          const Duration(seconds: 5),
+          const Duration(seconds: 10),
           (_) => _fetchNearbyRiders(),
         );
       }
@@ -558,6 +558,14 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
       if (order.riderId != null && prev?.riderId != order.riderId) {
         unawaited(_hydrateRiderPosition(order));
       }
+      if (prev != null &&
+          prev.status != order.status &&
+          order.riderId != null &&
+          !['delivered', 'cancelled'].contains(order.status)) {
+        _lastEtaFetch = null;
+        _lastEtaOrigin = null;
+        unawaited(_refreshEta(order));
+      }
       if (_activeCourier?.id == order.id) {
         unawaited(_resolveTrackingLabels(order));
       }
@@ -641,7 +649,8 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
         !['delivered', 'cancelled'].contains(order.status);
     if (hasRider) {
       _clearSearchPickupEta();
-      if (_etaPoll == null) {
+      final needsPoll = _etaPoll == null;
+      if (needsPoll) {
         unawaited(_hydrateRiderPosition(order));
         unawaited(_refreshEta(order));
         _etaPoll = Timer.periodic(
@@ -754,14 +763,28 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
       if (order.status == 'cancelled') {
         _riderPosition = null;
         _nearbyRiderRecords = [];
+        _etaPhrase = null;
+        _etaMinutes = null;
+        _etaDistanceText = null;
+        _etaExpiresAt = null;
+        _searchPickupMinutes = null;
+        _searchPickupPhrase = null;
+        _searchPickupExpiresAt = null;
+        _routePoints = [];
+        _lastEtaFetch = null;
+        _lastEtaOrigin = null;
       }
     });
     _syncNearbyPoll();
     _syncEtaPoll(order);
     _syncRiderLocationPoll(order);
     if (order.status == 'cancelled') {
+      _nearbyPoll?.cancel();
+      _nearbyPoll = null;
       _etaPoll?.cancel();
       _etaPoll = null;
+      _riderLocationPoll?.cancel();
+      _riderLocationPoll = null;
       _snack('Delivery request cancelled', success: true);
     }
   }
@@ -870,6 +893,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
       if (active != null) {
         unawaited(_resolveTrackingLabels(active));
         _syncEtaPoll(active);
+        _syncRiderLocationPoll(active);
       }
     } catch (e) {
       if (!mounted) return;

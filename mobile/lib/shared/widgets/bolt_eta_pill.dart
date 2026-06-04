@@ -45,6 +45,7 @@ class _BoltEtaPillState extends State<BoltEtaPill> {
     if (oldWidget.expiresAt != widget.expiresAt ||
         oldWidget.minutes != widget.minutes) {
       _syncRemaining();
+      _startTicker();
     }
   }
 

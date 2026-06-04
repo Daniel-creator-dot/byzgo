@@ -12,10 +12,20 @@ export function isActiveCustomerTrip(order: Order): boolean {
   return type === 'courier' || Boolean(order.vendor_id);
 }
 
+export function customerOrderHasShopPickup(order: Order): boolean {
+  return Boolean(order.vendor_id?.trim());
+}
+
 export function customerEtaLabel(order: Order, searching = false): string {
   if (searching || isCustomerSearchingBiker(order)) return 'est. pickup';
   if (order.status === 'picked_up') return 'to you';
   if (order.status === 'arrived') return 'arrived';
+  if (
+    customerOrderHasShopPickup(order) &&
+    ['ready', 'preparing', 'pending'].includes(order.status)
+  ) {
+    return 'to shop';
+  }
   return 'to pickup';
 }
 
@@ -48,10 +58,42 @@ export async function fetchRiderLocation(
   }
 }
 
+export type DirectionsEta = {
+  eta: string;
+  eta_minutes: number;
+  duration_text: string;
+  expires_at: number;
+};
+
+export function etaExpiresAtFromMinutes(minutes: number, fromMs = Date.now()): number {
+  const mins = Math.max(1, Math.round(minutes));
+  return fromMs + mins * 60_000;
+}
+
+/** Bolt-style MM:SS countdown from an expiry timestamp. */
+export function formatEtaCountdown(expiresAtMs: number | null, fallbackMinutes?: number): string {
+  if (expiresAtMs != null) {
+    const sec = Math.max(0, Math.floor((expiresAtMs - Date.now()) / 1000));
+    if (sec <= 0) return '0:01';
+    if (sec >= 3600) {
+      const h = Math.floor(sec / 3600);
+      const m = Math.floor((sec % 3600) / 60);
+      return `${h}:${m.toString().padStart(2, '0')}`;
+    }
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${m}:${s.toString().padStart(2, '0')}`;
+  }
+  if (fallbackMinutes != null && fallbackMinutes > 0) {
+    return `${fallbackMinutes}`;
+  }
+  return '—';
+}
+
 export async function fetchDirectionsEta(
   origin: { lat: number; lng: number },
   dest: { lat: number; lng: number }
-): Promise<{ eta: string; eta_minutes: number; duration_text: string } | null> {
+): Promise<DirectionsEta | null> {
   try {
     const res = await axios.get<{
       eta_minutes?: number;
@@ -70,6 +112,7 @@ export async function fetchDirectionsEta(
       eta: text.startsWith('Arriving') ? text : `Arriving in ${text}`,
       eta_minutes: mins,
       duration_text: text,
+      expires_at: etaExpiresAtFromMinutes(mins),
     };
   } catch {
     return null;

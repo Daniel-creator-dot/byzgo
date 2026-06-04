@@ -14,7 +14,9 @@ import {
 } from '../../lib/ghanaLocation';
 import { LocationAutocompleteInput } from '../LocationAutocompleteInput';
 import { DeliveryMapPicker } from './DeliveryMapPicker';
+import { LiveTripTracker } from './LiveTripTracker';
 import { MapsHealthBanner } from '../MapsProvider';
+import { isActiveCustomerTrip } from '../../lib/customerTrip';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -48,9 +50,12 @@ export function CustomerDeliveryHome({
   onPlaceOrder,
   addNotification,
   setActiveTab,
-  afterBookTab = 'tracking',
+  afterBookTab = 'courier',
   paystackKey,
   setPaystackKey,
+  vendors = [],
+  riderLocations = {},
+  refreshData,
 }: {
   liveOrders: Order[];
   user: { id: string; email: string; name: string; balance: number; lat?: number; lng?: number; address?: string; phone?: string };
@@ -70,6 +75,9 @@ export function CustomerDeliveryHome({
   afterBookTab?: string;
   paystackKey: string;
   setPaystackKey: (k: string) => void;
+  vendors?: { id: string; name: string; lat?: number; lng?: number; address?: string }[];
+  riderLocations?: Record<string, { lat: number; lng: number }>;
+  refreshData?: () => void | Promise<void>;
 }) {
   const [pickupLocating, setPickupLocating] = useState(false);
   const [paymentTiming, setPaymentTiming] = useState<'on_arrival' | 'now'>('on_arrival');
@@ -101,6 +109,8 @@ export function CustomerDeliveryHome({
       ((o as Order & { order_type?: string }).order_type === 'courier' ||
         (o as Order & { orderType?: string }).orderType === 'courier')
   );
+  const showLiveTripOnHome =
+    activeCourierTrip != null && isActiveCustomerTrip(activeCourierTrip);
   const tripSearching =
     activeCourierTrip &&
     !activeCourierTrip.rider_id &&
@@ -168,6 +178,27 @@ export function CustomerDeliveryHome({
       });
     });
   }, [courierForm.pickup?.lat, courierForm.pickup?.lng, courierForm.pickup?.address, courierForm.destination?.lat, courierForm.destination?.lng, courierForm.destination?.address, setCourierForm]);
+
+  if (showLiveTripOnHome && activeCourierTrip) {
+    return (
+      <div className="max-w-lg mx-auto w-full">
+        <LiveTripTracker
+          order={activeCourierTrip}
+          vendors={vendors}
+          riderLocation={
+            activeCourierTrip.rider_id
+              ? riderLocations[activeCourierTrip.rider_id] ?? null
+              : null
+          }
+          user={user}
+          paystackKey={paystackKey}
+          setPaystackKey={setPaystackKey}
+          addNotification={addNotification}
+          refreshData={refreshData ?? (() => {})}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4 max-w-lg mx-auto">

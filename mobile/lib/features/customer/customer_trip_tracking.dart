@@ -510,7 +510,7 @@ class _StatusHero extends StatelessWidget {
             pickupPhrase: etaPhrase,
           )
         : customerTripSubline(order, etaPhrase: etaPhrase);
-    final showSearchEta = isSearching &&
+    final showSearchEta =
         isSearching && (etaExpiresAt != null || etaMinutes != null);
     final showEta = !isSearching &&
         order.riderId != null &&

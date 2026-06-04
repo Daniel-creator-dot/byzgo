@@ -635,15 +635,15 @@ function MainApp() {
         !prevOrder?.rider_id
       ) {
         addNotification('Your driver accepted — track them on the map', 'success');
-        setActiveTab('tracking');
+        setActiveTab('courier');
       }
       if (u?.role === 'customer' && updatedOrder.status === 'picked_up' && updatedOrder.customer_id === u.id) {
         addNotification('Your order has been picked up!', 'info');
-        setActiveTab('tracking');
+        setActiveTab('courier');
       }
       if (u?.role === 'customer' && updatedOrder.status === 'arrived' && updatedOrder.customer_id === u.id) {
-        addNotification('Your driver has arrived ? complete payment to get your PIN', 'info');
-        setActiveTab('tracking');
+        addNotification('Your driver has arrived — complete payment to get your PIN', 'info');
+        setActiveTab('courier');
       }
       if (u?.role === 'customer' && updatedOrder.status === 'delivered' && updatedOrder.customer_id === u.id) {
         addNotification('Your order has been delivered!', 'success');
@@ -2284,6 +2284,9 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
           setActiveTab={setActiveTab}
           paystackKey={paystackKey}
           setPaystackKey={setPaystackKey}
+          vendors={vendors}
+          riderLocations={riderLocations}
+          refreshData={refreshData}
         />
       )}
 

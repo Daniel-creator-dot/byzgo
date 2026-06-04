@@ -359,6 +359,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
     };
     _socket.onOrderUpdated = (order) {
       if (!mounted) return;
+      final prev = _orders.where((o) => o.id == order.id).firstOrNull;
       setState(() {
         _orders = [
           for (final o in _orders)
@@ -375,6 +376,11 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
           _tab = _RiderTab.drive;
         }
       });
+      if (prev != null && prev.status != order.status) {
+        _lastNavFetch = null;
+        _lastNavOrigin = null;
+        unawaited(_refreshNav(order));
+      }
       _syncNavPoll();
     };
     _socket.onWalletUpdated = (balance) {
@@ -1154,7 +1160,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
                         minutes: _navEtaMinutes,
                         expiresAt: _navEtaExpiresAt,
                         compact: true,
-                        label: 'to destination',
+                        label: phase == TripPhase.toPickup ? 'to pickup' : 'to drop-off',
                       ),
                     ),
                   Expanded(

@@ -19,6 +19,7 @@ import {
   fetchRiderLocation,
   isCustomerSearchingBiker,
 } from '../../lib/customerTrip';
+import { EtaCountdown } from './EtaCountdown';
 import { DriverTierBadge, RateDriverCard, driverTierForOrder } from '../shared/DriverTier';
 
 function cn(...inputs: ClassValue[]) {
@@ -47,7 +48,9 @@ export function LiveTripTracker({
   refreshData: () => void | Promise<void>;
 }) {
   const [eta, setEta] = useState<string | null>(null);
+  const [etaExpiresAt, setEtaExpiresAt] = useState<number | null>(null);
   const [searchEta, setSearchEta] = useState<string | null>(null);
+  const [searchExpiresAt, setSearchExpiresAt] = useState<number | null>(null);
   const [localRiderLoc, setLocalRiderLoc] = useState<{ lat: number; lng: number } | null>(null);
   const [sheetExpanded, setSheetExpanded] = useState(false);
 
@@ -77,25 +80,35 @@ export function LiveTripTracker({
   useEffect(() => {
     if (!searching) {
       setSearchEta(null);
+      setSearchExpiresAt(null);
       return;
     }
     let cancelled = false;
     const tick = async () => {
       try {
         const riders = await fetchNearbyRiders(pickupLocation.lat, pickupLocation.lng);
-        if (cancelled || !riders.length) return;
+        if (cancelled || !riders.length) {
+          if (!cancelled) {
+            setSearchEta(null);
+            setSearchExpiresAt(null);
+          }
+          return;
+        }
         const nearest = riders[0];
         const dir = await fetchDirectionsEta(
           { lat: nearest.lat, lng: nearest.lng },
           pickupLocation
         );
-        if (!cancelled && dir) setSearchEta(dir.eta);
+        if (!cancelled && dir) {
+          setSearchEta(dir.eta);
+          setSearchExpiresAt(dir.expires_at);
+        }
       } catch {
         /* ignore */
       }
     };
     void tick();
-    const id = setInterval(tick, 8000);
+    const id = setInterval(tick, 10000);
     return () => {
       cancelled = true;
       clearInterval(id);
@@ -121,8 +134,42 @@ export function LiveTripTracker({
     };
   }, [order.rider_id, searching, riderLocation]);
 
+  const routeDest =
+    order.status === 'picked_up' || order.status === 'arrived' ? destination : pickupLocation;
+
+  useEffect(() => {
+    if (searching || !effectiveRiderLocation) {
+      if (!searching) {
+        setEtaExpiresAt(null);
+      }
+      return;
+    }
+    let cancelled = false;
+    const refresh = async () => {
+      const dir = await fetchDirectionsEta(effectiveRiderLocation, routeDest);
+      if (!cancelled && dir) {
+        setEta(dir.eta);
+        setEtaExpiresAt(dir.expires_at);
+      }
+    };
+    void refresh();
+    const id = setInterval(refresh, 12000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [
+    searching,
+    effectiveRiderLocation?.lat,
+    effectiveRiderLocation?.lng,
+    routeDest.lat,
+    routeDest.lng,
+    order.status,
+  ]);
+
   const headline = getCustomerTripHeadline(order);
   const displayEta = searching ? searchEta : eta;
+  const displayExpiresAt = searching ? searchExpiresAt : etaExpiresAt;
   const pickupLabel = pickup?.label || vendor?.name || 'Pickup';
   const dropoffLabel = dropoff?.label || order.address || 'Your address';
   const riderPhone = order.riderPhone ?? order.rider_phone;
@@ -194,14 +241,23 @@ export function LiveTripTracker({
                   )}
                 </div>
               </motion.div>
-              {displayEta && !isArrived && (
+              {(displayExpiresAt != null || displayEta) && !isArrived && (
                 <div className="text-right shrink-0">
                   <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">
                     {customerEtaLabel(order, searching)}
                   </p>
-                  <p className="text-lg font-black text-brand-green font-mono leading-tight">
-                    {displayEta}
-                  </p>
+                  {displayExpiresAt != null ? (
+                    <EtaCountdown expiresAtMs={displayExpiresAt} />
+                  ) : (
+                    <p className="text-lg font-black text-brand-green font-mono leading-tight">
+                      {displayEta}
+                    </p>
+                  )}
+                  {displayEta && displayExpiresAt != null && (
+                    <p className="text-[9px] font-bold text-slate-500 truncate max-w-[120px]">
+                      {displayEta}
+                    </p>
+                  )}
                 </div>
               )}
             </div>
