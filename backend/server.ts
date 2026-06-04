@@ -4875,6 +4875,36 @@ app.patch('/api/admin/riders/:id/reject', authenticateToken, async (req: any, re
   }
 });
 
+/** Register Android SHA-1 fingerprints in Firebase and refresh google-services.json (uses server Firebase SA). */
+app.post('/api/admin/firebase/sync-android', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'admin') return res.sendStatus(403);
+  const serviceAccount = loadFirebaseServiceAccount();
+  if (!serviceAccount) {
+    return res.status(503).json({
+      message:
+        'Firebase service account not configured. Set FIREBASE_SERVICE_ACCOUNT_JSON on Render.',
+    });
+  }
+  try {
+    const mod = await import('./scripts/setup-firebase-android.mjs');
+    const result = await mod.syncFirebaseAndroid({
+      credentials: serviceAccount,
+      writeFiles: false,
+    });
+    res.json({
+      ok: true,
+      packageName: result.packageName,
+      hasSideloadSha1: result.hasSideloadSha1,
+      hasReleaseSha1: result.hasReleaseSha1,
+      shaResults: result.shaResults,
+      googleServicesJson: result.googleServicesJson,
+    });
+  } catch (err: any) {
+    console.error('[admin/firebase/sync-android]', err.message || err);
+    res.status(502).json({ message: err.message || 'Firebase Android sync failed' });
+  }
+});
+
 /** Send a test SMS (admin diagnostics). */
 app.post('/api/admin/sms-test', authenticateToken, async (req: any, res) => {
   if (req.user.role !== 'admin') return res.sendStatus(403);

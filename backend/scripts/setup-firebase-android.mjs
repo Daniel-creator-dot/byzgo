@@ -1,6 +1,6 @@
 /**
  * Register Android app net.bytzgo.app in Firebase (bytzgo-9bd89) and refresh google-services.json.
- * Uses backend/firebase-service-account.json (gitignored).
+ * Uses backend/firebase-service-account.json (gitignored) or FIREBASE_SERVICE_ACCOUNT_JSON.
  *
  * Usage: node backend/scripts/setup-firebase-android.mjs
  */
@@ -15,7 +15,6 @@ const repoRoot = path.resolve(__dirname, '..', '..');
 const PROJECT_ID = 'bytzgo-9bd89';
 const PACKAGE = 'net.bytzgo.app';
 /** Production Android app in Firebase (package net.bytzgo.app). */
-/** Production Firebase Android app (release SHA-1 registered here). */
 const ANDROID_APP_RESOURCE =
   'projects/bytzgo-9bd89/androidApps/1:645977332644:android:c61f7624820fc1e2977f31';
 const ANDROID_APP_ID = '1:645977332644:android:c61f7624820fc1e2977f31';
@@ -28,12 +27,15 @@ const DEBUG_SHA1_ALT = '844C315C994787502E212EC2715DF5DED74FCC50';
 const DEBUG_SHA1_LOCAL = '95F4D85777F2D006C131C4644D047627E2AA737';
 /** Committed mobile/android/bytzgo-sideload.jks — used for https://www.bytzgo.net/download/android APKs. */
 const SIDELOAD_APK_SHA1 = 'ECE976BB77E687634422DBA1DD58052522FA450A';
-const FIREBASE_WEB_CLIENT_ID =
-  '645977332644-4gjjf08268b3irafs4bh8b7guct1i1jb.apps.googleusercontent.com';
 
 const saPath = path.resolve(__dirname, '../firebase-service-account.json');
 const gsOut = path.join(repoRoot, 'mobile/android/app/google-services.json');
 const firebaseOptsOut = path.join(repoRoot, 'mobile/lib/firebase_options.dart');
+
+const FIREBASE_SCOPES = [
+  'https://www.googleapis.com/auth/firebase',
+  'https://www.googleapis.com/auth/cloud-platform',
+];
 
 function findServiceAccount() {
   if (fs.existsSync(saPath)) return saPath;
@@ -82,13 +84,11 @@ async function listAndroidApps(token) {
   let pageToken;
   const apps = [];
   do {
-    const q = pageToken
-      ? `?pageToken=${encodeURIComponent(pageToken)}`
-      : '';
+    const q = pageToken ? `?pageToken=${encodeURIComponent(pageToken)}` : '';
     const res = await api(
       token,
       'GET',
-      `https://firebase.googleapis.com/v1beta1/${parent}/androidApps${q}`
+      `https://firebase.googleapis.com/v1beta1/${parent}/androidApps${q}`,
     );
     apps.push(...(res.apps || []));
     pageToken = res.nextPageToken;
@@ -96,55 +96,52 @@ async function listAndroidApps(token) {
   return apps;
 }
 
-async function createAndroidApp(token) {
-  const parent = `projects/${PROJECT_ID}`;
-  const op = await api(token, 'POST', `https://firebase.googleapis.com/v1beta1/${parent}/androidApps`, {
-    packageName: PACKAGE,
-    displayName: 'BytzGo Android',
-  });
-  const created = await waitOperation(token, op.name);
-  console.log('Created Android app:', created.name);
-  return created;
+function shaFormats(hexUpper) {
+  const h = hexUpper.replace(/:/g, '').toUpperCase();
+  const colon = h.match(/.{1,2}/g)?.join(':') ?? h;
+  return [...new Set([h, colon, h.toLowerCase(), colon.toLowerCase()])];
 }
 
 async function patchShaHashes(token, appName) {
   const hashes = [...new Set([RELEASE_SHA1, DEBUG_SHA1_ALT, DEBUG_SHA1_LOCAL, SIDELOAD_APK_SHA1])];
   const extra = process.env.ANDROID_EXTRA_SHA1?.trim().toUpperCase().replace(/:/g, '');
+  const shaResults = [];
   if (extra) hashes.push(extra);
   for (const sha1 of hashes) {
     let added = false;
     for (const fmt of shaFormats(sha1)) {
       try {
-        await api(
-          token,
-          'POST',
-          `https://firebase.googleapis.com/v1beta1/${appName}/sha`,
-          { shaHash: fmt, certType: 'SHA_1' },
-        );
-        console.log('Added SHA-1:', fmt);
+        await api(token, 'POST', `https://firebase.googleapis.com/v1beta1/${appName}/sha`, {
+          shaHash: fmt,
+          certType: 'SHA_1',
+        });
+        shaResults.push({ sha1: fmt, status: 'added' });
         added = true;
         break;
       } catch (e) {
         if (e.message.includes('409') || e.message.includes('ALREADY_EXISTS')) {
-          console.log('SHA-1 already registered:', fmt);
+          shaResults.push({ sha1: fmt, status: 'already_registered' });
           added = true;
           break;
         }
       }
     }
-    if (!added) console.warn('Could not add SHA-1', sha1);
+    if (!added) shaResults.push({ sha1, status: 'failed' });
   }
   try {
-    await api(
-      token,
-      'POST',
-      `https://firebase.googleapis.com/v1beta1/${appName}/sha`,
-      { shaHash: RELEASE_SHA256, certType: 'SHA_256' },
-    );
-    console.log('Added release SHA-256.');
+    await api(token, 'POST', `https://firebase.googleapis.com/v1beta1/${appName}/sha`, {
+      shaHash: RELEASE_SHA256,
+      certType: 'SHA_256',
+    });
+    shaResults.push({ sha256: RELEASE_SHA256, status: 'added' });
   } catch (e) {
-    console.warn('SHA-256:', e.message.slice(0, 200));
+    if (e.message.includes('409') || e.message.includes('ALREADY_EXISTS')) {
+      shaResults.push({ sha256: RELEASE_SHA256, status: 'already_registered' });
+    } else {
+      shaResults.push({ sha256: RELEASE_SHA256, status: 'failed', error: e.message.slice(0, 200) });
+    }
   }
+  return shaResults;
 }
 
 function filterGoogleServicesForPackage(jsonText, packageName) {
@@ -170,23 +167,12 @@ function filterGoogleServicesForPackage(jsonText, packageName) {
   return `${JSON.stringify(data, null, 2)}\n`;
 }
 
-function shaFormats(hexUpper) {
-  const h = hexUpper.replace(/:/g, '').toUpperCase();
-  const colon = h.match(/.{1,2}/g)?.join(':') ?? h;
-  return [...new Set([h, colon, h.toLowerCase(), colon.toLowerCase()])];
-}
-
 async function downloadConfig(token, appName) {
-  const config = await api(
-    token,
-    'GET',
-    `https://firebase.googleapis.com/v1beta1/${appName}/config`
-  );
+  const config = await api(token, 'GET', `https://firebase.googleapis.com/v1beta1/${appName}/config`);
   if (!config.configFilename || !config.configFileContents) {
     throw new Error('No config in Firebase response');
   }
-  const contents = Buffer.from(config.configFileContents, 'base64').toString('utf8');
-  return contents;
+  return Buffer.from(config.configFileContents, 'base64').toString('utf8');
 }
 
 function updateFirebaseOptionsDart(googleServicesJson) {
@@ -245,73 +231,100 @@ class DefaultFirebaseOptions {
 }
 `;
   fs.writeFileSync(firebaseOptsOut, dart);
-  console.log('Wrote', firebaseOptsOut);
+}
+
+async function resolveAccessToken({ credentials, keyFile } = {}) {
+  if (credentials) {
+    const auth = new GoogleAuth({ credentials, scopes: FIREBASE_SCOPES });
+    const client = await auth.getClient();
+    const res = await client.getAccessToken();
+    return res.token;
+  }
+  const inline = process.env.FIREBASE_SERVICE_ACCOUNT_JSON?.trim();
+  if (inline) {
+    const auth = new GoogleAuth({
+      credentials: JSON.parse(inline),
+      scopes: FIREBASE_SCOPES,
+    });
+    const client = await auth.getClient();
+    const res = await client.getAccessToken();
+    return res.token;
+  }
+  const file = keyFile || findServiceAccount();
+  if (!fs.existsSync(file)) {
+    throw new Error(`Service account not found: ${file}`);
+  }
+  const auth = new GoogleAuth({ keyFile: file, scopes: FIREBASE_SCOPES });
+  const client = await auth.getClient();
+  const res = await client.getAccessToken();
+  return res.token;
+}
+
+/**
+ * Register SHA fingerprints and download google-services.json from Firebase.
+ * @param {{ credentials?: object, keyFile?: string, writeFiles?: boolean }} options
+ */
+export async function syncFirebaseAndroid(options = {}) {
+  const { credentials, keyFile, writeFiles = true } = options;
+  const token = await resolveAccessToken({ credentials, keyFile });
+  if (!token) throw new Error('No access token');
+
+  const apps = await listAndroidApps(token);
+  let app = apps.find((a) => a.name === ANDROID_APP_RESOURCE);
+  if (!app) app = apps.find((a) => a.packageName === PACKAGE);
+  if (!app) app = { name: ANDROID_APP_RESOURCE };
+
+  const shaResults = await patchShaHashes(token, app.name);
+  const gsRaw = await downloadConfig(token, app.name);
+  const gsFiltered = filterGoogleServicesForPackage(gsRaw, PACKAGE);
+  const hasSideload = gsFiltered.includes(SIDELOAD_APK_SHA1.toLowerCase());
+  const hasRelease = gsFiltered.includes(RELEASE_SHA1.toLowerCase());
+
+  let wroteFiles = false;
+  if (writeFiles) {
+    if (!hasRelease && fs.existsSync(gsOut)) {
+      // keep existing oauth entries if Firebase download is incomplete
+    } else {
+      fs.writeFileSync(gsOut, gsFiltered);
+      updateFirebaseOptionsDart(gsFiltered);
+      wroteFiles = true;
+    }
+  }
+
+  return {
+    projectId: PROJECT_ID,
+    packageName: PACKAGE,
+    appResource: app.name,
+    shaResults,
+    hasSideloadSha1: hasSideload,
+    hasReleaseSha1: hasRelease,
+    googleServicesJson: gsFiltered,
+    wroteFiles,
+    androidApps: apps.map((a) => ({
+      name: a.name,
+      packageName: a.packageName,
+      displayName: a.displayName,
+    })),
+  };
 }
 
 async function main() {
   const keyFile = findServiceAccount();
   console.log('Using service account:', keyFile);
-  if (!fs.existsSync(keyFile)) {
-    throw new Error(`Service account not found: ${keyFile}`);
+  const result = await syncFirebaseAndroid({ keyFile, writeFiles: true });
+  console.log('SHA results:', JSON.stringify(result.shaResults, null, 2));
+  console.log('Sideload SHA-1 in config:', result.hasSideloadSha1);
+  if (result.wroteFiles) {
+    console.log('Wrote', gsOut);
+    console.log('Wrote', firebaseOptsOut);
   }
-  let token;
-  try {
-    const auth = new GoogleAuth({
-      keyFile,
-      scopes: [
-        'https://www.googleapis.com/auth/firebase',
-        'https://www.googleapis.com/auth/cloud-platform',
-      ],
-    });
-    const client = await auth.getClient();
-    const res = await client.getAccessToken();
-    token = res.token;
-  } catch (e) {
-    throw new Error(`Google auth failed (${keyFile}): ${e.message}`);
-  }
-  if (!token) throw new Error('No access token');
-
-  const apps = await listAndroidApps(token);
-  console.log(
-    'Existing Android apps:',
-    apps.map((a) => `${a.packageName || a.displayName || '?'} (${a.name})`).join(', ') || '(none)'
-  );
-
-  let app = apps.find((a) => a.name === ANDROID_APP_RESOURCE);
-  if (!app) {
-    app = apps.find((a) => a.packageName === PACKAGE);
-  }
-  if (!app) {
-    console.warn(
-      `App ${ANDROID_APP_RESOURCE} not listed; using resource id directly (package ${PACKAGE}).`
-    );
-    app = { name: ANDROID_APP_RESOURCE };
-  } else {
-    console.log('Using Firebase app:', app.name);
-  }
-
-  await patchShaHashes(token, app.name);
-  const gsRaw = await downloadConfig(token, app.name);
-  const gsFiltered = filterGoogleServicesForPackage(gsRaw, PACKAGE);
-  if (!gsFiltered.includes('b2a044c879a5975095ab9ac5b60a2ffd7cde3f2d')) {
-    console.warn(
-      'Downloaded config missing Play upload SHA-1 — keeping existing google-services.json oauth entries.',
-    );
-    if (fs.existsSync(gsOut)) {
-      updateFirebaseOptionsDart(fs.readFileSync(gsOut, 'utf8'));
-    } else {
-      fs.writeFileSync(gsOut, gsFiltered);
-      updateFirebaseOptionsDart(gsFiltered);
-    }
-  } else {
-    fs.writeFileSync(gsOut, gsFiltered);
-    console.log('Wrote', gsOut, `(package ${PACKAGE} only)`);
-    updateFirebaseOptionsDart(gsFiltered);
-  }
-  console.log('\nDone. Rebuild AAB: npm run flutter:build:aab');
+  console.log('\nDone. Rebuild APK: bash mobile/scripts/build_apk.sh');
 }
 
-main().catch((e) => {
-  console.error(e.message || e);
-  process.exit(1);
-});
+const isMain = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
+if (isMain) {
+  main().catch((e) => {
+    console.error(e.message || e);
+    process.exit(1);
+  });
+}
