@@ -131,10 +131,13 @@ if $OPEN_XCODE; then
 fi
 
 echo "→ flutter build ipa (release)"
+set +e
 "$FLUTTER" build ipa --release --dart-define-from-file=dart_defines.json
+IPA_EXIT=$?
+set -e
 
 IPA_DIR="$MOBILE_ROOT/build/ios/ipa"
-if compgen -G "$IPA_DIR"/*.ipa >/dev/null 2>&1; then
+if [[ $IPA_EXIT -eq 0 ]] && compgen -G "$IPA_DIR"/*.ipa >/dev/null 2>&1; then
   IPA="$(ls -1 "$IPA_DIR"/*.ipa | head -1)"
   echo ""
   echo "=========================================="
