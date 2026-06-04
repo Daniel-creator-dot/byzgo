@@ -65,7 +65,9 @@ async function apiFetch(url, token, opts = {}) {
     data = { raw: text };
   }
   if (!res.ok) {
-    throw new Error(`${res.status} ${url}: ${data.error?.message || text.slice(0, 300)}`);
+    const err = new Error(`${res.status} ${url}: ${data.error?.message || text.slice(0, 300)}`);
+    err.status = res.status;
+    throw err;
   }
   return data;
 }
