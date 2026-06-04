@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_web_auth_2/flutter_web_auth_2.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 
 import '../../core/api_client.dart';
@@ -139,7 +140,46 @@ class AuthRepository {
       );
     }
 
-    // Android: package net.bytzgo.app + signing SHA-1 in google-services.json (bytzgo-sideload.jks for download APK).
+    // Sideload APKs: native Google Sign-In often fails with certificate error 10; use web OAuth instead.
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+      return _signInWithGoogleWeb(role);
+    }
+    return _signInWithGoogleNative(role);
+  }
+
+  /// Browser-based Google Sign-In (same as bytzgo.net web) — no APK certificate check.
+  Future<AuthResult> _signInWithGoogleWeb(AppRole role) async {
+    final url = '${Env.apiBaseUrl}/auth/google-mobile?role=${role.name}';
+    try {
+      final result = await FlutterWebAuth2.authenticate(
+        url: url,
+        callbackUrlScheme: 'bytzgo',
+      );
+      final uri = Uri.parse(result);
+      final err = uri.queryParameters['error'];
+      if (err != null && err.isNotEmpty) {
+        throw Exception(err);
+      }
+      final token = uri.queryParameters['token'];
+      if (token == null || token.isEmpty) {
+        throw Exception('Google sign-in cancelled');
+      }
+      final res = await _api.dio.get<Map<String, dynamic>>(
+        '/api/auth/me',
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+      return _parseAuthResponse(res.data);
+    } on DioException catch (e) {
+      throw Exception(AuthRepository.errorMessage(e));
+    } on PlatformException catch (e) {
+      if (e.code == 'CANCELED') {
+        throw Exception('Google sign-in cancelled');
+      }
+      rethrow;
+    }
+  }
+
+  Future<AuthResult> _signInWithGoogleNative(AppRole role) async {
     final googleSignIn = GoogleSignIn(
       clientId: defaultTargetPlatform == TargetPlatform.iOS ? kGoogleIosClientId : null,
       serverClientId: Env.googleWebClientId.trim().isNotEmpty
@@ -147,19 +187,7 @@ class AuthRepository {
           : kGoogleWebClientId,
       scopes: const ['email', 'profile', 'openid'],
     );
-    late final GoogleSignInAccount? account;
-    try {
-      account = await googleSignIn.signIn();
-    } on PlatformException catch (e) {
-      if (e.code == 'sign_in_failed' && (e.message?.contains(': 10') ?? false)) {
-        throw Exception(
-          'Google Sign-In certificate mismatch (error 10). '
-          'Uninstall BytzGo, install the latest APK from bytzgo.net/download/android, '
-          'or sign in with phone or email.',
-        );
-      }
-      rethrow;
-    }
+    final account = await googleSignIn.signIn();
     if (account == null) {
       throw Exception('Google sign-in cancelled');
     }

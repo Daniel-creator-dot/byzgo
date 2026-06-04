@@ -7268,6 +7268,16 @@ app.get('/privacy-policy', (_req, res) => res.redirect(301, '/privacy'));
 app.get('/terms', serveLegalPage('terms'));
 app.get('/account-deletion', serveLegalPage('account-deletion'));
 
+/** In-app browser Google Sign-In for Android sideload APKs (avoids native certificate error 10). */
+app.get('/auth/google-mobile', (_req, res) => {
+  const file = path.join(__dirname, '..', 'public', 'google-sign-in-mobile.html');
+  if (!fs.existsSync(file)) {
+    return res.status(404).type('text/plain').send('Google mobile sign-in page not found');
+  }
+  res.set('Cache-Control', 'no-store');
+  res.type('html').sendFile(file);
+});
+
 /** Direct APK install for testers / before Play listing (file copied by scripts/copy-apk-to-public.mjs). */
 app.get('/download/android/version', (_req, res) => {
   const candidates = [

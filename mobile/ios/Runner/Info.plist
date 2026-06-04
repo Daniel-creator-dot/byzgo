@@ -33,7 +33,7 @@
 		<string>UIInterfaceOrientationPortrait</string>
 	</array>
 	<key>GMSApiKey</key>
-	<string></string>
+	<string>AIzaSyAhKnfU_wSCEYR4btoQFkWMdUj0GUxkQ9U</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -42,6 +42,14 @@
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>com.googleusercontent.apps.645977332644-7r6hmbj6sklvrv96l2i312c34i1kgn4u</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>bytzgo</string>
 			</array>
 		</dict>
 	</array>

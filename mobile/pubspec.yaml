@@ -1,7 +1,7 @@
 name: bytzgo_mobile
 description: BytzGo — cross-platform delivery app (iOS & Android).
 publish_to: "none"
-version: 1.0.42+49
+version: 1.0.43+50
 
 
 environment:
@@ -21,6 +21,7 @@ dependencies:
   flutter_local_notifications: ^18.0.1
   google_maps_flutter: ^2.10.0
   google_sign_in: ^6.2.2
+  flutter_web_auth_2: ^4.0.2
   geolocator: ^13.0.2
   geocoding: ^3.0.0
   permission_handler: ^11.3.1

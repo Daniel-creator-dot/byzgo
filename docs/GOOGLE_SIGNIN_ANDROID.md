@@ -53,7 +53,11 @@ Sideload keystore:
 keytool -list -v -keystore mobile/android/bytzgo-sideload.jks -alias bytzgo -storepass bytzgo-sideload | grep SHA1
 ```
 
-## If you still see “error 10” after installing the latest APK
+## Sideload APK (download from bytzgo.net)
+
+Android builds from **1.0.43+50** use **browser Google Sign-In** (same as the website), so certificate mismatch (error 10) on the native button should no longer block you. Tap **Continue with Google** — a browser sheet opens, then returns to the app.
+
+## If you still see “error 10” on older APKs
 
 Google Sign-In also requires the **Firebase Android API key** to allow your app certificate.
 
