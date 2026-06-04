@@ -16,7 +16,7 @@ import { LocationAutocompleteInput } from '../LocationAutocompleteInput';
 import { DeliveryMapPicker } from './DeliveryMapPicker';
 import { LiveTripTracker } from './LiveTripTracker';
 import { MapsHealthBanner } from '../MapsProvider';
-import { isActiveCustomerTrip } from '../../lib/customerTrip';
+import { rideTabCourierTrip } from '../../lib/customerTrip';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -102,19 +102,14 @@ export function CustomerDeliveryHome({
         : null,
   });
 
-  const activeCourierTrip = liveOrders.find(
-    (o) =>
-      o.customer_id === user.id &&
-      !['delivered', 'cancelled'].includes(o.status) &&
-      ((o as Order & { order_type?: string }).order_type === 'courier' ||
-        (o as Order & { orderType?: string }).orderType === 'courier')
-  );
-  const showLiveTripOnHome =
-    activeCourierTrip != null && isActiveCustomerTrip(activeCourierTrip);
+  const rideTabTrip = rideTabCourierTrip(liveOrders, user.id);
+  const activeCourierTrip = rideTabTrip?.status !== 'delivered' ? rideTabTrip : undefined;
+  const showLiveTripOnHome = rideTabTrip != null;
   const tripSearching =
-    activeCourierTrip &&
-    !activeCourierTrip.rider_id &&
-    ['pending', 'ready', 'preparing'].includes(activeCourierTrip.status);
+    rideTabTrip &&
+    rideTabTrip.status !== 'delivered' &&
+    !rideTabTrip.rider_id &&
+    ['pending', 'ready', 'preparing'].includes(rideTabTrip.status);
 
   const submitCourier = async (extra: Record<string, unknown>) => {
     if (tripSearching) {
@@ -179,15 +174,23 @@ export function CustomerDeliveryHome({
     });
   }, [courierForm.pickup?.lat, courierForm.pickup?.lng, courierForm.pickup?.address, courierForm.destination?.lat, courierForm.destination?.lng, courierForm.destination?.address, setCourierForm]);
 
-  if (showLiveTripOnHome && activeCourierTrip) {
+  useEffect(() => {
+    if (!rideTabTrip || rideTabTrip.status !== 'arrived' || !refreshData) return;
+    const id = setInterval(() => {
+      void refreshData();
+    }, 10000);
+    return () => clearInterval(id);
+  }, [rideTabTrip?.id, rideTabTrip?.status, refreshData]);
+
+  if (showLiveTripOnHome && rideTabTrip) {
     return (
       <div className="max-w-lg mx-auto w-full">
         <LiveTripTracker
-          order={activeCourierTrip}
+          order={rideTabTrip}
           vendors={vendors}
           riderLocation={
-            activeCourierTrip.rider_id
-              ? riderLocations[activeCourierTrip.rider_id] ?? null
+            rideTabTrip.rider_id
+              ? riderLocations[rideTabTrip.rider_id] ?? null
               : null
           }
           user={user}

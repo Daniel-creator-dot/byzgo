@@ -235,6 +235,8 @@ Email login works **without** Firebase.
 
 Until `GOOGLE_WEB_CLIENT_ID` is set, the Google button is hidden on the login screen.
 
+**Consent screen shows `project-645977332644`?** Set **App name** to **BytzGo** in [Google OAuth branding](https://console.cloud.google.com/auth/branding?project=bytzgo-9bd89) — see [docs/GOOGLE_OAUTH_CONSENT.md](../docs/GOOGLE_OAUTH_CONSENT.md).
+
 ## Project layout
 
 ```text

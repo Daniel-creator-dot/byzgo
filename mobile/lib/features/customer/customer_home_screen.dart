@@ -100,6 +100,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
   Timer? _nearbyPoll;
   Timer? _etaPoll;
   Timer? _riderLocationPoll;
+  Timer? _orderStatusPoll;
   DateTime? _lastEtaFetch;
   LocationPoint? _lastEtaOrigin;
   SocketService? _socket;
@@ -141,19 +142,22 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
 
   String get _packageType => _itemCtrl.text.trim().isEmpty ? 'Package' : _itemCtrl.text.trim();
 
-  Order? get _activeCourier {
-    final userId = _session.user?.id;
-    if (userId == null) return null;
+  bool _isRideTabTrip(Order o, String userId) {
+    if (o.customerId != userId) return false;
+    final type = o.orderType ?? '';
+    return type == 'courier' ||
+        type == 'food' ||
+        customerOrderHasShopPickup(o) ||
+        (o.pickup != null && o.pickup!.trim().isNotEmpty);
+  }
+
+  Order? _newestRideTabOrder(
+    Iterable<Order> source, {
+    required bool Function(Order o) include,
+  }) {
     Order? newest;
-    for (final o in _orders) {
-      if (o.customerId != userId) continue;
-      if (['delivered', 'cancelled'].contains(o.status)) continue;
-      final type = o.orderType ?? '';
-      final active = type == 'courier' ||
-          type == 'food' ||
-          customerOrderHasShopPickup(o) ||
-          (o.pickup != null && o.pickup!.trim().isNotEmpty);
-      if (!active) continue;
+    for (final o in source) {
+      if (!include(o)) continue;
       if (newest == null) {
         newest = o;
         continue;
@@ -167,6 +171,33 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
       }
     }
     return newest;
+  }
+
+  /// In-progress courier trip (excludes delivered/cancelled) — blocks new bookings.
+  Order? get _activeCourier {
+    final userId = _session.user?.id;
+    if (userId == null) return null;
+    return _newestRideTabOrder(
+      _orders,
+      include: (o) =>
+          _isRideTabTrip(o, userId) &&
+          !['delivered', 'cancelled'].contains(o.status),
+    );
+  }
+
+  /// Shown on Ride tab: active trip or just-finished trip until the customer rates.
+  Order? get _rideTabTrip {
+    final userId = _session.user?.id;
+    if (userId == null) return null;
+    final active = _activeCourier;
+    if (active != null) return active;
+    return _newestRideTabOrder(
+      _orders,
+      include: (o) =>
+          _isRideTabTrip(o, userId) &&
+          o.status == 'delivered' &&
+          (o.rating ?? 0) < 1,
+    );
   }
 
   /// After marketplace checkout — show trip on map and in lists.
@@ -369,6 +400,40 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
     });
   }
 
+  /// While driver is at drop-off, poll API so delivered + rating UI appear if socket lags.
+  void _syncOrderStatusPoll() {
+    _orderStatusPoll?.cancel();
+    final active = _activeCourier;
+    if (active == null || active.status != 'arrived') {
+      _orderStatusPoll = null;
+      return;
+    }
+    unawaited(_pollOrderStatusOnce());
+    _orderStatusPoll = Timer.periodic(
+      const Duration(seconds: 10),
+      (_) => unawaited(_pollOrderStatusOnce()),
+    );
+  }
+
+  Future<void> _pollOrderStatusOnce() async {
+    final track = _activeCourier;
+    if (track == null || track.status != 'arrived') return;
+    try {
+      final list = await _ordersRepo.fetchOrders();
+      final updated = list.where((o) => o.id == track.id).firstOrNull;
+      if (updated == null || !mounted) return;
+      if (updated.status == track.status) return;
+      _replaceOrder(updated);
+      if (updated.status == 'delivered') {
+        _snack('Delivered — thanks for using BytzGO!', success: true);
+      }
+      _syncOrderStatusPoll();
+      _syncEtaPoll(updated);
+      _syncRiderLocationPoll(updated);
+      _syncNearbyPoll();
+    } catch (_) {}
+  }
+
   void _scheduleDeliveryQuote() {
     _quoteDebounce?.cancel();
     _quoteDebounce = Timer(const Duration(milliseconds: 450), _refreshDeliveryQuote);
@@ -429,6 +494,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
       _nearbyPoll?.cancel();
       _etaPoll?.cancel();
       _riderLocationPoll?.cancel();
+      _orderStatusPoll?.cancel();
     if (_chatNotifyHandler != null) {
       _socket?.removeOrderMessageListener(_chatNotifyHandler!);
     }
@@ -555,6 +621,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
       _syncNearbyPoll();
       _syncEtaPoll(order);
       _syncRiderLocationPoll(order);
+      _syncOrderStatusPoll();
       if (order.riderId != null && prev?.riderId != order.riderId) {
         unawaited(_hydrateRiderPosition(order));
       }
@@ -894,6 +961,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
         unawaited(_resolveTrackingLabels(active));
         _syncEtaPoll(active);
         _syncRiderLocationPoll(active);
+        _syncOrderStatusPoll();
       }
     } catch (e) {
       if (!mounted) return;
@@ -1150,14 +1218,19 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final active = _activeCourier;
-    final tracking = active != null;
+    final Order? trip = _rideTabTrip;
+    final tracking = trip != null;
+    final tripComplete = trip?.status == 'delivered';
     final fee = _deliveryFee;
-    final searching = tracking && customerIsSearchingBiker(active);
-    final hasRider = tracking && active.riderId != null;
-    final mapPickup = tracking ? _mapPickupForTracking(active) : _pickup;
-    final mapDest = tracking ? _mapDestinationForTracking(active) : _destination;
-    final navTarget = tracking ? customerRiderNavTarget(active) : null;
+    final searching = trip != null &&
+        !tripComplete &&
+        customerIsSearchingBiker(trip);
+    final hasRider =
+        trip != null && !tripComplete && trip.riderId != null;
+    final mapPickup = tracking ? _mapPickupForTracking(trip) : _pickup;
+    final mapDest = tracking ? _mapDestinationForTracking(trip) : _destination;
+    final navTarget =
+        trip != null ? customerRiderNavTarget(trip) : null;
     final showRiderOnMap = hasRider && !searching;
 
     return RideShell(
@@ -1194,7 +1267,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
       ),
       floatingMapChild: tracking
           ? LiveTripMapHud(
-              order: active,
+              order: trip,
               searching: searching,
               nearbyCount: searching ? _nearbyRiderRecords.length : null,
               etaPhrase: searching ? _searchPickupPhrase : _etaPhrase,
@@ -1211,10 +1284,12 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
         scrollController: _sheetScrollCtrl,
         collapsible: tracking,
         collapsedHeight: 234,
-        initiallyExpanded: active != null &&
-            (active.status == 'arrived' || active.status == 'delivered'),
+        initiallyExpanded: trip != null &&
+            (trip.status == 'arrived' || trip.status == 'delivered'),
         maxHeightFraction: tracking
-            ? (widget.embedded ? 0.72 : 0.8)
+            ? (tripComplete
+                ? customerTrackingSheetFraction(trip, embedded: widget.embedded)
+                : (widget.embedded ? 0.72 : 0.8))
             : (widget.embedded ? (fee > 0 ? 0.64 : 0.58) : (fee > 0 ? 0.78 : 0.72)),
         bottomInset: widget.embedded ? 12 : 0,
         padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
@@ -1267,7 +1342,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
             ],
             if (tracking) ...[
               CustomerDeliveryTracker(
-                order: active,
+                order: trip,
                 onOrderUpdated: _replaceOrder,
                 etaPhrase: searching ? _searchPickupPhrase : _etaPhrase,
                 etaMinutes: searching ? _searchPickupMinutes : _etaMinutes,

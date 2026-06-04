@@ -224,7 +224,7 @@ List<CustomerTripStep> customerTripSteps(Order order) {
     return CustomerTripStep(
       label: labels[i],
       active: i <= idx,
-      current: i == idx && order.status != 'delivered',
+      current: i == idx,
     );
   });
 }

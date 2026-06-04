@@ -12,6 +12,27 @@ export function isActiveCustomerTrip(order: Order): boolean {
   return type === 'courier' || Boolean(order.vendor_id);
 }
 
+function isCourierTrip(order: Order): boolean {
+  const type =
+    (order as Order & { order_type?: string }).order_type ??
+    (order as Order & { orderType?: string }).orderType;
+  return type === 'courier' || Boolean(order.vendor_id?.trim());
+}
+
+/** Ride tab: in-progress trip, or just-delivered until the customer rates. */
+export function rideTabCourierTrip(orders: Order[], userId: string): Order | undefined {
+  const mine = orders.filter((o) => o.customer_id === userId && isCourierTrip(o));
+  const active = mine.find((o) => !['delivered', 'cancelled'].includes(o.status));
+  if (active) return active;
+  const unratedDelivered = mine.filter(
+    (o) => o.status === 'delivered' && !((o as Order & { rating?: number }).rating ?? 0)
+  );
+  if (unratedDelivered.length === 0) return undefined;
+  return unratedDelivered.sort(
+    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+  )[0];
+}
+
 export function customerOrderHasShopPickup(order: Order): boolean {
   return Boolean(order.vendor_id?.trim());
 }
