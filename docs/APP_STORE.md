@@ -6,7 +6,7 @@
 |--------|--------|
 | App name | BytzGo |
 | Bundle ID | `com.bytzgo.bytzgoMobile` |
-| Version | From `mobile/pubspec.yaml` (`version: 1.0.12+14` → marketing 1.0.12, build 14) |
+| Version | From `mobile/pubspec.yaml` (e.g. `1.0.43+51` → marketing **1.0.43**, build **51**) |
 
 ## One-time Mac setup
 
@@ -32,14 +32,19 @@ This writes `ios/Runner/MapsConfig.plist` and `lib/core/maps_key.dart`. Restrict
 
 ```bash
 cd mobile
-flutter pub get
-cd ios && pod install && cd ..
-flutter build ipa --release --dart-define-from-file=release_defines.json
+chmod +x scripts/build_app_store_ipa.sh
+./scripts/build_app_store_ipa.sh
 ```
 
-Output: `build/ios/ipa/*.ipa` — upload with **Transporter** or Xcode Organizer.
+If signing fails (no Apple ID in Xcode):
 
-Or double-click **`mobile/OPEN_IN_XCODE.command`**, set scheme **Runner** → **Any iOS Device** → **Product → Archive**.
+```bash
+./scripts/build_app_store_ipa.sh --open-xcode
+```
+
+Then **Product → Archive → Distribute App → App Store Connect**.
+
+Output: `build/ios/ipa/*.ipa` — upload with **Transporter** or Xcode Organizer.
 
 ## Pre-submit checklist
 
@@ -56,7 +61,9 @@ App Store Connect:
 - **Account deletion:** https://www.bytzgo.net/account-deletion (in-app: Profile → Delete account)  
 - **Export compliance:** Standard encryption only (HTTPS) — `ITSAppUsesNonExemptEncryption` = false in Info.plist  
 - **Category:** Navigation or Food & Drink (delivery)  
-- **Screenshots:** iPhone 6.7" and 6.5" required  
+- **Screenshots:** iPhone 6.7" (1284×2778) — see `mobile/app_store_screenshots/iphone/` and `mobile/scripts/capture_app_store_screenshots.sh`  
+- **Sign in with Google** visible on login (iPad + iPhone); **Apple Maps** option for rider navigation  
+- **Google OAuth branding:** App name **BytzGo** verified in Cloud Console (not `project-645977332644`) — see `docs/GOOGLE_OAUTH_CONSENT.md`  
 
 ## Test on simulator
 
