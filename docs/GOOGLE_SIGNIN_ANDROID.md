@@ -53,6 +53,26 @@ Sideload keystore:
 keytool -list -v -keystore mobile/android/bytzgo-sideload.jks -alias bytzgo -storepass bytzgo-sideload | grep SHA1
 ```
 
+## If you still see “error 10” after installing the latest APK
+
+Google Sign-In also requires the **Firebase Android API key** to allow your app certificate.
+
+1. Open [Google Cloud → APIs & Services → Credentials](https://console.cloud.google.com/apis/credentials?project=bytzgo-9bd89) (project **bytzgo-9bd89**).
+
+2. Enable [API Keys API](https://console.cloud.google.com/apis/api/apikeys.googleapis.com/overview?project=645977332644) if prompted.
+
+3. Edit the **Android key** (auto-created by Firebase; key in `google-services.json`).
+
+4. Under **Application restrictions** → **Android apps**, add:
+   - Package name: `net.bytzgo.app`
+   - SHA-1: `EC:E9:76:BB:77:E6:87:63:44:22:DB:A1:DD:58:05:25:22:FA:45:0A`
+
+   Or set restrictions to **None** temporarily to confirm sign-in works.
+
+5. Save, wait 5–10 minutes, uninstall BytzGo, reinstall from https://www.bytzgo.net/download/android .
+
+Admin automation (when the service account has API Keys Admin): `POST /api/admin/google/configure-signin-apikey` on production.
+
 ## Server
 
 Production must have `GOOGLE_SIGN_IN_ENABLED=true` on Render (see `render.yaml`).
