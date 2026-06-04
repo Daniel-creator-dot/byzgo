@@ -4,9 +4,13 @@
 const kGoogleWebClientId =
     '645977332644-4gjjf08268b3irafs4bh8b7guct1i1jb.apps.googleusercontent.com';
 
-/// Android OAuth client (type 1 in android/app/google-services.json).
+/// Android OAuth client (type 1) for Play / debug keystores.
 const kGoogleAndroidClientId =
     '645977332644-rv482i78e7hln0u3dh475dn4g0rgoa2l.apps.googleusercontent.com';
+
+/// Android OAuth client for bytzgo-sideload.jks (download APK SHA-1).
+const kGoogleSideloadAndroidClientId =
+    '645977332644-lmndn49qajhkqjqa18demn4aqh4le5m9.apps.googleusercontent.com';
 
 /// SHA-1 for mobile/android/bytzgo-sideload.jks — register in Firebase (npm run setup:firebase:android).
 const kSideloadApkSha1 = 'ece976bb77e687634422dba1dd58052522fa450a';

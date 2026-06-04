@@ -45,24 +45,27 @@ const LEGACY_GOOGLE_WEB_CLIENT_ID =
 const googleOAuthClient = new OAuth2Client();
 let firebaseAdminHasCredentials = false;
 
+/** Android OAuth clients from google-services.json (ID token aud may be Android or Web). */
+const GOOGLE_ANDROID_CLIENT_IDS = [
+  '645977332644-rv482i78e7hln0u3dh475dn4g0rgoa2l.apps.googleusercontent.com',
+  '645977332644-lmndn49qajhkqjqa18demn4aqh4le5m9.apps.googleusercontent.com',
+];
+
 function googleTokenAudiences(): string[] {
   return [
     ...new Set(
-      [GOOGLE_WEB_CLIENT_ID, FIREBASE_WEB_CLIENT_ID, LEGACY_GOOGLE_WEB_CLIENT_ID].filter(Boolean),
+      [
+        GOOGLE_WEB_CLIENT_ID,
+        FIREBASE_WEB_CLIENT_ID,
+        LEGACY_GOOGLE_WEB_CLIENT_ID,
+        ...GOOGLE_ANDROID_CLIENT_IDS,
+      ].filter(Boolean),
     ),
   ];
 }
 
 async function verifyGoogleIdToken(idToken: string) {
   const audiences = googleTokenAudiences();
-
-  if (firebaseAdminHasCredentials) {
-    try {
-      return await admin.auth().verifyIdToken(idToken);
-    } catch {
-      // Fall through to Google public cert verification.
-    }
-  }
 
   try {
     const ticket = await googleOAuthClient.verifyIdToken({ idToken, audience: audiences });
@@ -71,7 +74,7 @@ async function verifyGoogleIdToken(idToken: string) {
     return payload;
   } catch (err) {
     console.error('Google ID token verification failed:', err);
-    throw new Error('Invalid Google token');
+    throw err;
   }
 }
 
@@ -3146,7 +3149,14 @@ app.post('/api/auth/google', async (req, res) => {
     res.json({ user: await userForAuthResponse(user), token });
   } catch (err: any) {
     console.error('Google auth error:', err);
-    res.status(500).json({ message: 'Google authentication failed' });
+    const detail = String(err?.message || err || '');
+    if (detail.includes('audience') || detail.includes('Audience')) {
+      return res.status(401).json({
+        message:
+          'Google sign-in token was rejected (wrong app certificate). Install the latest APK from bytzgo.net/download/android, or sign in with phone/email.',
+      });
+    }
+    res.status(401).json({ message: 'Google authentication failed. Try phone or email sign-in.' });
   }
 });
 

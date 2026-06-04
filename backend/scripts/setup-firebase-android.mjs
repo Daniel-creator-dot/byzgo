@@ -27,6 +27,8 @@ const DEBUG_SHA1_ALT = '844C315C994787502E212EC2715DF5DED74FCC50';
 const DEBUG_SHA1_LOCAL = '95F4D85777F2D006C131C4644D047627E2AA737';
 /** Committed mobile/android/bytzgo-sideload.jks — used for https://www.bytzgo.net/download/android APKs. */
 const SIDELOAD_APK_SHA1 = 'ECE976BB77E687634422DBA1DD58052522FA450A';
+const SIDELOAD_APK_SHA256 =
+  '3EC2C1D9A850E52D6AC1E2E4DAC03DAA8A8DCE6160E523DDCDAB851B9EF41534';
 
 const saPath = path.resolve(__dirname, '../firebase-service-account.json');
 const gsOut = path.join(repoRoot, 'mobile/android/app/google-services.json');
@@ -128,18 +130,27 @@ async function patchShaHashes(token, appName) {
     }
     if (!added) shaResults.push({ sha1, status: 'failed' });
   }
-  try {
-    await api(token, 'POST', `https://firebase.googleapis.com/v1beta1/${appName}/sha`, {
-      shaHash: RELEASE_SHA256,
-      certType: 'SHA_256',
-    });
-    shaResults.push({ sha256: RELEASE_SHA256, status: 'added' });
-  } catch (e) {
-    if (e.message.includes('409') || e.message.includes('ALREADY_EXISTS')) {
-      shaResults.push({ sha256: RELEASE_SHA256, status: 'already_registered' });
-    } else {
-      shaResults.push({ sha256: RELEASE_SHA256, status: 'failed', error: e.message.slice(0, 200) });
+  const sha256Hashes = [...new Set([RELEASE_SHA256, SIDELOAD_APK_SHA256])];
+  for (const sha256 of sha256Hashes) {
+    let added = false;
+    for (const fmt of shaFormats(sha256)) {
+      try {
+        await api(token, 'POST', `https://firebase.googleapis.com/v1beta1/${appName}/sha`, {
+          shaHash: fmt,
+          certType: 'SHA_256',
+        });
+        shaResults.push({ sha256: fmt, status: 'added' });
+        added = true;
+        break;
+      } catch (e) {
+        if (e.message.includes('409') || e.message.includes('ALREADY_EXISTS')) {
+          shaResults.push({ sha256: fmt, status: 'already_registered' });
+          added = true;
+          break;
+        }
+      }
     }
+    if (!added) shaResults.push({ sha256, status: 'failed' });
   }
   return shaResults;
 }

@@ -168,11 +168,15 @@ class AuthRepository {
       throw Exception('No Google ID token — check GOOGLE_WEB_CLIENT_ID');
     }
 
-    final res = await _api.dio.post<Map<String, dynamic>>(
-      '/api/auth/google',
-      data: {'credential': idToken, 'role': role.name},
-    );
-    return _parseAuthResponse(res.data);
+    try {
+      final res = await _api.dio.post<Map<String, dynamic>>(
+        '/api/auth/google',
+        data: {'credential': idToken, 'role': role.name},
+      );
+      return _parseAuthResponse(res.data);
+    } on DioException catch (e) {
+      throw Exception(AuthRepository.errorMessage(e));
+    }
   }
 
   Future<void> deleteAccount() async {

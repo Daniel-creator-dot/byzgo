@@ -37,7 +37,13 @@ const pubspec = fs.readFileSync(path.join(root, 'mobile', 'pubspec.yaml'), 'utf8
 const versionMatch = pubspec.match(/^version:\s*(.+)$/m);
 const version = versionMatch ? versionMatch[1].trim() : 'unknown';
 const versionJson = JSON.stringify(
-  { version, updated_at: new Date().toISOString(), size_bytes: fs.statSync(destPublic).size },
+  {
+    version,
+    updated_at: new Date().toISOString(),
+    size_bytes: fs.statSync(destPublic).size,
+    install_note:
+      'Uninstall any older BytzGo app first, then install this APK. If Google sign-in fails, use phone or email login.',
+  },
   null,
   2
 );
