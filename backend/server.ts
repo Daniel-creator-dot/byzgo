@@ -1547,6 +1547,45 @@ async function assertSupportTicketAccess(ticketId: string, userId: string, role:
   return row;
 }
 
+function buildSupportReplySmsBody(displayIdRaw: string, messageBody: string): string {
+  const ref = formatSupportDisplayLabel(displayIdRaw);
+  const snippet = String(messageBody || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const max = 120;
+  const text =
+    snippet.length > max ? `${snippet.slice(0, Math.max(0, max - 1))}…` : snippet;
+  return `BytzGo Support (${ref}): ${text || 'New reply'} — open Help & support in the app.`;
+}
+
+/** Text the ticket creator when BytzGo support (admin) replies. Best-effort; never throws. */
+async function notifySupportClientSms(
+  ticket: any,
+  messageBody: string
+): Promise<void> {
+  if (process.env.SUPPORT_REPLY_SMS === 'false') return;
+  const creatorId = ticket?.created_by;
+  if (!creatorId) return;
+
+  try {
+    const userRes = await pool.query('SELECT phone FROM users WHERE id = $1', [creatorId]);
+    const phone = userRes.rows[0]?.phone;
+    if (!phone || !String(phone).trim()) {
+      console.warn(`[support-sms] No phone on file for user ${creatorId}`);
+      return;
+    }
+    if (!isValidGhanaPhone(phone)) {
+      console.warn(`[support-sms] Invalid phone for user ${creatorId}`);
+      return;
+    }
+    const smsBody = buildSupportReplySmsBody(ticket.display_id, messageBody);
+    await sendSMS(phone, smsBody);
+    console.info(`[support-sms] Sent reply SMS for ticket ${ticket.id}`);
+  } catch (err: any) {
+    console.warn('[support-sms] Failed:', err?.message || err);
+  }
+}
+
 async function emitSupportMessage(ticket: any, messageRow: any, senderId: string) {
   const nameRes = await pool.query(
     'SELECT name, role FROM users WHERE id = $1',
@@ -1554,6 +1593,7 @@ async function emitSupportMessage(ticket: any, messageRow: any, senderId: string
   );
   messageRow.sender_name = nameRes.rows[0]?.name;
   messageRow.sender_role = nameRes.rows[0]?.role;
+  const senderRole = nameRes.rows[0]?.role;
 
   const notifyIds = new Set<string>();
   if (ticket.created_by) notifyIds.add(String(ticket.created_by));
@@ -1567,12 +1607,13 @@ async function emitSupportMessage(ticket: any, messageRow: any, senderId: string
     });
   }
 
+  const body = String(messageRow.body || '');
+  const senderName = displayUserName(nameRes.rows[0]?.name, {
+    role: senderRole,
+    fallback: 'BytzGo Support',
+  });
+
   if (notifyIds.size > 0) {
-    const senderName = displayUserName(nameRes.rows[0]?.name, {
-      role: nameRes.rows[0]?.role,
-      fallback: 'BytzGo Support',
-    });
-    const body = String(messageRow.body || '');
     void sendPushToUserIds([...notifyIds], {
       title: `BytzGo Support · ${formatSupportDisplayLabel(ticket.display_id)}`,
       body: `${senderName}: ${body.length > 120 ? `${body.slice(0, 117)}…` : body}`,
@@ -1581,6 +1622,14 @@ async function emitSupportMessage(ticket: any, messageRow: any, senderId: string
       channelId: 'support_updates',
       highPriority: true,
     });
+  }
+
+  if (
+    senderRole === 'admin' &&
+    ticket.created_by &&
+    String(ticket.created_by) !== String(senderId)
+  ) {
+    void notifySupportClientSms(ticket, body);
   }
 }
 
