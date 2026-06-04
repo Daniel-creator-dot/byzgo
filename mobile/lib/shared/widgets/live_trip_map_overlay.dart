@@ -85,7 +85,7 @@ class LiveTripMapHud extends StatelessWidget {
                       expiresAt: etaExpiresAt,
                       subtitle: etaDistanceText,
                       compact: true,
-                      label: 'route ETA',
+                      label: customerEtaCountdownLabel(order, searching: searching),
                     )
                   : (dist != null ||
                           (etaDistanceText != null && etaDistanceText!.isNotEmpty))

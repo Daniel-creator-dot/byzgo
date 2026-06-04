@@ -16,6 +16,7 @@ import '../../core/socket_service.dart';
 import '../../core/trip_chat_unread.dart';
 import '../../models/trip_message.dart';
 import '../../models/location_point.dart';
+import '../../models/nearby_rider.dart';
 import '../../models/order.dart';
 import '../../shared/format.dart';
 import '../../shared/delivery_pricing.dart';
@@ -85,16 +86,20 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
   String? _quoteError;
   Timer? _quoteDebounce;
   LocationPoint? _riderPosition;
-  List<LocationPoint> _nearbyRiders = [];
+  List<NearbyRider> _nearbyRiderRecords = [];
   List<LocationPoint> _routePoints = [];
   String? _etaPhrase;
   int? _etaMinutes;
   String? _etaDistanceText;
   DateTime? _etaExpiresAt;
+  int? _searchPickupMinutes;
+  String? _searchPickupPhrase;
+  DateTime? _searchPickupExpiresAt;
   String? _trackingPickupLabel;
   String? _trackingDropoffLabel;
   Timer? _nearbyPoll;
   Timer? _etaPoll;
+  Timer? _riderLocationPoll;
   DateTime? _lastEtaFetch;
   LocationPoint? _lastEtaOrigin;
   SocketService? _socket;
@@ -243,10 +248,24 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
     } else {
       _nearbyPoll?.cancel();
       _nearbyPoll = null;
-      if (_nearbyRiders.isNotEmpty && mounted) {
-        setState(() => _nearbyRiders = []);
+      if (_nearbyRiderRecords.isNotEmpty && mounted) {
+        setState(() => _nearbyRiderRecords = []);
       }
+      _clearSearchPickupEta();
     }
+  }
+
+  void _clearSearchPickupEta() {
+    if (_searchPickupMinutes == null &&
+        _searchPickupPhrase == null &&
+        _searchPickupExpiresAt == null) {
+      return;
+    }
+    setState(() {
+      _searchPickupMinutes = null;
+      _searchPickupPhrase = null;
+      _searchPickupExpiresAt = null;
+    });
   }
 
   Future<void> _fetchNearbyRiders() async {
@@ -260,8 +279,94 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
         lng: center.lng,
       );
       if (!mounted) return;
-      setState(() => _nearbyRiders = riders);
+      setState(() => _nearbyRiderRecords = riders);
+      unawaited(_refreshSearchPickupEta(active, riders, center));
+      unawaited(_refreshTripPreviewRoute(active));
     } catch (_) {}
+  }
+
+  Future<void> _refreshTripPreviewRoute(Order order) async {
+    final pickup = _mapPickupForTracking(order);
+    final dest = _mapDestinationForTracking(order);
+    if (pickup == null ||
+        dest == null ||
+        !pickup.hasCoords ||
+        !dest.hasCoords) {
+      return;
+    }
+    final summary = await _directions.fetchRoute(
+      origin: pickup,
+      destination: dest,
+    );
+    if (!mounted || summary == null) return;
+    setState(() => _routePoints = summary.points);
+  }
+
+  Future<void> _refreshSearchPickupEta(
+    Order order,
+    List<NearbyRider> riders,
+    LocationPoint pickup,
+  ) async {
+    if (!customerIsSearchingBiker(order)) return;
+    if (riders.isEmpty) {
+      if (!mounted) return;
+      setState(() {
+        _searchPickupMinutes = null;
+        _searchPickupPhrase = null;
+        _searchPickupExpiresAt = null;
+      });
+      return;
+    }
+    final nearest = riders.first;
+    final summary = await _directions.fetchRoute(
+      origin: nearest.toLocationPoint(),
+      destination: pickup,
+    );
+    if (!mounted) return;
+    final now = DateTime.now();
+    setState(() {
+      if (summary != null) {
+        _searchPickupMinutes = summary.etaMinutes;
+        _searchPickupPhrase = summary.arrivalPhrase;
+        _searchPickupExpiresAt = summary.expiresAtFrom(now);
+      } else {
+        final km = nearest.distanceKm ?? 1;
+        final mins = (km / 0.35).ceil().clamp(2, 25);
+        _searchPickupMinutes = mins;
+        _searchPickupPhrase = 'about $mins min';
+        _searchPickupExpiresAt = now.add(Duration(minutes: mins));
+      }
+    });
+  }
+
+  Future<void> _hydrateRiderPosition(Order order) async {
+    final riderId = order.riderId;
+    if (riderId == null || riderId.isEmpty) return;
+    try {
+      final loc = await _ridersRepo.fetchRiderLocation(riderId);
+      if (!mounted || loc == null) return;
+      setState(() => _riderPosition = loc);
+      final active = _activeCourier;
+      if (active?.id == order.id) {
+        _mapKey.currentState?.fitAllMarkers();
+        unawaited(_refreshEta(active!));
+      }
+    } catch (_) {}
+  }
+
+  void _syncRiderLocationPoll(Order order) {
+    _riderLocationPoll?.cancel();
+    final hasRider = order.riderId != null &&
+        !['delivered', 'cancelled'].contains(order.status);
+    if (!hasRider) {
+      _riderLocationPoll = null;
+      return;
+    }
+    unawaited(_hydrateRiderPosition(order));
+    _riderLocationPoll = Timer.periodic(const Duration(seconds: 8), (_) {
+      final active = _activeCourier;
+      if (active != null) unawaited(_hydrateRiderPosition(active));
+    });
   }
 
   void _scheduleDeliveryQuote() {
@@ -321,8 +426,9 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
   @override
   void dispose() {
     _quoteDebounce?.cancel();
-    _nearbyPoll?.cancel();
-    _etaPoll?.cancel();
+      _nearbyPoll?.cancel();
+      _etaPoll?.cancel();
+      _riderLocationPoll?.cancel();
     if (_chatNotifyHandler != null) {
       _socket?.removeOrderMessageListener(_chatNotifyHandler!);
     }
@@ -448,6 +554,10 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
       }
       _syncNearbyPoll();
       _syncEtaPoll(order);
+      _syncRiderLocationPoll(order);
+      if (order.riderId != null && prev?.riderId != order.riderId) {
+        unawaited(_hydrateRiderPosition(order));
+      }
       if (_activeCourier?.id == order.id) {
         unawaited(_resolveTrackingLabels(order));
       }
@@ -530,7 +640,9 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
     final hasRider = order.riderId != null &&
         !['delivered', 'cancelled'].contains(order.status);
     if (hasRider) {
+      _clearSearchPickupEta();
       if (_etaPoll == null) {
+        unawaited(_hydrateRiderPosition(order));
         unawaited(_refreshEta(order));
         _etaPoll = Timer.periodic(
           const Duration(seconds: 12),
@@ -558,7 +670,12 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
   }
 
   Future<void> _refreshEta(Order order) async {
-    if (_riderPosition == null || !(_riderPosition!.hasCoords)) return;
+    if (_riderPosition == null || !_riderPosition!.hasCoords) {
+      if (order.riderId != null) {
+        await _hydrateRiderPosition(order);
+      }
+      if (_riderPosition == null || !_riderPosition!.hasCoords) return;
+    }
     final target = customerRiderNavTarget(order);
     if (target == null || !target.hasCoords) return;
 
@@ -636,11 +753,12 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
       }
       if (order.status == 'cancelled') {
         _riderPosition = null;
-        _nearbyRiders = [];
+        _nearbyRiderRecords = [];
       }
     });
     _syncNearbyPoll();
     _syncEtaPoll(order);
+    _syncRiderLocationPoll(order);
     if (order.status == 'cancelled') {
       _etaPoll?.cancel();
       _etaPoll = null;
@@ -1025,16 +1143,19 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
         destination: mapDest,
         riderPosition: showRiderOnMap ? _riderPosition : null,
         riderNavTarget: navTarget,
-        nearbyRiders: searching ? _nearbyRiders : const [],
+        nearbyRiders: searching
+            ? _nearbyRiderRecords.map((r) => r.toLocationPoint()).toList()
+            : const [],
         showSearchRadar: searching,
         showRiderApproachRadar: showRiderOnMap && _riderPosition != null,
-        showRoute: !searching &&
-            ((mapPickup != null &&
-                    mapDest != null &&
-                    mapPickup.hasCoords &&
-                    mapDest.hasCoords) ||
-                _routePoints.length >= 2 ||
-                (showRiderOnMap && navTarget != null)),
+        showRoute: (searching && _routePoints.length >= 2) ||
+            (!searching &&
+                ((mapPickup != null &&
+                        mapDest != null &&
+                        mapPickup.hasCoords &&
+                        mapDest.hasCoords) ||
+                    _routePoints.length >= 2 ||
+                    (showRiderOnMap && navTarget != null))),
         showLiveRiderRoute: showRiderOnMap && _routePoints.isEmpty,
         routePoints: _routePoints.length >= 2
             ? _routePoints
@@ -1051,11 +1172,12 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
           ? LiveTripMapHud(
               order: active,
               searching: searching,
-              nearbyCount: searching ? _nearbyRiders.length : null,
-              etaPhrase: _etaPhrase,
-              etaMinutes: _etaMinutes,
+              nearbyCount: searching ? _nearbyRiderRecords.length : null,
+              etaPhrase: searching ? _searchPickupPhrase : _etaPhrase,
+              etaMinutes: searching ? _searchPickupMinutes : _etaMinutes,
               etaDistanceText: _etaDistanceText,
-              etaExpiresAt: _etaExpiresAt,
+              etaExpiresAt:
+                  searching ? _searchPickupExpiresAt : _etaExpiresAt,
               riderPosition: _riderPosition,
               navTarget: navTarget,
               onRecenter: () => _mapKey.currentState?.fitAllMarkers(),
@@ -1123,16 +1245,17 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
               CustomerDeliveryTracker(
                 order: active,
                 onOrderUpdated: _replaceOrder,
-                etaPhrase: _etaPhrase,
-                etaMinutes: _etaMinutes,
+                etaPhrase: searching ? _searchPickupPhrase : _etaPhrase,
+                etaMinutes: searching ? _searchPickupMinutes : _etaMinutes,
                 etaDistanceText: _etaDistanceText,
-                etaExpiresAt: _etaExpiresAt,
+                etaExpiresAt:
+                    searching ? _searchPickupExpiresAt : _etaExpiresAt,
                 pickupLabel: _trackingPickupLabel,
                 dropoffLabel: _trackingDropoffLabel,
                 riderPosition: _riderPosition,
                 navTarget: navTarget,
                 searching: searching,
-                nearbyCount: _nearbyRiders.length,
+                nearbyCount: _nearbyRiderRecords.length,
               ),
             ],
             if (!tracking) ...[

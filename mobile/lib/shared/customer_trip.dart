@@ -27,6 +27,40 @@ bool customerIsSearchingBiker(Order order) {
   return const {'pending', 'ready', 'preparing'}.contains(order.status);
 }
 
+/// Bolt/Yango-style countdown label for the live ETA pill.
+String customerEtaCountdownLabel(Order order, {bool searching = false}) {
+  if (searching || customerIsSearchingBiker(order)) {
+    return 'est. pickup';
+  }
+  if (order.status == 'picked_up') return 'to you';
+  if (order.status == 'arrived') return 'arrived';
+  if (customerOrderHasShopPickup(order) &&
+      const {'ready', 'preparing', 'pending'}.contains(order.status)) {
+    return 'to shop';
+  }
+  return 'to pickup';
+}
+
+String customerSearchWaitSubline({
+  required int nearbyCount,
+  int? pickupMinutes,
+  String? pickupPhrase,
+}) {
+  if (pickupMinutes != null && pickupMinutes > 0) {
+    final est = pickupPhrase?.trim().isNotEmpty == true
+        ? pickupPhrase!
+        : 'about $pickupMinutes min';
+    if (nearbyCount > 0) {
+      return 'Nearest biker $est to pickup · matching your request';
+    }
+    return 'Typical wait $est — matching your request';
+  }
+  if (nearbyCount > 0) {
+    return '$nearbyCount biker${nearbyCount == 1 ? '' : 's'} nearby — confirming your request';
+  }
+  return 'Matching you with the nearest available biker…';
+}
+
 /// Shop order: rider collects items at vendor before delivery.
 bool customerOrderHasShopPickup(Order order) {
   return order.vendorId.trim().isNotEmpty;

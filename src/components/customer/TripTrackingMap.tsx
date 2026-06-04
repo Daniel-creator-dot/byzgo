@@ -13,6 +13,7 @@ export function TripTrackingMap({
   followRider = false,
   onEtaChange,
   showEtaBadge = true,
+  showPreviewRoute = false,
 }: {
   riderLocation: { lat: number; lng: number } | null;
   pickupLocation: { lat: number; lng: number };
@@ -21,6 +22,7 @@ export function TripTrackingMap({
   followRider?: boolean;
   onEtaChange?: (eta: string) => void;
   showEtaBadge?: boolean;
+  showPreviewRoute?: boolean;
 }) {
   const map = useMap();
   const mapsLib = useMapsLibrary('core');
@@ -105,14 +107,21 @@ export function TripTrackingMap({
           }}
         />
 
-        {riderLocation && (
+        {riderLocation ? (
           <MapDirections
             origin={riderLocation}
             destination={routeDest}
             strokeColor="#22c55e"
             onRouteUpdate={(s) => setEta(s.eta)}
           />
-        )}
+        ) : showPreviewRoute ? (
+          <MapDirections
+            origin={pickupLocation}
+            destination={destination}
+            strokeColor="#3b82f6"
+            onRouteUpdate={() => {}}
+          />
+        ) : null}
       </Map>
 
       {showEtaBadge && riderLocation && (

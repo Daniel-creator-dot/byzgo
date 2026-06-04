@@ -8,6 +8,7 @@ import { Order } from '../../types';
 import { LiveTripTracker } from './LiveTripTracker';
 import { TripCompletionCard } from './TripCompletionCard';
 import { PaymentStatusBadge, TrackingStep, statusColor, statusLabel } from './tripUi';
+import { isActiveCustomerTrip } from '../../lib/customerTrip';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -23,7 +24,7 @@ function tripSortKey(order: Order): number {
 }
 
 function isLiveTrackedTrip(order: Order): boolean {
-  return !!order.rider_id && !['delivered', 'cancelled'].includes(order.status);
+  return isActiveCustomerTrip(order);
 }
 
 export function CustomerTripsView({

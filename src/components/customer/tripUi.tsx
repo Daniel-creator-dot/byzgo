@@ -59,7 +59,9 @@ export function getCustomerTripHeadline(order: Order): string {
     if (order.status === 'preparing') return 'Order being prepared';
     return 'Driver on the way';
   }
-  if (order.status === 'ready') return 'Finding a driver…';
+  if (order.status === 'ready' || order.status === 'pending') {
+    return order.rider_id ? 'Biker heading to pickup' : 'Finding a biker nearby…';
+  }
   if (order.status === 'preparing') return 'Preparing your order';
   return 'Order placed';
 }

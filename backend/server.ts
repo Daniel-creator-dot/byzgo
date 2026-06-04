@@ -3820,7 +3820,7 @@ app.get('/api/config/pricing', async (_req, res) => {
   }
 });
 
-/** Nearby online riders for customer map (lat/lng only — no PII). */
+/** Nearby online riders for customer map (ordered nearest-first). */
 app.get('/api/riders/nearby', authenticateToken, async (req: any, res) => {
   try {
     const lat = parseFloat(String(req.query.lat ?? ''));
@@ -3845,22 +3845,75 @@ app.get('/api/riders/nearby', authenticateToken, async (req: any, res) => {
     }
     const riderIds = nearby.map((r) => r.id);
     const locs = await pool.query(
-      `SELECT rl.lat, rl.lng
+      `SELECT rl.rider_id, rl.lat, rl.lng
        FROM rider_locations rl
        WHERE rl.rider_id = ANY($1::uuid[])
          AND rl.updated_at > NOW() - INTERVAL '1 minute' * $2`,
       [riderIds, LOCATION_MAX_AGE_MIN]
     );
-    const riders = locs.rows
-      .map((row: { lat: string; lng: string }) => ({
-        lat: parseFloat(row.lat),
-        lng: parseFloat(row.lng),
-      }))
-      .filter((r: { lat: number; lng: number }) => Number.isFinite(r.lat) && Number.isFinite(r.lng));
+    const locById = new Map<string, { lat: number; lng: number }>();
+    for (const row of locs.rows) {
+      const latN = parseFloat(row.lat);
+      const lngN = parseFloat(row.lng);
+      if (Number.isFinite(latN) && Number.isFinite(lngN)) {
+        locById.set(String(row.rider_id), { lat: latN, lng: lngN });
+      }
+    }
+    const riders = nearby
+      .map((r) => {
+        const loc = locById.get(r.id);
+        if (!loc) return null;
+        return {
+          id: r.id,
+          lat: loc.lat,
+          lng: loc.lng,
+          distance_km: Math.round(r.distanceKm * 10) / 10,
+        };
+      })
+      .filter(Boolean);
     res.json({ riders });
   } catch (err) {
     console.error('[riders/nearby]', err);
     res.status(500).json({ message: 'Failed to load nearby riders' });
+  }
+});
+
+/** Live GPS for an assigned rider (customer must have an active trip with them). */
+app.get('/api/riders/:id/location', authenticateToken, async (req: any, res) => {
+  const riderId = String(req.params.id ?? '').trim();
+  if (!riderId) return res.status(400).json({ message: 'Rider id required' });
+  try {
+    if (req.user.role === 'customer' || req.user.role === 'vendor') {
+      const trip = await pool.query(
+        `SELECT id FROM orders
+         WHERE customer_id = $1 AND rider_id = $2
+           AND status IN ('ready', 'picked_up', 'arrived', 'preparing', 'pending')
+         LIMIT 1`,
+        [req.user.id, riderId]
+      );
+      if (!trip.rows.length) {
+        return res.status(403).json({ message: 'No active trip with this rider' });
+      }
+    } else if (req.user.role !== 'admin' && req.user.id !== riderId) {
+      return res.status(403).json({ message: 'Unauthorized' });
+    }
+
+    const loc = await pool.query(
+      `SELECT lat, lng, updated_at FROM rider_locations WHERE rider_id = $1`,
+      [riderId]
+    );
+    if (!loc.rows[0]) {
+      return res.json({ lat: null, lng: null, updated_at: null });
+    }
+    const row = loc.rows[0];
+    res.json({
+      lat: parseFloat(row.lat),
+      lng: parseFloat(row.lng),
+      updated_at: row.updated_at,
+    });
+  } catch (err) {
+    console.error('[riders/location]', err);
+    res.status(500).json({ message: 'Failed to load rider location' });
   }
 });
 

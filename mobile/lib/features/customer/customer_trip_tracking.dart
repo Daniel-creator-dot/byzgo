@@ -87,6 +87,7 @@ class CustomerDeliveryTracker extends StatelessWidget {
           etaExpiresAt: etaExpiresAt,
           distanceKm: dist,
           searching: searching,
+          nearbyCount: nearbyCount,
         ),
         if (customerOrderHasShopPickup(order) &&
             order.riderId != null &&
@@ -387,7 +388,7 @@ class _RiderLiveCard extends StatelessWidget {
               expiresAt: etaExpiresAt,
               subtitle: etaDistanceText,
               compact: true,
-              label: 'to arrival',
+              label: customerEtaCountdownLabel(order),
             )
           else
             Column(
@@ -484,6 +485,7 @@ class _StatusHero extends StatelessWidget {
     this.etaExpiresAt,
     this.distanceKm,
     this.searching = false,
+    this.nearbyCount = 0,
   });
 
   final Order order;
@@ -493,17 +495,27 @@ class _StatusHero extends StatelessWidget {
   final DateTime? etaExpiresAt;
   final double? distanceKm;
   final bool searching;
+  final int nearbyCount;
 
   @override
   Widget build(BuildContext context) {
-    final headline = customerTripHeadline(order);
-    final sub = customerTripSubline(order, etaPhrase: etaPhrase);
     final isArrived = order.status == 'arrived';
     final isDelivered = order.status == 'delivered';
     final isSearching = searching || customerIsSearchingBiker(order);
+    final headline = customerTripHeadline(order);
+    final sub = isSearching
+        ? customerSearchWaitSubline(
+            nearbyCount: nearbyCount,
+            pickupMinutes: etaMinutes,
+            pickupPhrase: etaPhrase,
+          )
+        : customerTripSubline(order, etaPhrase: etaPhrase);
+    final showSearchEta = isSearching &&
+        isSearching && (etaExpiresAt != null || etaMinutes != null);
     final showEta = !isSearching &&
         order.riderId != null &&
         (etaExpiresAt != null || etaMinutes != null);
+    final etaLabel = customerEtaCountdownLabel(order, searching: isSearching);
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -536,13 +548,13 @@ class _StatusHero extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (showEta) ...[
+          if (showSearchEta || showEta) ...[
             Center(
               child: BoltEtaPill(
                 minutes: etaMinutes,
                 expiresAt: etaExpiresAt,
                 subtitle: etaDistanceText ?? etaPhrase,
-                label: 'until biker arrives',
+                label: etaLabel,
               ),
             ),
             const SizedBox(height: 14),
@@ -589,7 +601,7 @@ class _StatusHero extends StatelessWidget {
                         color: BytzGoTheme.sheetText,
                       ),
                     ),
-                    if (sub.isNotEmpty && !showEta) ...[
+                    if (sub.isNotEmpty) ...[
                       const SizedBox(height: 4),
                       Text(sub, style: BytzGoTheme.sheetBody(13)),
                     ],

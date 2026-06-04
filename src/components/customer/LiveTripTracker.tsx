@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { ChevronUp, MapPin, Navigation, Package, ShoppingBag, Phone, MessageCircle } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
@@ -12,6 +12,13 @@ import {
 import { TripTrackingMap } from './TripTrackingMap';
 import { TripCompletionCard } from './TripCompletionCard';
 import { getCustomerTripHeadline, TripProgressBar } from './tripUi';
+import {
+  customerEtaLabel,
+  fetchDirectionsEta,
+  fetchNearbyRiders,
+  fetchRiderLocation,
+  isCustomerSearchingBiker,
+} from '../../lib/customerTrip';
 import { DriverTierBadge, RateDriverCard, driverTierForOrder } from '../shared/DriverTier';
 
 function cn(...inputs: ClassValue[]) {
@@ -40,6 +47,8 @@ export function LiveTripTracker({
   refreshData: () => void | Promise<void>;
 }) {
   const [eta, setEta] = useState<string | null>(null);
+  const [searchEta, setSearchEta] = useState<string | null>(null);
+  const [localRiderLoc, setLocalRiderLoc] = useState<{ lat: number; lng: number } | null>(null);
   const [sheetExpanded, setSheetExpanded] = useState(false);
 
   const isArrived = order.status === 'arrived';
@@ -62,7 +71,58 @@ export function LiveTripTracker({
       ? { lat: dropoff.lat, lng: dropoff.lng }
       : { lat: order.lat ?? DEFAULT_CENTER.lat, lng: order.lng ?? DEFAULT_CENTER.lng };
 
+  const searching = isCustomerSearchingBiker(order);
+  const effectiveRiderLocation = riderLocation ?? localRiderLoc;
+
+  useEffect(() => {
+    if (!searching) {
+      setSearchEta(null);
+      return;
+    }
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const riders = await fetchNearbyRiders(pickupLocation.lat, pickupLocation.lng);
+        if (cancelled || !riders.length) return;
+        const nearest = riders[0];
+        const dir = await fetchDirectionsEta(
+          { lat: nearest.lat, lng: nearest.lng },
+          pickupLocation
+        );
+        if (!cancelled && dir) setSearchEta(dir.eta);
+      } catch {
+        /* ignore */
+      }
+    };
+    void tick();
+    const id = setInterval(tick, 8000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [searching, pickupLocation.lat, pickupLocation.lng]);
+
+  useEffect(() => {
+    if (!order.rider_id || searching) {
+      setLocalRiderLoc(null);
+      return;
+    }
+    if (riderLocation) return;
+    let cancelled = false;
+    const tick = async () => {
+      const loc = await fetchRiderLocation(order.rider_id!);
+      if (!cancelled && loc) setLocalRiderLoc(loc);
+    };
+    void tick();
+    const id = setInterval(tick, 8000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [order.rider_id, searching, riderLocation]);
+
   const headline = getCustomerTripHeadline(order);
+  const displayEta = searching ? searchEta : eta;
   const pickupLabel = pickup?.label || vendor?.name || 'Pickup';
   const dropoffLabel = dropoff?.label || order.address || 'Your address';
   const riderPhone = order.riderPhone ?? order.rider_phone;
@@ -76,7 +136,7 @@ export function LiveTripTracker({
   return (
     <div className="relative w-full flex flex-col">
       <motion.div layout className={cn('relative bg-slate-950 overflow-hidden', mapHeightClass)}>
-        {!riderLocation && order.rider_id && !isArrived && (
+        {!effectiveRiderLocation && order.rider_id && !isArrived && (
           <motion.div className="absolute inset-0 z-20 flex items-center justify-center bg-slate-950/50 backdrop-blur-[2px] pointer-events-none">
             <div className="bg-slate-900/95 px-5 py-3 rounded-2xl border border-slate-700 flex items-center gap-3 shadow-xl">
               <div className="w-2.5 h-2.5 bg-brand-blue rounded-full animate-ping" />
@@ -88,13 +148,14 @@ export function LiveTripTracker({
         )}
 
         <TripTrackingMap
-          riderLocation={riderLocation}
+          riderLocation={effectiveRiderLocation}
           pickupLocation={pickupLocation}
           destination={destination}
           orderStatus={order.status}
-          followRider={!!riderLocation}
+          followRider={!!effectiveRiderLocation}
           onEtaChange={setEta}
           showEtaBadge={false}
+          showPreviewRoute={searching}
         />
 
         <div className="absolute top-0 left-0 right-0 z-10 p-3 pointer-events-none">
@@ -133,10 +194,14 @@ export function LiveTripTracker({
                   )}
                 </div>
               </motion.div>
-              {eta && !isArrived && (
+              {displayEta && !isArrived && (
                 <div className="text-right shrink-0">
-                  <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">ETA</p>
-                  <p className="text-lg font-black text-brand-green font-mono leading-tight">{eta}</p>
+                  <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">
+                    {customerEtaLabel(order, searching)}
+                  </p>
+                  <p className="text-lg font-black text-brand-green font-mono leading-tight">
+                    {displayEta}
+                  </p>
                 </div>
               )}
             </div>
