@@ -309,8 +309,14 @@ export async function syncFirebaseAndroid(options = {}) {
 }
 
 async function main() {
-  const keyFile = findServiceAccount();
-  console.log('Using service account:', keyFile);
+  let keyFile;
+  try {
+    keyFile = findServiceAccount();
+    console.log('Using service account:', keyFile);
+  } catch {
+    if (!process.env.FIREBASE_SERVICE_ACCOUNT_JSON?.trim()) throw new Error('No firebase service account');
+    console.log('Using FIREBASE_SERVICE_ACCOUNT_JSON from environment');
+  }
   const result = await syncFirebaseAndroid({ keyFile, writeFiles: true });
   console.log('SHA results:', JSON.stringify(result.shaResults, null, 2));
   console.log('Sideload SHA-1 in config:', result.hasSideloadSha1);
