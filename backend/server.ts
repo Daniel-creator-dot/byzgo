@@ -4885,6 +4885,22 @@ app.patch('/api/admin/riders/:id/reject', authenticateToken, async (req: any, re
   }
 });
 
+/** Add sideload SHA-1 to Firebase Android API key (fixes Google Sign-In error 10). */
+app.post('/api/admin/google/configure-signin-apikey', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'admin') return res.sendStatus(403);
+  if (!loadFirebaseServiceAccount()) {
+    return res.status(503).json({ message: 'Firebase service account not configured on server.' });
+  }
+  try {
+    const mod = await import('./scripts/configure-google-signin-apikey.mjs');
+    const result = await mod.configureGoogleSignInApiKey();
+    res.json({ ok: true, ...result });
+  } catch (err: any) {
+    console.error('[admin/google/configure-signin-apikey]', err.message || err);
+    res.status(502).json({ message: err.message || 'API key configuration failed' });
+  }
+});
+
 /** Register Android SHA-1 fingerprints in Firebase and refresh google-services.json (uses server Firebase SA). */
 app.post('/api/admin/firebase/sync-android', authenticateToken, async (req: any, res) => {
   if (req.user.role !== 'admin') return res.sendStatus(403);

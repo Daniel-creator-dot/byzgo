@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/env.dart';
@@ -39,6 +40,7 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
   bool _googleLoading = false;
   bool _obscure = true;
   String? _error;
+  String? _appVersion;
   late final AnimationController _heroAnim;
 
   @override
@@ -48,6 +50,10 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
       vsync: this,
       duration: const Duration(milliseconds: 1200),
     )..forward();
+    PackageInfo.fromPlatform().then((info) {
+      if (!mounted) return;
+      setState(() => _appVersion = '${info.version}+${info.buildNumber}');
+    });
   }
 
   @override
@@ -432,6 +438,17 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
             if (!isForgot && !Env.isGoogleSignInEnabled) ...[
               const SizedBox(height: 6),
               const AuthLoginExtras(showGoogle: false, onGoogle: null),
+            ],
+            if (_appVersion != null) ...[
+              const SizedBox(height: 12),
+              Text(
+                'App version $_appVersion',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: BytzGoTheme.textMuted.withValues(alpha: 0.85),
+                ),
+              ),
             ],
             const SizedBox(height: 8),
           ],

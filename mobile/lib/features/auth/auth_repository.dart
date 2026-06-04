@@ -153,8 +153,9 @@ class AuthRepository {
     } on PlatformException catch (e) {
       if (e.code == 'sign_in_failed' && (e.message?.contains(': 10') ?? false)) {
         throw Exception(
-          'Google Sign-In is not set up for this APK yet. '
-          'Use phone or email to sign in, or install a newer APK from bytzgo.net after the app update.',
+          'Google Sign-In certificate mismatch (error 10). '
+          'Uninstall BytzGo, install the latest APK from bytzgo.net/download/android, '
+          'or sign in with phone or email.',
         );
       }
       rethrow;
