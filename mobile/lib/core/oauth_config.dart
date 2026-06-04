@@ -5,8 +5,8 @@ const kGoogleWebClientId =
 
 /// iOS OAuth client from `ios/Runner/GoogleService-Info.plist` (CLIENT_ID).
 const kGoogleIosClientId =
-    '645977332644-v48872sehr00vro60erhs08s1pkj3gge.apps.googleusercontent.com';
+    '645977332644-7r6hmbj6sklvrv96l2i312c34i1kgn4u.apps.googleusercontent.com';
 
 /// URL scheme for Google Sign-In redirect (`REVERSED_CLIENT_ID` in plist).
 const kGoogleIosUrlScheme =
-    'com.googleusercontent.apps.645977332644-v48872sehr00vro60erhs08s1pkj3gge';
+    'com.googleusercontent.apps.645977332644-7r6hmbj6sklvrv96l2i312c34i1kgn4u';

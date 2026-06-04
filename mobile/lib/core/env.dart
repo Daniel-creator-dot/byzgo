@@ -24,8 +24,11 @@ class Env {
     return url;
   }
 
-  /// Google Sign-In disabled in product until re-enabled explicitly.
-  static bool get isGoogleSignInEnabled => false;
+  /// Shown when a web OAuth client id is configured (matches backend / web app).
+  static bool get isGoogleSignInEnabled {
+    final id = googleWebClientId.trim();
+    return id.endsWith('.apps.googleusercontent.com') && id.length > 40;
+  }
 
   static String? _runtimeMapsApiKey;
 
@@ -47,5 +50,15 @@ class Env {
   static bool get hasGoogleMaps {
     final k = googleMapsApiKey;
     return k.length >= 20 && k.startsWith('AIza');
+  }
+
+  /// Key baked in at build time (dart-define or sync script) — native iOS reads this at launch.
+  static bool get hasBuiltInMapsKey {
+    const fromDefine = String.fromEnvironment('GOOGLE_MAPS_API_KEY', defaultValue: '');
+    if (fromDefine.trim().length >= 20 && fromDefine.trim().startsWith('AIza')) {
+      return true;
+    }
+    final baked = MapsKey.resolved.trim();
+    return baked.length >= 20 && baked.startsWith('AIza');
   }
 }
