@@ -43,7 +43,7 @@ services:
       - key: APP_URL
         value: https://www.bytzgo.net
       - key: GOOGLE_SIGN_IN_ENABLED
-        value: "false"
+        value: "true"
       - key: PAYSTACK_CALLBACK_URL
         value: https://www.bytzgo.net
       - key: SMS_API_KEY

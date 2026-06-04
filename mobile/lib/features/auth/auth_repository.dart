@@ -139,11 +139,13 @@ class AuthRepository {
       );
     }
 
+    // Android: package net.bytzgo.app + SHA-1 in google-services.json (see print_google_signin_android).
+    // iOS: explicit clientId; both need serverClientId (web client) for backend ID token.
     final googleSignIn = GoogleSignIn(
-      clientId: defaultTargetPlatform == TargetPlatform.iOS
-          ? kGoogleIosClientId
-          : null,
-      serverClientId: Env.googleWebClientId,
+      clientId: defaultTargetPlatform == TargetPlatform.iOS ? kGoogleIosClientId : null,
+      serverClientId: Env.googleWebClientId.trim().isNotEmpty
+          ? Env.googleWebClientId
+          : kGoogleWebClientId,
       scopes: const ['email', 'profile', 'openid'],
     );
     late final GoogleSignInAccount? account;

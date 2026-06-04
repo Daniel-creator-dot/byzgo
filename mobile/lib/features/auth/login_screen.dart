@@ -160,7 +160,8 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
       _error = null;
     });
     try {
-      final result = await context.read<AuthRepository>().signInWithGoogle();
+      final role = _mode == _AuthMode.signUp ? _signupRole : AppRole.customer;
+      final result = await context.read<AuthRepository>().signInWithGoogle(role: role);
       await context.read<Session>().setSession(
         token: result.token,
         user: result.user,
