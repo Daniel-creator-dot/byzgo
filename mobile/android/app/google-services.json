@@ -14,11 +14,11 @@
       },
       "oauth_client": [
         {
-          "client_id": "645977332644-rv482i78e7hln0u3dh475dn4g0rgoa2l.apps.googleusercontent.com",
+          "client_id": "645977332644-lmndn49qajhkqjqa18demn4aqh4le5m9.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {
             "package_name": "net.bytzgo.app",
-            "certificate_hash": "b2a044c879a5975095ab9ac5b60a2ffd7cde3f2d"
+            "certificate_hash": "ece976bb77e687634422dba1dd58052522fa450a"
           }
         },
         {
@@ -32,14 +32,6 @@
         {
           "client_id": "645977332644-4gjjf08268b3irafs4bh8b7guct1i1jb.apps.googleusercontent.com",
           "client_type": 3
-        },
-        {
-          "client_id": "645977332644-lmndn49qajhkqjqa18demn4aqh4le5m9.apps.googleusercontent.com",
-          "client_type": 1,
-          "android_info": {
-            "package_name": "net.bytzgo.app",
-            "certificate_hash": "ece976bb77e687634422dba1dd58052522fa450a"
-          }
         }
       ],
       "api_key": [

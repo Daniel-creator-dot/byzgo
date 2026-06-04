@@ -90,9 +90,22 @@ async function patchAndroidRestrictions(token, keyResource, existing) {
   return apiFetch(url, token, { method: 'PATCH', body: JSON.stringify(body) });
 }
 
+async function enableService(token, service) {
+  const url = `https://serviceusage.googleapis.com/v1/projects/${PROJECT}/services/${service}:enable`;
+  try {
+    await apiFetch(url, token, { method: 'POST', body: '{}' });
+  } catch (e) {
+    if (e.status === 409 || /already enabled/i.test(String(e.message))) return;
+    throw e;
+  }
+}
+
 export async function configureGoogleSignInApiKey() {
   const token = await getToken();
   if (!token) throw new Error('No access token');
+
+  await enableService(token, 'apikeys.googleapis.com');
+  await enableService(token, 'serviceusage.googleapis.com');
 
   const keys = await listKeys(token);
   let target =
