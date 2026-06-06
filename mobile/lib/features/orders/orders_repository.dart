@@ -87,6 +87,7 @@ class OrdersRepository {
     String itemDescription = 'Package',
     String paymentMethod = 'pay_on_delivery',
     String? region,
+    String? scheduledTime,
   }) async {
     final res = await _api.dio.post<Map<String, dynamic>>(
       '/api/orders',
@@ -110,6 +111,8 @@ class OrdersRepository {
         'delivery_fee': deliveryFee,
         'payment_method': paymentMethod,
         if (region != null && region.isNotEmpty) 'region': region,
+        if (scheduledTime != null && scheduledTime.isNotEmpty)
+          'scheduled_time': scheduledTime,
       },
     );
 
@@ -378,6 +381,33 @@ class OrdersRepository {
     );
     final data = res.data;
     if (data == null) throw Exception('Empty ack response');
+    return Order.fromJson(Map<String, dynamic>.from(data));
+  }
+
+  Future<Order> confirmReceived(String orderId) async {
+    final res = await _api.dio.post<Map<String, dynamic>>(
+      '/api/orders/$orderId/confirm-received',
+    );
+    final data = res.data;
+    if (data == null) throw Exception('Empty confirm response');
+    return Order.fromJson(Map<String, dynamic>.from(data));
+  }
+
+  Future<Order> adminCompleteOrder(String orderId) async {
+    final res = await _api.dio.post<Map<String, dynamic>>(
+      '/api/admin/orders/$orderId/complete',
+    );
+    final data = res.data;
+    if (data == null) throw Exception('Empty admin complete response');
+    return Order.fromJson(Map<String, dynamic>.from(data));
+  }
+
+  Future<Order> adminCancelOrder(String orderId) async {
+    final res = await _api.dio.post<Map<String, dynamic>>(
+      '/api/admin/orders/$orderId/cancel',
+    );
+    final data = res.data;
+    if (data == null) throw Exception('Empty admin cancel response');
     return Order.fromJson(Map<String, dynamic>.from(data));
   }
 

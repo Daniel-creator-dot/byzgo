@@ -81,6 +81,8 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
   double? _quoteDistanceKm;
   bool _surgeActive = false;
   bool _quoteLoading = false;
+  bool _scheduleLater = false;
+  DateTime _scheduledAt = DateTime.now().add(const Duration(hours: 2));
   Timer? _quoteDebounce;
   LocationPoint? _riderPosition;
   List<LocationPoint> _nearbyRiders = [];
@@ -163,6 +165,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
     final list = _orders.where((o) {
       if (o.customerId != userId) return false;
       if (['delivered', 'cancelled'].contains(o.status)) return false;
+      if (!customerTripBlocksNewBooking(o)) return false;
       final type = o.orderType ?? '';
       return type == 'courier' ||
           type == 'food' ||
@@ -901,6 +904,10 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
             ? _destination!.address
             : _dropoffCtrl.text.trim(),
       );
+      String? scheduledTime;
+      if (_scheduleLater) {
+        scheduledTime = _scheduledAt.toUtc().toIso8601String();
+      }
       final order = await _ordersRepo.createCourierOrder(
         pickup: pickup,
         destination: dest,
@@ -909,13 +916,19 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
         itemDescription: _itemCtrl.text.trim().isEmpty
             ? 'Package'
             : _itemCtrl.text.trim(),
+        scheduledTime: scheduledTime,
       );
       if (!mounted) return;
       setState(() {
         _orders = [order, ..._orders];
       });
       _syncNearbyPoll();
-      _snack('Bike requested — waiting for a rider', success: true);
+      _snack(
+        order.status == 'scheduled'
+            ? 'Delivery scheduled — we will find a rider at the chosen time'
+            : 'Bike requested — waiting for a rider',
+        success: true,
+      );
     } catch (e) {
       _snack(OrdersRepository.errorMessage(e));
     } finally {
@@ -997,35 +1010,35 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
         padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
         footerPadding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
         scrollBottomPadding: !tracking && fee > 0 ? 12 : 0,
-        footer: !tracking
-            ? Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  RideAnimatedReveal(
-                    visible: fee > 0,
-                    child: Padding(
-                      padding: const EdgeInsets.only(bottom: 10),
-                      child: DeliveryQuoteCard(
-                        key: ValueKey('fee-$fee-$_surgeActive'),
-                        fee: fee,
-                        distanceKm: _routeDistanceKm,
-                        surgeActive: _surgeActive,
-                        loading: _quoteLoading,
-                      ),
-                    ),
-                  ),
-                  RidePrimaryButton(
-                    label: fee > 0
-                        ? 'Request bike · ${formatCedis(fee)}'
-                        : 'Request bike',
-                    icon: Icons.two_wheeler,
-                    loading: _booking,
-                    onPressed: _requestDelivery,
-                  ),
-                ],
-              )
-            : null,
+        footer: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            RideAnimatedReveal(
+              visible: fee > 0,
+              child: Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: DeliveryQuoteCard(
+                  key: ValueKey('fee-$fee-$_surgeActive'),
+                  fee: fee,
+                  distanceKm: _routeDistanceKm,
+                  surgeActive: _surgeActive,
+                  loading: _quoteLoading,
+                ),
+              ),
+            ),
+            RidePrimaryButton(
+              label: fee > 0
+                  ? (_scheduleLater
+                      ? 'Schedule bike · ${formatCedis(fee)}'
+                      : 'Request bike · ${formatCedis(fee)}')
+                  : (_scheduleLater ? 'Schedule bike' : 'Request bike'),
+              icon: Icons.two_wheeler,
+              loading: _booking,
+              onPressed: _requestDelivery,
+            ),
+          ],
+        ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           mainAxisSize: MainAxisSize.min,
@@ -1058,8 +1071,16 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
                 nearbyCount: _nearbyRiders.length,
               ),
             ],
-            if (!tracking) ...[
-              if (!widget.embedded) ...[
+            ...[
+              if (tracking) ...[
+                const SizedBox(height: 12),
+                Text(
+                  'Book another delivery',
+                  style: BytzGoTheme.sheetTitle(16),
+                ),
+                const SizedBox(height: 6),
+              ],
+              if (!widget.embedded && !tracking) ...[
                 ClipRRect(
                   borderRadius: BorderRadius.circular(18),
                   child: Image.asset(
@@ -1143,6 +1164,52 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
                 selected: _packageType,
                 onSelected: (v) => setState(() => _itemCtrl.text = v),
               ),
+              const SizedBox(height: 12),
+              SegmentedButton<bool>(
+                segments: const [
+                  ButtonSegment(value: false, label: Text('Deliver now')),
+                  ButtonSegment(value: true, label: Text('Schedule')),
+                ],
+                selected: {_scheduleLater},
+                onSelectionChanged: (s) => setState(() => _scheduleLater = s.first),
+              ),
+              if (_scheduleLater) ...[
+                const SizedBox(height: 10),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.schedule, color: BytzGoTheme.brandBlue),
+                  title: Text(
+                    '${_scheduledAt.day}/${_scheduledAt.month}/${_scheduledAt.year} '
+                    '${_scheduledAt.hour.toString().padLeft(2, '0')}:'
+                    '${_scheduledAt.minute.toString().padLeft(2, '0')}',
+                    style: BytzGoTheme.sheetBody(14),
+                  ),
+                  subtitle: const Text('Tap to change date & time'),
+                  onTap: () async {
+                    final date = await showDatePicker(
+                      context: context,
+                      firstDate: DateTime.now(),
+                      lastDate: DateTime.now().add(const Duration(days: 14)),
+                      initialDate: _scheduledAt,
+                    );
+                    if (date == null || !mounted) return;
+                    final time = await showTimePicker(
+                      context: context,
+                      initialTime: TimeOfDay.fromDateTime(_scheduledAt),
+                    );
+                    if (time == null || !mounted) return;
+                    setState(() {
+                      _scheduledAt = DateTime(
+                        date.year,
+                        date.month,
+                        date.day,
+                        time.hour,
+                        time.minute,
+                      );
+                    });
+                  },
+                ),
+              ],
             ],
             if (_loading)
               const Padding(

@@ -1315,6 +1315,7 @@ async function ensureVapidKeys() {
 
 function isOfferableOrder(order: any) {
   if (order?.rider_id) return false;
+  if (order?.status === 'scheduled') return false;
   if (order?.status === 'ready') return true;
   // Marketplace shop orders (seeded vendors) start ready; legacy food may be pending until vendor marks ready.
   if (
@@ -1329,6 +1330,70 @@ function isOfferableOrder(order: any) {
 
 function generateDeliveryCode(): string {
   return crypto.randomInt(100000, 999999).toString();
+}
+
+function parseScheduledTimeInput(raw: unknown): Date | null {
+  if (raw == null || raw === '') return null;
+  const d = new Date(String(raw));
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function isFutureScheduled(scheduled: Date | null): boolean {
+  if (!scheduled) return false;
+  return scheduled.getTime() > Date.now() + 10 * 60 * 1000;
+}
+
+async function ensureDeliveryCode(orderId: string): Promise<string> {
+  const existing = await pool.query('SELECT delivery_code FROM orders WHERE id = $1', [orderId]);
+  const code = existing.rows[0]?.delivery_code;
+  if (code) return String(code);
+  const generated = generateDeliveryCode();
+  await pool.query(
+    `UPDATE orders SET delivery_code = $1, delivery_code_created_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+    [generated, orderId]
+  );
+  return generated;
+}
+
+async function activateDueScheduledOrders() {
+  const due = await pool.query(
+    `UPDATE orders SET status = 'ready', updated_at = CURRENT_TIMESTAMP
+     WHERE status = 'scheduled' AND scheduled_time IS NOT NULL AND scheduled_time <= NOW()
+     RETURNING *`
+  );
+  for (const order of due.rows) {
+    broadcastOrderUpdated(order);
+    if (isOfferableOrder(order)) void broadcastRideOfferToRiders(order);
+  }
+}
+
+/** Close trips stuck at arrival (missing PIN / rider never completed). */
+async function repairStaleTripsForCustomer(customerId: string) {
+  const stale = await pool.query(
+    `UPDATE orders SET status = 'delivered', updated_at = CURRENT_TIMESTAMP
+     WHERE customer_id = $1
+       AND status = 'arrived'
+       AND updated_at < NOW() - INTERVAL '6 hours'
+       AND (payment_status = 'paid' OR customer_payment_ack IS NOT NULL)
+     RETURNING *`,
+    [customerId]
+  );
+  for (const order of stale.rows) {
+    try {
+      await settleOrderPayment(order);
+    } catch (e) {
+      console.error('[repairStaleTrips] settlement failed:', order.id, e);
+    }
+    broadcastOrderUpdated(order);
+  }
+  await pool.query(
+    `UPDATE orders SET status = 'cancelled', rider_id = NULL, updated_at = CURRENT_TIMESTAMP
+     WHERE customer_id = $1
+       AND status IN ('ready', 'pending', 'preparing')
+       AND rider_id IS NULL
+       AND created_at < NOW() - INTERVAL '3 days'`,
+    [customerId]
+  );
 }
 
 const deliveryCodeAttempts = new Map<string, { attempts: number; lockedUntil: number }>();
@@ -5053,6 +5118,10 @@ app.patch('/api/admin/users/:id/status', authenticateToken, async (req: any, res
 // Order Routes
 app.get('/api/orders', authenticateToken, async (req: any, res) => {
   try {
+    await activateDueScheduledOrders();
+    if (req.user.role === 'customer') {
+      await repairStaleTripsForCustomer(req.user.id);
+    }
     let query = `SELECT o.*, ${ORDER_CONTACT_SELECT} FROM orders o ${ORDER_CONTACT_JOINS}`;
     const params: any[] = [];
 
@@ -5293,11 +5362,14 @@ app.post('/api/orders', authenticateToken, async (req: any, res) => {
       }
     }
 
-    const initialStatus =
-      finalOrderType === 'courier' || (vendorId && finalOrderType === 'food')
+    const scheduledRaw = scheduledTime || scheduled_time || null;
+    const scheduledDate = parseScheduledTimeInput(scheduledRaw);
+    const scheduled = scheduledDate ? scheduledDate.toISOString() : null;
+    const initialStatus = isFutureScheduled(scheduledDate)
+      ? 'scheduled'
+      : finalOrderType === 'courier' || (vendorId && finalOrderType === 'food')
         ? 'ready'
         : 'pending';
-    const scheduled = scheduledTime || scheduled_time || null;
 
     const result = await pool.query(
       'INSERT INTO orders (customer_id, vendor_id, items, total, status, address, pickup_address, order_type, scheduled_time, lat, lng, pickup_lat, pickup_lng, region, payment_status, payment_method, delivery_fee) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) RETURNING *',
@@ -5504,6 +5576,7 @@ app.patch('/api/orders/:id/arrive', authenticateToken, async (req: any, res) => 
     if (existing.status !== 'picked_up') {
       return res.status(400).json({ message: 'Mark the order as picked up first.' });
     }
+    await ensureDeliveryCode(orderId);
     const result = await pool.query(
       `UPDATE orders SET status = 'arrived', arrived_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = $1 RETURNING *`,
       [orderId]
@@ -5530,6 +5603,7 @@ app.post('/api/orders/:id/ack-cash', authenticateToken, async (req: any, res) =>
     if (order.payment_status === 'paid') {
       return res.json(await sanitizeOrderForRole(order, 'customer', req.user.id));
     }
+    await ensureDeliveryCode(orderId);
     const result = await pool.query(
       `UPDATE orders SET customer_payment_ack = 'cash', updated_at = CURRENT_TIMESTAMP WHERE id = $1 RETURNING *`,
       [orderId]
@@ -5630,7 +5704,8 @@ app.post('/api/orders/:id/complete-delivery', authenticateToken, async (req: any
       return res.status(400).json({ message: 'Waiting for customer to confirm payment.' });
     }
 
-    if (order.delivery_code !== String(code).trim()) {
+    const expectedCode = order.delivery_code || (await ensureDeliveryCode(orderId));
+    if (expectedCode !== String(code).trim()) {
       const attempts = (lock?.attempts || 0) + 1;
       if (attempts >= 5) {
         deliveryCodeAttempts.set(orderId, { attempts, lockedUntil: Date.now() + 15 * 60 * 1000 });
@@ -5685,6 +5760,89 @@ app.post('/api/orders/:id/complete-delivery', authenticateToken, async (req: any
     }
   } catch (err) {
     console.error('Complete delivery error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+/** Customer confirms package received — closes hung PIN trips without rider entering code. */
+app.post('/api/orders/:id/confirm-received', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'customer') return res.status(403).json({ message: 'Customers only' });
+  const orderId = req.params.id;
+  try {
+    const orderRes = await pool.query(
+      'SELECT * FROM orders WHERE id = $1 AND customer_id = $2',
+      [orderId, req.user.id]
+    );
+    const order = orderRes.rows[0];
+    if (!order) return res.status(404).json({ message: 'Order not found' });
+    if (order.status !== 'arrived') {
+      return res.status(400).json({ message: 'Confirm receipt when your driver has arrived.' });
+    }
+    if (!isCustomerPaymentReady(order)) {
+      return res.status(400).json({ message: 'Confirm payment before marking delivery complete.' });
+    }
+    const result = await pool.query(
+      `UPDATE orders SET status = 'delivered', updated_at = CURRENT_TIMESTAMP WHERE id = $1 RETURNING *`,
+      [orderId]
+    );
+    const delivered = result.rows[0];
+    try {
+      await settleOrderPayment(delivered);
+    } catch (e) {
+      console.error('[confirm-received] settlement failed:', e);
+    }
+    broadcastOrderUpdated(delivered);
+    res.json(await sanitizeOrderForRole(delivered, 'customer', req.user.id));
+  } catch (err) {
+    console.error('Confirm received error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+/** Admin force-complete a stuck trip (no PIN required). */
+app.post('/api/admin/orders/:id/complete', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'admin') return res.sendStatus(403);
+  const orderId = req.params.id;
+  try {
+    const orderRes = await pool.query('SELECT * FROM orders WHERE id = $1', [orderId]);
+    const order = orderRes.rows[0];
+    if (!order) return res.status(404).json({ message: 'Order not found' });
+    if (['delivered', 'cancelled'].includes(order.status)) {
+      return res.json(await sanitizeOrderForRole(order, 'admin', req.user.id));
+    }
+    const result = await pool.query(
+      `UPDATE orders SET status = 'delivered', updated_at = CURRENT_TIMESTAMP WHERE id = $1 RETURNING *`,
+      [orderId]
+    );
+    const delivered = result.rows[0];
+    try {
+      await settleOrderPayment(delivered);
+    } catch (e) {
+      console.error('[admin/complete] settlement failed:', e);
+    }
+    broadcastOrderUpdated(delivered);
+    res.json(delivered);
+  } catch (err) {
+    console.error('Admin complete order error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+/** Admin cancel a stuck trip. */
+app.post('/api/admin/orders/:id/cancel', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'admin') return res.sendStatus(403);
+  const orderId = req.params.id;
+  try {
+    const result = await pool.query(
+      `UPDATE orders SET status = 'cancelled', rider_id = NULL, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1 AND status NOT IN ('delivered', 'cancelled') RETURNING *`,
+      [orderId]
+    );
+    if (!result.rows[0]) return res.status(404).json({ message: 'Order not found or already closed' });
+    broadcastOrderUpdated(result.rows[0]);
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Admin cancel order error:', err);
     res.status(500).json({ message: 'Server error' });
   }
 });

@@ -12,6 +12,7 @@ import '../../../shared/rider_trip.dart';
 import '../../../shared/theme.dart';
 import '../../../shared/trip_contact.dart';
 import '../../customer/customer_trip_tracking.dart';
+import '../../orders/orders_repository.dart';
 
 /// Full trip breakdown when admin taps an order in the Operations list.
 Future<void> showAdminOrderDetailSheet(
@@ -52,6 +53,7 @@ class _AdminOrderDetailSheetState extends State<_AdminOrderDetailSheet> {
   String? _pickupLabel;
   String? _dropoffLabel;
   bool _resolving = true;
+  bool _adminActionBusy = false;
 
   @override
   void initState() {
@@ -113,8 +115,110 @@ class _AdminOrderDetailSheetState extends State<_AdminOrderDetailSheet> {
         return const Color(0xFFFBBF24);
       case 'preparing':
         return const Color(0xFFA78BFA);
+      case 'scheduled':
+        return const Color(0xFF60A5FA);
       default:
         return const Color(0xFFFBBF24);
+    }
+  }
+
+  bool get _canAdminCloseTrip =>
+      !const {'delivered', 'cancelled'}.contains(_order.status);
+
+  Future<void> _adminCompleteTrip() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF0F172A),
+        title: const Text('Mark delivered?'),
+        content: const Text(
+          'Force-complete this trip without a delivery PIN. Use when a trip is stuck at arrival.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Complete'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    setState(() => _adminActionBusy = true);
+    try {
+      final updated =
+          await context.read<OrdersRepository>().adminCompleteOrder(_order.id);
+      if (!mounted) return;
+      setState(() => _order = updated);
+      widget.onOrderUpdated?.call(updated);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Trip marked delivered'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not complete trip: $e'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _adminActionBusy = false);
+    }
+  }
+
+  Future<void> _adminCancelTrip() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF0F172A),
+        title: const Text('Cancel trip?'),
+        content: const Text(
+          'Cancel this order and unassign the rider. Use for stuck or abandoned trips.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Keep'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: BytzGoTheme.danger),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Cancel trip'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    setState(() => _adminActionBusy = true);
+    try {
+      final updated =
+          await context.read<OrdersRepository>().adminCancelOrder(_order.id);
+      if (!mounted) return;
+      setState(() => _order = updated);
+      widget.onOrderUpdated?.call(updated);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Trip cancelled'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not cancel trip: $e'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _adminActionBusy = false);
     }
   }
 
@@ -425,6 +529,57 @@ class _AdminOrderDetailSheetState extends State<_AdminOrderDetailSheet> {
                         ),
                       ],
                     ),
+                    if (_canAdminCloseTrip) ...[
+                      const SizedBox(height: 20),
+                      _SectionTitle('Admin actions'),
+                      const SizedBox(height: 10),
+                      if (_adminActionBusy)
+                        const Center(
+                          child: Padding(
+                            padding: EdgeInsets.symmetric(vertical: 12),
+                            child: SizedBox(
+                              width: 24,
+                              height: 24,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: BytzGoTheme.accent,
+                              ),
+                            ),
+                          ),
+                        )
+                      else
+                        Row(
+                          children: [
+                            Expanded(
+                              child: FilledButton.icon(
+                                onPressed: _adminCompleteTrip,
+                                icon: const Icon(Icons.check_circle_outline,
+                                    size: 18),
+                                label: const Text('Complete trip'),
+                                style: FilledButton.styleFrom(
+                                  backgroundColor: BytzGoTheme.accent,
+                                  foregroundColor: const Color(0xFF0B1220),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                onPressed: _adminCancelTrip,
+                                icon: const Icon(Icons.cancel_outlined, size: 18),
+                                label: const Text('Cancel trip'),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: BytzGoTheme.danger,
+                                  side: BorderSide(
+                                    color: BytzGoTheme.danger
+                                        .withValues(alpha: 0.6),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                    ],
                     if (_order.items.isNotEmpty) ...[
                       const SizedBox(height: 16),
                       _SectionTitle('Items (${_order.items.length})'),
