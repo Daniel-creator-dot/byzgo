@@ -1063,6 +1063,33 @@ class _CustomerTripPaymentCardState extends State<CustomerTripPaymentCard> {
             ),
             const SizedBox(height: 16),
           ],
+          if (showPin && (code == null || code.length != 6)) ...[
+            if (showPay) const Divider(height: 1),
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                children: [
+                  Text(
+                    'Your PIN is being generated — pull down to refresh. '
+                    'If your package is already with you, tap below to close this trip.',
+                    style: BytzGoTheme.sheetBody(13),
+                    textAlign: TextAlign.center,
+                  ),
+                  if (customerCanConfirmReceived(order)) ...[
+                    const SizedBox(height: 12),
+                    RidePrimaryButton(
+                      label: 'I received my package',
+                      icon: Icons.check_circle_outline,
+                      loading: _loading,
+                      onPressed: () => _run(
+                        () => context.read<OrdersRepository>().confirmReceived(order.id),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
           if (showPin && code != null && code.length == 6) ...[
             if (showPay) const Divider(height: 1),
             Padding(
@@ -1121,6 +1148,19 @@ class _CustomerTripPaymentCardState extends State<CustomerTripPaymentCard> {
                       style: TextStyle(fontWeight: FontWeight.w700),
                     ),
                   ),
+                  if (customerCanConfirmReceived(order)) ...[
+                    const SizedBox(height: 8),
+                    TextButton(
+                      onPressed: _loading
+                          ? null
+                          : () => _run(
+                                () => context
+                                    .read<OrdersRepository>()
+                                    .confirmReceived(order.id),
+                              ),
+                      child: const Text('I received my package — close trip'),
+                    ),
+                  ],
                 ],
               ),
             ),

@@ -87,7 +87,28 @@ bool customerCanCancelOrder(Order order) {
   if (['delivered', 'cancelled', 'picked_up', 'arrived'].contains(order.status)) {
     return false;
   }
-  return const {'pending', 'ready', 'preparing'}.contains(order.status);
+  return const {'pending', 'ready', 'preparing', 'scheduled'}.contains(order.status);
+}
+
+/// Stale trips should not block booking a new delivery.
+bool customerTripBlocksNewBooking(Order order) {
+  if (['delivered', 'cancelled', 'scheduled'].contains(order.status)) return false;
+  try {
+    final created = DateTime.parse(order.createdAt).toUtc();
+    final age = DateTime.now().toUtc().difference(created);
+    if (order.status == 'arrived' && age.inHours >= 2) return false;
+    if (const {'ready', 'pending', 'preparing'}.contains(order.status) &&
+        (order.riderId == null || order.riderId!.isEmpty) &&
+        age.inDays >= 1) {
+      return false;
+    }
+    if (age.inDays >= 7) return false;
+  } catch (_) {}
+  return true;
+}
+
+bool customerCanConfirmReceived(Order order) {
+  return order.status == 'arrived' && !customerNeedsPayment(order);
 }
 
 String customerTripHeadline(Order order) {
@@ -107,6 +128,8 @@ String customerTripHeadline(Order order) {
     case 'preparing':
       if (order.riderId != null && shop) return 'Rider heading to shop';
       return order.riderId != null ? 'Biker found' : 'Preparing';
+    case 'scheduled':
+      return 'Scheduled delivery';
     case 'pending':
       if (order.riderId != null) {
         return shop ? 'Rider heading to shop' : 'Biker found';
