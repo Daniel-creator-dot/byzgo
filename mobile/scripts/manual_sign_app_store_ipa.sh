@@ -7,8 +7,38 @@ MOBILE_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="$MOBILE_ROOT/build/ios/iphoneos/Runner.app"
 ENT="$MOBILE_ROOT/ios/Runner/Runner.Release.entitlements"
 ENT_TMP="$(mktemp)"
-PROFILE_UUID="2dc03101-394e-4ab6-8236-5d9aee316581"
-PROFILE_SRC="$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles/${PROFILE_UUID}.mobileprovision"
+profile_field() {
+  local file="$1" key="$2"
+  security cms -D -i "$file" 2>/dev/null | plutil -extract "$key" raw -o - - 2>/dev/null || true
+}
+
+find_store_profile() {
+  local dir="$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"
+  local f uuid bundle
+  # Prefer newest matching profile (handles regenerated App Store profiles).
+  while IFS= read -r f; do
+    [[ -f "$f" ]] || continue
+    bundle="$(profile_field "$f" Entitlements.application-identifier)"
+    [[ "$bundle" == *"com.bytzgo.bytzgoMobile" ]] || continue
+    security cms -D -i "$f" 2>/dev/null | grep -q 'com.apple.developer.applesignin' || continue
+    uuid="$(profile_field "$f" UUID)"
+    [[ -n "$uuid" ]] || continue
+    echo "$uuid|$f"
+    return 0
+  done < <(ls -t "$dir"/*.mobileprovision 2>/dev/null)
+  return 1
+}
+
+PROFILE_PAIR="$(find_store_profile || true)"
+if [[ -z "$PROFILE_PAIR" ]]; then
+  echo "No App Store profile for com.bytzgo.bytzgoMobile found."
+  echo "Download from developer.apple.com → Profiles → BytzGo App Store → Download"
+  echo "Then: ./scripts/install_downloaded_profile.sh"
+  exit 1
+fi
+PROFILE_UUID="${PROFILE_PAIR%%|*}"
+PROFILE_SRC="${PROFILE_PAIR#*|}"
+echo "Using profile $PROFILE_UUID"
 IDENTITY="Apple Distribution: jeremiah anthony amissah (MHTN5HYAHW)"
 IPA_DIR="$MOBILE_ROOT/build/ios/ipa"
 trap 'rm -f "$ENT_TMP"' EXIT
@@ -47,15 +77,15 @@ cp "$PROFILE_SRC" "$APP/embedded.mobileprovision"
 
 # Entitlements must match the provisioning profile (incl. application-identifier).
 security cms -D -i "$PROFILE_SRC" | plutil -extract Entitlements xml1 -o "$ENT_TMP" -
-if ! plutil -extract com.apple.developer.applesignin xml1 "$ENT_TMP" >/dev/null 2>&1; then
+if ! grep -q 'com.apple.developer.applesignin' "$ENT_TMP" 2>/dev/null; then
   echo "WARNING: Store profile lacks Sign in with Apple."
   echo "  1. developer.apple.com → Identifiers → com.bytzgo.bytzgoMobile → enable Sign In with Apple → Save"
   echo "  2. Profiles → App Store profile → Edit → Save (regenerate) → Xcode downloads it"
   echo "  3. Re-run this script. IPA may fail App Review for Apple login until then."
 fi
 # Prefer Runner.Release.entitlements when profile already includes the same keys.
-if plutil -extract com.apple.developer.applesignin xml1 "$ENT" >/dev/null 2>&1 \
-   && plutil -extract com.apple.developer.applesignin xml1 "$ENT_TMP" >/dev/null 2>&1; then
+if grep -q 'com.apple.developer.applesignin' "$ENT" 2>/dev/null \
+   && grep -q 'com.apple.developer.applesignin' "$ENT_TMP" 2>/dev/null; then
   cp "$ENT" "$ENT_TMP"
 fi
 
