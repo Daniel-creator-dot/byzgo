@@ -84,6 +84,8 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
   DeliveryPricingConfig? _pricingConfig;
   Session? _watchedSession;
   String? _focusedTripId;
+  String? _pendingRatingTripId;
+  final Set<String> _dismissedTripIds = {};
   double? _quotedFee;
   double? _quoteDistanceKm;
   bool _surgeActive = false;
@@ -217,12 +219,47 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
     return false;
   }
 
+  bool _isRecentDelivery(Order o) {
+    try {
+      final created = DateTime.parse(o.createdAt).toUtc();
+      return DateTime.now().toUtc().difference(created).inHours < 6;
+    } catch (_) {
+      return false;
+    }
+  }
+
   bool _rideTabTripVisible(Order o, String userId) {
     if (!_isRideTabTrip(o, userId)) return false;
+    if (_dismissedTripIds.contains(o.id)) return false;
     if (o.status == 'cancelled') return false;
-    if (o.status == 'delivered') return (o.rating ?? 0) < 1;
+    if (o.status == 'delivered') {
+      if ((o.rating ?? 0) >= 1) return false;
+      return _pendingRatingTripId == o.id;
+    }
     if (o.status == 'scheduled') return false;
     return true;
+  }
+
+  void _noteDeliveryCompleted(Order order) {
+    if (order.status != 'delivered' || (order.rating ?? 0) >= 1) return;
+    setState(() => _pendingRatingTripId = order.id);
+  }
+
+  void _restorePendingRatingTrip() {
+    final userId = _session.user?.id;
+    if (userId == null || _pendingRatingTripId != null) return;
+    final pending = _newestRideTabOrder(
+      _orders,
+      include: (o) =>
+          _isRideTabTrip(o, userId) &&
+          o.status == 'delivered' &&
+          (o.rating ?? 0) < 1 &&
+          !_dismissedTripIds.contains(o.id) &&
+          _isRecentDelivery(o),
+    );
+    if (pending != null) {
+      _pendingRatingTripId = pending.id;
+    }
   }
 
   Order? _newestRideTabOrder(
@@ -284,7 +321,13 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
 
   /// Open a specific trip from Activity (live, scheduled, or recent history).
   void focusOrder(Order order) {
-    setState(() => _focusedTripId = order.id);
+    setState(() {
+      _focusedTripId = order.id;
+      _dismissedTripIds.remove(order.id);
+      if (order.status == 'delivered' && (order.rating ?? 0) < 1) {
+        _pendingRatingTripId = order.id;
+      }
+    });
     _replaceOrder(order);
     final trip = _rideTabTrip;
     if (trip != null) {
@@ -526,8 +569,10 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
       final updated = list.where((o) => o.id == track.id).firstOrNull;
       if (updated == null || !mounted) return;
       if (updated.status == track.status) return;
+      final prevStatus = track.status;
       _replaceOrder(updated);
-      if (updated.status == 'delivered') {
+      if (updated.status == 'delivered' && prevStatus != 'delivered') {
+        _noteDeliveryCompleted(updated);
         _snack('Delivered — thanks for using BytzGO!', success: true);
       }
       _syncOrderStatusPoll();
@@ -666,12 +711,13 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
         }
       });
       if (order.customerId == _session.user?.id) {
-        if (order.status == 'delivered' && prev?.status != 'delivered') {
-          unawaited(PushNotificationService.instance.showTripAlert(
-            title: 'Delivered',
-            body: 'Your delivery is complete',
-            orderId: order.id,
-          ));
+      if (order.status == 'delivered' && prev?.status != 'delivered') {
+        _noteDeliveryCompleted(order);
+        unawaited(PushNotificationService.instance.showTripAlert(
+          title: 'Delivered',
+          body: 'Your delivery is complete',
+          orderId: order.id,
+        ));
         } else if (order.status == 'arrived' && prev?.status != 'arrived') {
           unawaited(PushNotificationService.instance.showTripAlert(
             title: 'Biker arrived',
@@ -967,7 +1013,9 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
   void _dismissRideTabTrip(String orderId) {
     if (!mounted) return;
     setState(() {
+      _dismissedTripIds.add(orderId);
       if (_focusedTripId == orderId) _focusedTripId = null;
+      if (_pendingRatingTripId == orderId) _pendingRatingTripId = null;
       _riderPosition = null;
       _nearbyRiderRecords = [];
       _etaPhrase = null;
@@ -994,10 +1042,15 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
     if (_sheetScrollCtrl.hasClients) {
       _sheetScrollCtrl.jumpTo(0);
     }
+    _mapKey.currentState?.fitAllMarkers();
   }
 
   void _onOrderUpdated(Order order) {
+    final prev = _orders.where((o) => o.id == order.id).firstOrNull;
     _replaceOrder(order);
+    if (order.status == 'delivered' && prev?.status != 'delivered') {
+      _noteDeliveryCompleted(order);
+    }
     if (_isTerminalRideTrip(order)) {
       _dismissRideTabTrip(order.id);
     }
@@ -1109,6 +1162,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
             ? list
             : list.where((o) => o.customerId == userId).toList();
         _loading = false;
+        _restorePendingRatingTrip();
       });
       _syncNearbyPoll();
       final active = _activeCourier;
@@ -1396,7 +1450,9 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
     final awaitingRating =
         tripComplete && trip != null && (trip.rating ?? 0) < 1;
     final activeTracking = tracking && !tripComplete;
-    final showBookingForm = !tracking || !awaitingRating;
+    final sheetModeKey = tracking
+        ? (awaitingRating ? 'rate-${trip.id}' : 'track-${trip.id}')
+        : 'book';
     final fee = _deliveryFee;
     final searching = trip != null &&
         !tripComplete &&
@@ -1457,6 +1513,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
             )
           : null,
       sheet: RideSheet(
+        key: ValueKey('ride-sheet-$sheetModeKey'),
         scrollController: _sheetScrollCtrl,
         collapsible: activeTracking,
         collapsedHeight: 234,
@@ -1475,7 +1532,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
         bottomInset: widget.embedded ? 12 : 0,
         padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
         footerPadding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
-        scrollBottomPadding: showBookingForm && fee > 0 ? 12 : 0,
+        scrollBottomPadding: !tracking && fee > 0 ? 12 : 0,
         footer: tracking
             ? null
             : Column(
@@ -1525,7 +1582,17 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
               ),
               const SizedBox(height: 14),
             ],
-            if (tracking) ...[
+            if (tracking && awaitingRating) ...[
+              RateDriverCard(
+                order: trip,
+                onOrderUpdated: _onOrderUpdated,
+              ),
+              const SizedBox(height: 8),
+              TextButton(
+                onPressed: () => _dismissRideTabTrip(trip.id),
+                child: const Text('Continue booking'),
+              ),
+            ] else if (tracking) ...[
               CustomerDeliveryTracker(
                 order: trip,
                 onOrderUpdated: _onOrderUpdated,
@@ -1542,16 +1609,8 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
                 nearbyCount: _nearbyRiderRecords.length,
               ),
             ],
-            if (showBookingForm) ...[
-              if (activeTracking) ...[
-                const SizedBox(height: 12),
-                Text(
-                  'Book another delivery',
-                  style: BytzGoTheme.sheetTitle(16),
-                ),
-                const SizedBox(height: 6),
-              ],
-              if (!widget.embedded && !tracking) ...[
+            if (!tracking) ...[
+              if (!widget.embedded) ...[
                 ClipRRect(
                   borderRadius: BorderRadius.circular(18),
                   child: Image.asset(
