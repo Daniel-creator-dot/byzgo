@@ -64,6 +64,7 @@ class _BytzGoAppState extends State<BytzGoApp> {
         session: _session,
       );
     };
+    _api.onRefreshToken = () => _session.refreshAuthFromServer();
     _api.onUnauthorized = () {
       _tripChatUnread.clear();
       _session.clear();

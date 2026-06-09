@@ -3,6 +3,7 @@ import 'package:dio/dio.dart';
 import 'env.dart';
 
 typedef UnauthorizedHandler = void Function();
+typedef TokenRefreshHandler = Future<bool> Function();
 
 /// REST client for the existing Express API (`backend/server.ts`).
 class ApiClient {
@@ -19,12 +20,30 @@ class ApiClient {
     );
     _dio.interceptors.add(
       InterceptorsWrapper(
-        onError: (err, handler) {
+        onError: (err, handler) async {
           final status = err.response?.statusCode;
-          if (status == 401 ||
-              status == 403 ||
-              status == 431 ||
-              isHeaderTooLargeError(err)) {
+          if (status == 431 || isHeaderTooLargeError(err)) {
+            onUnauthorized?.call();
+            handler.next(err);
+            return;
+          }
+          if (status == 401 || status == 403) {
+            final opts = err.requestOptions;
+            if (opts.extra['auth_retry'] != true && onRefreshToken != null) {
+              opts.extra['auth_retry'] = true;
+              try {
+                final refreshed = await onRefreshToken!();
+                if (refreshed) {
+                  final auth = _dio.options.headers['Authorization'];
+                  if (auth != null) {
+                    opts.headers['Authorization'] = auth;
+                  }
+                  final response = await _dio.fetch<dynamic>(opts);
+                  handler.resolve(response);
+                  return;
+                }
+              } catch (_) {}
+            }
             onUnauthorized?.call();
           }
           handler.next(err);
@@ -35,6 +54,7 @@ class ApiClient {
 
   late final Dio _dio;
   UnauthorizedHandler? onUnauthorized;
+  TokenRefreshHandler? onRefreshToken;
 
   Dio get dio => _dio;
 
@@ -71,6 +91,12 @@ class ApiClient {
     }
     if (status == 413) {
       return 'Photo or request is too large. Use a smaller image, or save without changing the photo.';
+    }
+    if (status == 401) {
+      return 'Your session expired. Please sign in again to book a delivery.';
+    }
+    if (status == 403) {
+      return 'Your session is no longer valid. Please sign in again.';
     }
     final data = err.response?.data;
     if (data is Map) {

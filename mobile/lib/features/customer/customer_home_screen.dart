@@ -4,6 +4,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/config_repository.dart';
@@ -81,6 +82,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
   String? _error;
   double _pricePerKm = defaultDeliveryPricePerKm;
   DeliveryPricingConfig? _pricingConfig;
+  Session? _watchedSession;
   double? _quotedFee;
   double? _quoteDistanceKm;
   bool _surgeActive = false;
@@ -128,6 +130,34 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
       _pricingConfig = pricing..addListener(_onLivePricingUpdated);
       _pricePerKm = pricing.pricePerKm;
     }
+    final session = context.read<Session>();
+    if (!identical(session, _watchedSession)) {
+      _watchedSession?.removeListener(_onSessionChanged);
+      _watchedSession = session..addListener(_onSessionChanged);
+    }
+  }
+
+  void _onSessionChanged() {
+    if (!mounted) return;
+    if (_session.isAuthenticated) {
+      unawaited(_loadOrders());
+    } else {
+      setState(() {
+        _orders = [];
+        _error = null;
+        _loading = false;
+      });
+    }
+  }
+
+  bool _isAuthErrorMessage(String? message) {
+    if (message == null || message.isEmpty) return false;
+    final lower = message.toLowerCase();
+    return lower.contains('sign in') ||
+        lower.contains('session') ||
+        lower.contains('unauthorized') ||
+        lower.contains('401') ||
+        lower.contains('403');
   }
 
   void _onLivePricingUpdated() {
@@ -269,7 +299,11 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
         _pricePerKm = await context.read<ConfigRepository>().fetchPricePerKm();
       } catch (_) {}
     }
-    await _loadOrders();
+    if (_session.isAuthenticated) {
+      await _loadOrders();
+    } else if (mounted) {
+      setState(() => _loading = false);
+    }
     await _detectPickup();
     if (!mounted) return;
     final p = _pickup;
@@ -526,6 +560,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
 
   @override
   void dispose() {
+    _watchedSession?.removeListener(_onSessionChanged);
     _quoteDebounce?.cancel();
     _pricingConfig?.removeListener(_onLivePricingUpdated);
       _nearbyPoll?.cancel();
@@ -978,6 +1013,14 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
 
   Future<void> _loadOrders() async {
     if (!mounted) return;
+    if (!_session.isAuthenticated) {
+      setState(() {
+        _loading = false;
+        _error = null;
+        _orders = [];
+      });
+      return;
+    }
     setState(() {
       _loading = true;
       _error = null;
@@ -1125,8 +1168,9 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
   }
 
   Future<void> _requestDelivery() async {
-    if (_session.user == null) {
+    if (!_session.isAuthenticated) {
       _snack('Sign in to request a delivery');
+      context.push('/login');
       return;
     }
     final inProgress = _activeCourier;
@@ -1567,9 +1611,15 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
               Padding(
                 padding: const EdgeInsets.only(top: 8),
                 child: BytzErrorPanel(
-                  title: 'Could not load trip',
+                  title: _isAuthErrorMessage(_error)
+                      ? 'Sign in required'
+                      : 'Could not load trip',
                   message: _error!,
-                  onRetry: _loadOrders,
+                  onRetry: _isAuthErrorMessage(_error)
+                      ? () => context.push('/login')
+                      : _loadOrders,
+                  retryLabel:
+                      _isAuthErrorMessage(_error) ? 'Sign in' : 'Try again',
                   light: true,
                 ),
               ),

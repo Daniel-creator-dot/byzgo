@@ -52,9 +52,9 @@ class Session extends ChangeNotifier {
     _restoring = true;
     notifyListeners();
     try {
-      final token = await _storage.read(key: _kToken);
+      final token = (await _storage.read(key: _kToken))?.trim();
       final userJson = await _storage.read(key: _kUser);
-      if (token != null && userJson != null) {
+      if (token != null && token.isNotEmpty && userJson != null) {
         if (ApiClient.isOversizedAuthToken(token)) {
           debugPrint('Session: clearing oversized auth token (${token.length} chars)');
           await clear();

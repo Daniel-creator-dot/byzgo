@@ -2663,7 +2663,9 @@ const authenticateToken = (req: any, res: any, next: any) => {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
 
-  if (!token) return res.sendStatus(401);
+  if (!token || !String(token).trim()) {
+    return res.status(401).json({ message: 'Sign in required' });
+  }
   if (token.length > 2048) {
     return res.status(431).json({
       message: 'Session token is too large. Sign out and sign in again to refresh your session.',
@@ -2671,7 +2673,9 @@ const authenticateToken = (req: any, res: any, next: any) => {
   }
 
   jwt.verify(token, process.env.JWT_SECRET as string, async (err: any, user: any) => {
-    if (err) return res.sendStatus(403);
+    if (err) {
+      return res.status(403).json({ message: 'Session expired. Please sign in again.' });
+    }
     
     // Check if user is still active in DB
     try {

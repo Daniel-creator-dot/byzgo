@@ -76,12 +76,14 @@ class BytzErrorPanel extends StatelessWidget {
     required this.message,
     this.title = 'Something went wrong',
     this.onRetry,
+    this.retryLabel = 'Try again',
     this.light = true,
   });
 
   final String title;
   final String message;
   final VoidCallback? onRetry;
+  final String retryLabel;
   final bool light;
 
   @override
@@ -141,8 +143,11 @@ class BytzErrorPanel extends StatelessWidget {
                 alignment: Alignment.centerRight,
                 child: TextButton.icon(
                   onPressed: onRetry,
-                  icon: const Icon(Icons.refresh, size: 18),
-                  label: const Text('Try again'),
+                  icon: Icon(
+                    retryLabel == 'Try again' ? Icons.refresh : Icons.login_rounded,
+                    size: 18,
+                  ),
+                  label: Text(retryLabel),
                   style: TextButton.styleFrom(foregroundColor: BytzGoTheme.brandBlue),
                 ),
               ),
