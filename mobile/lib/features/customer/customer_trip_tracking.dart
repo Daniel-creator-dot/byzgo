@@ -67,7 +67,7 @@ class CustomerDeliveryTracker extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final dist = _riderDistanceKm;
-    final hasRider = order.riderId != null && !searching;
+    final hasRider = customerOrderHasActiveRider(order) && !searching;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -90,7 +90,7 @@ class CustomerDeliveryTracker extends StatelessWidget {
           nearbyCount: nearbyCount,
         ),
         if (customerOrderHasShopPickup(order) &&
-            order.riderId != null &&
+            customerOrderHasActiveRider(order) &&
             !searching &&
             const {'ready', 'preparing', 'pending', 'picked_up'}.contains(order.status)) ...[
           const SizedBox(height: 10),

@@ -165,6 +165,53 @@ class Order {
 
   bool get hasShopPickup => vendorId.trim().isNotEmpty;
 
+  bool get isCancelled => status == 'cancelled';
+
+  /// Strip rider assignment from cancelled trips so UI never shows a picked rider.
+  Order withoutAssignedRider() {
+    return Order(
+      id: id,
+      customerId: customerId,
+      customerName: customerName,
+      items: items,
+      total: total,
+      status: status,
+      createdAt: createdAt,
+      address: address,
+      vendorId: vendorId,
+      pickup: pickup,
+      pickupAddress: pickupAddress,
+      orderType: orderType,
+      lat: lat,
+      lng: lng,
+      pickupLat: pickupLat,
+      pickupLng: pickupLng,
+      deliveryFee: deliveryFee,
+      expiresAt: expiresAt,
+      dispatchWave: dispatchWave,
+      offerDistanceKm: offerDistanceKm,
+      paymentStatus: paymentStatus,
+      paymentMethod: paymentMethod,
+      customerPaymentAck: customerPaymentAck,
+      deliveryCode: deliveryCode,
+      rating: rating,
+      customerPhone: customerPhone,
+      customerAvatarUrl: customerAvatarUrl,
+      customerAvgRating: customerAvgRating,
+      vendorName: vendorName,
+      pulseGuideLat: pulseGuideLat,
+      pulseGuideLng: pulseGuideLng,
+      pulseGuideAt: pulseGuideAt,
+      pulseGuidePhase: pulseGuidePhase,
+      pulseGuideActive: pulseGuideActive,
+    );
+  }
+
+  Order normalizedForCustomerTrip() {
+    if (!isCancelled) return this;
+    return withoutAssignedRider();
+  }
+
 
 
   factory Order.fromJson(Map<String, dynamic> json) {

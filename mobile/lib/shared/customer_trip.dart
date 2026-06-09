@@ -23,8 +23,18 @@ bool customerCanShowDeliveryPin(Order order) {
 }
 
 bool customerIsSearchingBiker(Order order) {
+  if (['cancelled', 'delivered'].contains(order.status)) return false;
   if (order.riderId != null) return false;
   return const {'pending', 'ready', 'preparing'}.contains(order.status);
+}
+
+/// Assigned rider is shown on map / contact cards only while the trip is active.
+bool customerOrderHasActiveRider(Order order) {
+  if (['cancelled', 'delivered', 'scheduled'].contains(order.status)) {
+    return false;
+  }
+  final id = order.riderId;
+  return id != null && id.isNotEmpty;
 }
 
 /// Bolt/Yango-style countdown label for the live ETA pill.
@@ -157,7 +167,7 @@ String customerTripHeadline(Order order) {
       }
       return shop ? 'Finding a rider for your shop order…' : 'Finding a biker nearby…';
     case 'cancelled':
-      return 'Cancelled';
+      return 'Trip cancelled';
     default:
       return 'Updating…';
   }
@@ -165,7 +175,7 @@ String customerTripHeadline(Order order) {
 
 /// Where the assigned biker is driving toward (for ETA).
 LocationPoint? customerRiderNavTarget(Order order) {
-  if (order.riderId == null) return null;
+  if (!customerOrderHasActiveRider(order)) return null;
   if (['picked_up', 'arrived'].contains(order.status)) {
     if (order.lat != null &&
         order.lng != null &&
@@ -198,6 +208,8 @@ String customerTripSubline(Order order, {String? etaPhrase}) {
     }
   }
   switch (order.status) {
+    case 'cancelled':
+      return 'No biker is on the way — you can book again';
     case 'delivered':
       return 'Thanks for riding with BytzGO';
     case 'arrived':

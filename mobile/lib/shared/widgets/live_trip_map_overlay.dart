@@ -53,7 +53,7 @@ class LiveTripMapHud extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final hasRider = order.riderId != null && !searching;
+    final hasRider = customerOrderHasActiveRider(order) && !searching;
     final dist = _distanceKm;
 
     return SafeArea(
