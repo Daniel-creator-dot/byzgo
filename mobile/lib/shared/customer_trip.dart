@@ -24,7 +24,7 @@ bool customerCanShowDeliveryPin(Order order) {
 
 bool customerIsSearchingBiker(Order order) {
   if (['cancelled', 'delivered'].contains(order.status)) return false;
-  if (order.riderId != null) return false;
+  if (customerOrderHasActiveRider(order)) return false;
   return const {'pending', 'ready', 'preparing'}.contains(order.status);
 }
 

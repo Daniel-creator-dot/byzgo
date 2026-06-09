@@ -422,6 +422,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
           (_) => _fetchNearbyRiders(),
         );
       }
+      _syncOrderStatusPoll();
     } else {
       _nearbyPoll?.cancel();
       _nearbyPoll = null;
@@ -545,32 +546,55 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
     });
   }
 
-  /// While driver is at drop-off, poll API so delivered + rating UI appear if socket lags.
+  /// Poll API while searching for a biker or waiting at drop-off if socket lags.
   void _syncOrderStatusPoll() {
     _orderStatusPoll?.cancel();
     final active = _activeCourier;
-    if (active == null || active.status != 'arrived') {
+    if (active == null) {
+      _orderStatusPoll = null;
+      return;
+    }
+    final searching = customerIsSearchingBiker(active);
+    if (!searching && active.status != 'arrived') {
       _orderStatusPoll = null;
       return;
     }
     unawaited(_pollOrderStatusOnce());
     _orderStatusPoll = Timer.periodic(
-      const Duration(seconds: 10),
+      Duration(seconds: searching ? 5 : 10),
       (_) => unawaited(_pollOrderStatusOnce()),
     );
   }
 
   Future<void> _pollOrderStatusOnce() async {
     final track = _activeCourier;
-    if (track == null || track.status != 'arrived') return;
+    if (track == null) return;
+    final searching = customerIsSearchingBiker(track);
+    if (!searching && track.status != 'arrived') return;
     try {
       final list = await _ordersRepo.fetchOrders();
       final updated = list.where((o) => o.id == track.id).firstOrNull;
       if (updated == null || !mounted) return;
-      if (updated.status == track.status) return;
+      final hadRider = customerOrderHasActiveRider(track);
+      final hasRiderNow = customerOrderHasActiveRider(updated);
+      if (updated.status == track.status &&
+          updated.riderId == track.riderId &&
+          !searching) {
+        return;
+      }
+      if (searching && !hasRiderNow) return;
       final prevStatus = track.status;
-      _replaceOrder(updated);
-      if (updated.status == 'delivered' && prevStatus != 'delivered') {
+      _onOrderUpdated(updated);
+      if (hasRiderNow && !hadRider) {
+        if (customerOrderHasShopPickup(updated)) {
+          _snack(
+            'Rider found — heading to ${customerShopLabel(updated)} to collect your order',
+            success: true,
+          );
+        } else {
+          _snack('Biker found — they\'re on the way', success: true);
+        }
+      } else if (updated.status == 'delivered' && prevStatus != 'delivered') {
         _noteDeliveryCompleted(updated);
         _snack('Delivered — thanks for using BytzGO!', success: true);
       }
@@ -700,9 +724,9 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
 
     socket.onOrderUpdated = (raw) {
       if (!mounted) return;
-      final order = raw.normalizedForCustomerTrip();
-      final prev = _orders.where((o) => o.id == order.id).firstOrNull;
-      if (!_shouldAcceptOrderUpdate(order, prev)) return;
+      final prev = _orders.where((o) => o.id == raw.id).firstOrNull;
+      if (!_shouldAcceptOrderUpdate(raw.normalizedForCustomerTrip(), prev)) return;
+      final order = _prepareIncomingOrder(raw);
       setState(() {
         final i = _orders.indexWhere((o) => o.id == order.id);
         if (i >= 0) {
@@ -812,7 +836,12 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
     };
     socket.onLocationUpdated = (riderId, lat, lng) {
       final active = _activeCourier;
-      if (active?.riderId != riderId) return;
+      if (active == null) return;
+      if (customerIsSearchingBiker(active)) {
+        unawaited(_pollOrderStatusOnce());
+        return;
+      }
+      if (active.riderId != riderId) return;
       if (!mounted) return;
       setState(() {
         _riderPosition = LocationPoint(
@@ -822,7 +851,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
         );
       });
       _mapKey.currentState?.fitAllMarkers();
-      if (active != null) unawaited(_refreshEta(active));
+      unawaited(_refreshEta(active));
     };
   }
 
@@ -1015,10 +1044,16 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
     _trackingDropoffLabel = null;
   }
 
+  Order _prepareIncomingOrder(Order raw) {
+    final prev = _orders.where((o) => o.id == raw.id).firstOrNull;
+    final merged = prev == null ? raw.normalizedForCustomerTrip() : raw.mergeWithPrevious(prev);
+    return merged.normalizedForCustomerTrip();
+  }
+
   void _replaceOrder(Order raw) {
-    final order = raw.normalizedForCustomerTrip();
-    final prev = _orders.where((o) => o.id == order.id).firstOrNull;
-    if (!_shouldAcceptOrderUpdate(order, prev)) return;
+    final prev = _orders.where((o) => o.id == raw.id).firstOrNull;
+    if (!_shouldAcceptOrderUpdate(raw.normalizedForCustomerTrip(), prev)) return;
+    final order = _prepareIncomingOrder(raw);
     setState(() {
       final i = _orders.indexWhere((o) => o.id == order.id);
       if (i >= 0) {
@@ -1477,6 +1512,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
     final fee = _deliveryFee;
     final searching = trip != null &&
         !tripComplete &&
+        !customerOrderHasActiveRider(trip) &&
         customerIsSearchingBiker(trip);
     final hasRider =
         trip != null && !tripComplete && customerOrderHasActiveRider(trip);

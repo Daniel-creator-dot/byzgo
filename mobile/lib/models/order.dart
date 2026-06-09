@@ -212,6 +212,131 @@ class Order {
     return withoutAssignedRider();
   }
 
+  static int _tripStatusRank(String value) {
+    switch (value) {
+      case 'pending':
+        return 0;
+      case 'preparing':
+        return 1;
+      case 'ready':
+        return 2;
+      case 'picked_up':
+        return 3;
+      case 'arrived':
+        return 4;
+      case 'delivered':
+        return 5;
+      case 'cancelled':
+        return -2;
+      default:
+        return 0;
+    }
+  }
+
+  static bool _hasAssignedRiderId(String? id) =>
+      id != null && id.trim().isNotEmpty;
+
+  /// Keep rider assignment and forward trip status when a stale socket payload
+  /// arrives without the assigned biker.
+  Order mergeWithPrevious(Order prev) {
+    if (prev.id != id) return normalizedForCustomerTrip();
+    var next = normalizedForCustomerTrip();
+    if (prev.status == 'cancelled' && next.status != 'cancelled') return prev;
+
+    final prevHasRider = _hasAssignedRiderId(prev.riderId);
+    final nextHasRider = _hasAssignedRiderId(next.riderId);
+    var riderId = next.riderId;
+    var riderName = next.riderName;
+    var riderPhone = next.riderPhone;
+    var riderAvatarUrl = next.riderAvatarUrl;
+    var riderAvgRating = next.riderAvgRating;
+    var riderRatingCount = next.riderRatingCount;
+    var riderTier = next.riderTier;
+    var status = next.status;
+
+    if (prevHasRider &&
+        !nextHasRider &&
+        !next.isCancelled &&
+        next.status != 'delivered') {
+      riderId = prev.riderId;
+      riderName = next.riderName ?? prev.riderName;
+      riderPhone = next.riderPhone ?? prev.riderPhone;
+      riderAvatarUrl = next.riderAvatarUrl ?? prev.riderAvatarUrl;
+      riderAvgRating = next.riderAvgRating ?? prev.riderAvgRating;
+      riderRatingCount = next.riderRatingCount ?? prev.riderRatingCount;
+      riderTier = next.riderTier ?? prev.riderTier;
+    }
+
+    if (_tripStatusRank(prev.status) > _tripStatusRank(status) &&
+        !next.isCancelled) {
+      status = prev.status;
+      if (prevHasRider && !nextHasRider) {
+        riderId = prev.riderId;
+        riderName = prev.riderName ?? riderName;
+        riderPhone = prev.riderPhone ?? riderPhone;
+        riderAvatarUrl = prev.riderAvatarUrl ?? riderAvatarUrl;
+        riderAvgRating = prev.riderAvgRating ?? riderAvgRating;
+        riderRatingCount = prev.riderRatingCount ?? riderRatingCount;
+        riderTier = prev.riderTier ?? riderTier;
+      }
+    }
+
+    if (riderId == next.riderId &&
+        riderName == next.riderName &&
+        riderPhone == next.riderPhone &&
+        riderAvatarUrl == next.riderAvatarUrl &&
+        riderAvgRating == next.riderAvgRating &&
+        riderRatingCount == next.riderRatingCount &&
+        riderTier == next.riderTier &&
+        status == next.status) {
+      return next;
+    }
+
+    return Order(
+      id: next.id,
+      customerId: next.customerId,
+      customerName: next.customerName,
+      items: next.items,
+      total: next.total,
+      status: status,
+      createdAt: next.createdAt,
+      address: next.address,
+      vendorId: next.vendorId,
+      pickup: next.pickup,
+      pickupAddress: next.pickupAddress,
+      orderType: next.orderType,
+      lat: next.lat,
+      lng: next.lng,
+      pickupLat: next.pickupLat,
+      pickupLng: next.pickupLng,
+      deliveryFee: next.deliveryFee,
+      expiresAt: next.expiresAt,
+      dispatchWave: next.dispatchWave,
+      offerDistanceKm: next.offerDistanceKm,
+      paymentStatus: next.paymentStatus,
+      paymentMethod: next.paymentMethod,
+      customerPaymentAck: next.customerPaymentAck,
+      deliveryCode: next.deliveryCode,
+      rating: next.rating,
+      customerPhone: next.customerPhone,
+      customerAvatarUrl: next.customerAvatarUrl,
+      customerAvgRating: next.customerAvgRating,
+      riderId: riderId,
+      riderPhone: riderPhone,
+      riderName: riderName,
+      riderAvatarUrl: riderAvatarUrl,
+      riderAvgRating: riderAvgRating,
+      riderRatingCount: riderRatingCount,
+      riderTier: riderTier,
+      vendorName: next.vendorName,
+      pulseGuideLat: next.pulseGuideLat,
+      pulseGuideLng: next.pulseGuideLng,
+      pulseGuideAt: next.pulseGuideAt,
+      pulseGuidePhase: next.pulseGuidePhase,
+      pulseGuideActive: next.pulseGuideActive,
+    );
+  }
+
 
 
   factory Order.fromJson(Map<String, dynamic> json) {
