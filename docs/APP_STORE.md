@@ -6,7 +6,7 @@
 |--------|--------|
 | App name | BytzGo |
 | Bundle ID | `com.bytzgo.bytzgoMobile` |
-| Version | From `mobile/pubspec.yaml` (e.g. `1.0.43+51` → marketing **1.0.43**, build **51**) |
+| Version | From `mobile/pubspec.yaml` (current **1.0.45+54** → marketing **1.0.45**, build **54**) |
 
 ## One-time Mac setup
 
@@ -59,6 +59,10 @@ cd mobile
 ```
 
 Requires the same Apple ID in Xcode (automatic signing). Output: `build/ios/ipa/*.ipa` — upload with **Transporter** or Organizer.
+
+## What's New (App Store Connect — v1.0.45)
+
+Copy from `mobile/app_store_whats_new_1.0.45.txt` when submitting build **54**.
 
 ## Pre-submit checklist
 

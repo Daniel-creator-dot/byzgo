@@ -42,7 +42,7 @@ const versionJson = JSON.stringify(
     updated_at: new Date().toISOString(),
     size_bytes: fs.statSync(destPublic).size,
     install_note:
-      'Uninstall any older BytzGo app first, then install this APK. If Google sign-in fails, use phone or email login.',
+      'Uninstall any older BytzGo app first, then install this APK. Includes schedule delivery, stuck PIN fix, and rider commission. If Google sign-in fails, use phone or email login.',
   },
   null,
   2

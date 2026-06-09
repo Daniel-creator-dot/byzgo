@@ -1,0 +1,10 @@
+What's New in BytzGo 1.0.45
+
+• Sign in with Apple on iPhone and iPad
+• Schedule deliveries for a later date and time
+• Book another delivery while tracking an active trip
+• Confirm "I received my package" if a delivery PIN gets stuck
+• Rider commission wallet — pay MoMo/card commission from the app
+• Guest browsing — explore shops before signing in
+• Improved location permission messaging for App Store compliance
+• Bug fixes and performance improvements
