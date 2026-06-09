@@ -83,6 +83,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
   double _pricePerKm = defaultDeliveryPricePerKm;
   DeliveryPricingConfig? _pricingConfig;
   Session? _watchedSession;
+  String? _focusedTripId;
   double? _quotedFee;
   double? _quoteDistanceKm;
   bool _surgeActive = false;
@@ -249,6 +250,15 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
   Order? get _rideTabTrip {
     final userId = _session.user?.id;
     if (userId == null) return null;
+    if (_focusedTripId != null) {
+      for (final o in _orders) {
+        if (o.id == _focusedTripId &&
+            _isRideTabTrip(o, userId) &&
+            o.status != 'cancelled') {
+          return o;
+        }
+      }
+    }
     final active = _activeCourier;
     if (active != null) return active;
     return _newestRideTabOrder(
@@ -262,6 +272,20 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
 
   /// After marketplace checkout — show trip on map and in lists.
   void noteOrder(Order order) => _replaceOrder(order);
+
+  /// Open a specific trip from Activity (live, scheduled, or recent history).
+  void focusOrder(Order order) {
+    setState(() => _focusedTripId = order.id);
+    _replaceOrder(order);
+    final trip = _rideTabTrip;
+    if (trip != null) {
+      unawaited(_resolveTrackingLabels(trip));
+      _syncEtaPoll(trip);
+      _syncRiderLocationPoll(trip);
+      _syncOrderStatusPoll();
+      _syncNearbyPoll();
+    }
+  }
 
   void applyShopPickup(LocationPoint pickup) {
     final label = displayLocationLabel(pickup.address, pickup.lat, pickup.lng);

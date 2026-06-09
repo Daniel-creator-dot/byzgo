@@ -111,6 +111,27 @@ bool customerCanConfirmReceived(Order order) {
   return order.status == 'arrived' && !customerNeedsPayment(order);
 }
 
+/// Trips that are actively moving or waiting for a rider (shown under Live trips).
+bool customerIsLiveTrackableTrip(Order order) {
+  if (['delivered', 'cancelled', 'scheduled'].contains(order.status)) return false;
+  return customerTripBlocksNewBooking(order);
+}
+
+/// Label for activity/history lists — never blank.
+String customerTripDisplayRoute(Order order) {
+  final drop = order.address.trim();
+  if (customerOrderHasShopPickup(order)) {
+    final shop = customerShopLabel(order);
+    return drop.isNotEmpty ? '$shop → $drop' : shop;
+  }
+  final pickup = order.pickupAddress?.trim() ?? order.pickup?.trim() ?? '';
+  if (pickup.isNotEmpty && drop.isNotEmpty) return '$pickup → $drop';
+  if (drop.isNotEmpty) return drop;
+  if (pickup.isNotEmpty) return pickup;
+  final shortId = order.id.length > 6 ? order.id.substring(order.id.length - 6) : order.id;
+  return 'Trip #$shortId';
+}
+
 String customerTripHeadline(Order order) {
   final shop = customerOrderHasShopPickup(order);
   switch (order.status) {

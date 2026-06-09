@@ -149,7 +149,10 @@ class _CustomerShellState extends State<CustomerShell> {
                     )
                   : CustomerActivityTab(
                       key: _activityKey,
-                      onTrackOrder: () => _goTab(CustomerTab.courier),
+                      onTrackOrder: (order) {
+                        _homeKey.currentState?.focusOrder(order);
+                        _goTab(CustomerTab.courier);
+                      },
                     ),
               isGuest
                   ? const GuestSignInPrompt(
