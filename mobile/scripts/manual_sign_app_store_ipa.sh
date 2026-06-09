@@ -19,6 +19,9 @@ pod_cmd() {
     export GEM_HOME="$MOBILE_ROOT/ios/vendor/bundle/ruby/2.6.0"
     export GEM_PATH="$GEM_HOME"
     export PATH="$GEM_HOME/bin:$PATH"
+    POD_BIN="$vendor_pod"
+  else
+    POD_BIN="pod"
   fi
 }
 
@@ -32,7 +35,8 @@ flutter_cmd() {
 
 pod_cmd
 FLUTTER="$(flutter_cmd)"
-rm -rf "$MOBILE_ROOT/ios/Flutter/ephemeral/Packages"
+export PATH="$MOBILE_ROOT/ios/vendor/bundle/ruby/2.6.0/bin:${PATH:-}"
+(cd "$MOBILE_ROOT/ios" && "$POD_BIN" install)
 (cd "$MOBILE_ROOT/ios" && xcodebuild -resolvePackageDependencies -workspace Runner.xcworkspace -scheme Runner >/dev/null)
 "$FLUTTER" build ios --release --no-codesign --dart-define-from-file="$MOBILE_ROOT/dart_defines.json"
 
@@ -43,7 +47,17 @@ cp "$PROFILE_SRC" "$APP/embedded.mobileprovision"
 
 # Entitlements must match the provisioning profile (incl. application-identifier).
 security cms -D -i "$PROFILE_SRC" | plutil -extract Entitlements xml1 -o "$ENT_TMP" -
-cp "$ENT_TMP" "$ENT"
+if ! plutil -extract com.apple.developer.applesignin xml1 "$ENT_TMP" >/dev/null 2>&1; then
+  echo "WARNING: Store profile lacks Sign in with Apple."
+  echo "  1. developer.apple.com → Identifiers → com.bytzgo.bytzgoMobile → enable Sign In with Apple → Save"
+  echo "  2. Profiles → App Store profile → Edit → Save (regenerate) → Xcode downloads it"
+  echo "  3. Re-run this script. IPA may fail App Review for Apple login until then."
+fi
+# Prefer Runner.Release.entitlements when profile already includes the same keys.
+if plutil -extract com.apple.developer.applesignin xml1 "$ENT" >/dev/null 2>&1 \
+   && plutil -extract com.apple.developer.applesignin xml1 "$ENT_TMP" >/dev/null 2>&1; then
+  cp "$ENT" "$ENT_TMP"
+fi
 
 sign_item() {
   local target="$1"

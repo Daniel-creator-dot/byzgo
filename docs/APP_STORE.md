@@ -14,8 +14,9 @@
 2. In Firebase Console (project **bytzgo-9bd89**), register an **iOS app** with bundle ID **`com.bytzgo.bytzgoMobile`**.
 3. Download **GoogleService-Info.plist** → replace `mobile/ios/Runner/GoogleService-Info.plist`.
 4. Enable **Maps SDK for iOS** and **Push Notifications** in Google Cloud / Firebase.
-5. In Apple Developer: create App ID, enable Push Notifications, create distribution certificate & provisioning profile.
-6. In Xcode → **Runner** target → **Signing & Capabilities**: select your **Team**.
+5. In Apple Developer: create App ID, enable **Push Notifications** and **Sign in with Apple**, create distribution certificate & App Store provisioning profile.
+6. In Xcode → **Runner** target → **Signing & Capabilities**: select your **Team**, add **Sign in with Apple** if missing.
+7. After enabling Sign in with Apple on the App ID, **regenerate** the App Store profile (Xcode → Settings → Accounts → Download Manual Profiles, or Developer portal → Profiles → Edit → Save).
 
 ## Maps API key (required for map)
 
