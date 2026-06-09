@@ -199,8 +199,18 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    PushNotificationService.instance.onIncomingRidePush = (_) {
-      if (_isOnline && mounted) _refreshAll(silent: true);
+    PushNotificationService.instance.onIncomingRidePush = (data) {
+      if (!_isOnline || !mounted) return;
+      final orderId = data['orderId']?.trim() ?? '';
+      unawaited(_refreshAll(silent: true).then((_) {
+        if (!mounted || !_isOnline) return;
+        Order? order;
+        if (orderId.isNotEmpty) {
+          order = _orders.where((o) => o.id == orderId).firstOrNull;
+        }
+        order ??= _orders.where(isOfferableOrder).firstOrNull;
+        if (order != null) _presentIncoming(order);
+      }));
     };
     _isOnline = _user.isOnline == true;
     _profilePhone.text = _user.phone ?? '';

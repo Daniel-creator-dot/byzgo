@@ -2499,61 +2499,73 @@ async function sendPushToUserIds(userIds: string[], alert: PushAlert) {
 
   try {
     const fcmRes = await pool.query(
-      `SELECT token FROM fcm_tokens WHERE user_id = ANY($1::uuid[])`,
+      `SELECT token, platform FROM fcm_tokens WHERE user_id = ANY($1::uuid[])`,
       [ids]
     );
-    const tokens = fcmRes.rows.map((r: { token: string }) => r.token).filter(Boolean);
-    if (!tokens.length) return;
+    const rows = fcmRes.rows.filter((r: { token: string }) => r.token);
+    if (!rows.length) return;
 
     const incomingRide = high && alert.type === 'incoming-ride';
-    await admin.messaging().sendEachForMulticast({
-      tokens,
-      // Incoming jobs: data-only on Android so Flutter shows one local alarm (no system + local duplicate).
-      ...(incomingRide
-        ? {}
-        : {
-            notification: {
-              title: alert.title,
-              body: alert.body,
-            },
-          }),
-      data: {
-        type: alert.type,
-        orderId: String(alert.orderId ?? ''),
-        title: alert.title,
-        body: alert.body,
-        ...(incomingRide ? { audience: 'rider' } : {}),
-      },
-      android: {
-        priority: high ? 'high' : 'normal',
-        ttl: high ? 30 * 1000 : 3600 * 1000,
-        ...(incomingRide
-          ? {}
-          : {
+    const dataPayload = {
+      type: alert.type,
+      orderId: String(alert.orderId ?? ''),
+      title: alert.title,
+      body: alert.body,
+      ...(incomingRide ? { audience: 'rider' } : {}),
+    };
+
+    const messages = rows.map((row: { token: string; platform?: string }) => {
+      const platform = String(row.platform || 'android').toLowerCase();
+      const isIos = platform === 'ios' || platform === 'macos';
+      // Android incoming jobs: data-only (Flutter shows one loud local alarm).
+      // iOS incoming jobs: include notification + time-sensitive APNs (Bolt/Uber-style).
+      const includeNotification = !incomingRide || isIos;
+      return {
+        token: row.token,
+        ...(includeNotification
+          ? {
               notification: {
-                channelId,
-                sound: 'default',
-                priority: high ? ('max' as const) : ('default' as const),
-                visibility: 'public',
-                defaultVibrateTimings: true,
-                ...(high && alert.orderId ? { tag: `ride-${alert.orderId}` } : {}),
+                title: alert.title,
+                body: alert.body,
               },
-            }),
-      },
-      apns: {
-        headers: {
-          'apns-priority': high ? '10' : '5',
-          'apns-push-type': 'alert',
+            }
+          : {}),
+        data: dataPayload,
+        android: {
+          priority: high ? 'high' : 'normal',
+          ttl: high ? 30 * 1000 : 3600 * 1000,
+          ...(incomingRide
+            ? {}
+            : {
+                notification: {
+                  channelId,
+                  sound: 'default',
+                  priority: high ? ('max' as const) : ('default' as const),
+                  visibility: 'public',
+                  defaultVibrateTimings: true,
+                  ...(high && alert.orderId ? { tag: `ride-${alert.orderId}` } : {}),
+                },
+              }),
         },
-        payload: {
-          aps: {
-            alert: { title: alert.title, body: alert.body },
-            sound: 'default',
-            contentAvailable: true,
+        apns: {
+          headers: {
+            'apns-priority': high ? '10' : '5',
+            'apns-push-type': high ? 'alert' : 'background',
+          },
+          payload: {
+            aps: {
+              alert: { title: alert.title, body: alert.body },
+              sound: incomingRide ? 'default' : 'default',
+              badge: incomingRide ? 1 : undefined,
+              'interruption-level': incomingRide ? 'time-sensitive' : 'active',
+              contentAvailable: true,
+            },
           },
         },
-      },
+      };
     });
+
+    await admin.messaging().sendEach(messages);
   } catch (err) {
     console.warn('[push] FCM send failed:', err);
   }

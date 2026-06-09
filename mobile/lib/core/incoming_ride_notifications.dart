@@ -57,6 +57,28 @@ NotificationDetails platformTripNotificationDetails({
   );
 }
 
+NotificationDetails incomingRideNotificationDetails({
+  bool fullScreen = true,
+  bool ongoing = true,
+  /// When the in-app [IncomingRideRing] is playing, keep this false to avoid double audio.
+  bool playSound = false,
+}) {
+  return NotificationDetails(
+    android: incomingRideAndroidDetails(
+      fullScreen: fullScreen,
+      ongoing: ongoing,
+      playSound: playSound,
+    ),
+    iOS: DarwinNotificationDetails(
+      presentAlert: true,
+      presentBadge: true,
+      presentSound: playSound,
+      interruptionLevel: InterruptionLevel.timeSensitive,
+      threadIdentifier: 'incoming_rides_alarm',
+    ),
+  );
+}
+
 AndroidNotificationDetails incomingRideAndroidDetails({
   bool fullScreen = true,
   bool ongoing = true,

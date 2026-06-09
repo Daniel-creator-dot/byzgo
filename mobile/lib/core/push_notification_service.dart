@@ -79,6 +79,13 @@ class PushNotificationService {
       await android?.requestNotificationsPermission();
       await android?.requestFullScreenIntentPermission();
     }
+    if (!kIsWeb &&
+        (defaultTargetPlatform == TargetPlatform.iOS ||
+            defaultTargetPlatform == TargetPlatform.macOS)) {
+      final ios = _local.resolvePlatformSpecificImplementation<
+          IOSFlutterLocalNotificationsPlugin>();
+      await ios?.requestPermissions(alert: true, badge: true, sound: true);
+    }
 
     if (!DefaultFirebaseOptions.isConfigured) {
       debugPrint(
@@ -160,9 +167,7 @@ class PushNotificationService {
       incomingRideNotificationId(orderId),
       title,
       body,
-      NotificationDetails(
-        android: incomingRideAndroidDetails(playSound: playSound),
-      ),
+      incomingRideNotificationDetails(playSound: playSound),
       payload: jsonEncode({'type': 'incoming-ride', 'orderId': orderId}),
     );
   }
@@ -224,9 +229,20 @@ class PushNotificationService {
     final type = data['type']?.toString() ?? '';
     if (type == 'incoming-ride') {
       if (!acceptsIncomingRideJobs) return;
-      onIncomingRidePush?.call({
+      final payload = {
         for (final e in data.entries) e.key: e.value?.toString() ?? '',
-      });
+      };
+      onIncomingRidePush?.call(payload);
+      // Socket may be suspended; still surface alert + refresh offers.
+      final orderId = data['orderId']?.toString() ?? '';
+      if (orderId.isNotEmpty) {
+        unawaited(showIncomingRide(
+          orderId: orderId,
+          title: data['title']?.toString() ?? 'New delivery job',
+          body: data['body']?.toString() ?? 'Open BytzGo to accept',
+          playSound: true,
+        ));
+      }
       return;
     }
     if (type == 'trip-message') {
@@ -271,7 +287,12 @@ class PushNotificationService {
 
     if (isRide && orderId.isNotEmpty) {
       if (acceptsIncomingRideJobs) {
-        await showIncomingRide(orderId: orderId, title: title, body: body);
+        await showIncomingRide(
+          orderId: orderId,
+          title: title,
+          body: body,
+          playSound: true,
+        );
       }
       return;
     }

@@ -1,5 +1,7 @@
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
@@ -20,6 +22,12 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   final type = message.data['type']?.toString() ?? '';
   final isRide = type == 'incoming-ride';
   if (isRide && !await PushSessionContext.isRider()) {
+    return;
+  }
+  // iOS: FCM/APNs already shows the incoming-job banner + sound.
+  if (isRide &&
+      !kIsWeb &&
+      defaultTargetPlatform == TargetPlatform.iOS) {
     return;
   }
   final orderId = message.data['orderId']?.toString() ?? '';
@@ -47,6 +55,9 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
   final android = plugin.resolvePlatformSpecificImplementation<
       AndroidFlutterLocalNotificationsPlugin>();
+  final ios = plugin.resolvePlatformSpecificImplementation<
+      IOSFlutterLocalNotificationsPlugin>();
+  await ios?.requestPermissions(alert: true, badge: true, sound: true);
   await android?.createNotificationChannel(kIncomingRideChannel);
   await android?.createNotificationChannel(kTripChannel);
   await android?.createNotificationChannel(kSupportChannel);
@@ -61,10 +72,10 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     notifId,
     title,
     body,
-    NotificationDetails(
-      android: isRide
-          ? incomingRideAndroidDetails(playSound: true)
-          : AndroidNotificationDetails(
+    isRide
+        ? incomingRideNotificationDetails(playSound: true)
+        : NotificationDetails(
+            android: AndroidNotificationDetails(
               channel.id,
               channel.name,
               channelDescription: channel.description,
@@ -72,6 +83,11 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
               priority: Priority.high,
               visibility: NotificationVisibility.public,
             ),
-    ),
+            iOS: const DarwinNotificationDetails(
+              presentAlert: true,
+              presentBadge: true,
+              presentSound: true,
+            ),
+          ),
   );
 }
