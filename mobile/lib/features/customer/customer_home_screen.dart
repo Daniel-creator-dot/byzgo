@@ -211,6 +211,20 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
         (o.pickup != null && o.pickup!.trim().isNotEmpty);
   }
 
+  bool _isTerminalRideTrip(Order order) {
+    if (order.status == 'cancelled') return true;
+    if (order.status == 'delivered' && (order.rating ?? 0) >= 1) return true;
+    return false;
+  }
+
+  bool _rideTabTripVisible(Order o, String userId) {
+    if (!_isRideTabTrip(o, userId)) return false;
+    if (o.status == 'cancelled') return false;
+    if (o.status == 'delivered') return (o.rating ?? 0) < 1;
+    if (o.status == 'scheduled') return false;
+    return true;
+  }
+
   Order? _newestRideTabOrder(
     Iterable<Order> source, {
     required bool Function(Order o) include,
@@ -252,9 +266,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
     if (userId == null) return null;
     if (_focusedTripId != null) {
       for (final o in _orders) {
-        if (o.id == _focusedTripId &&
-            _isRideTabTrip(o, userId) &&
-            o.status != 'cancelled') {
+        if (o.id == _focusedTripId && _rideTabTripVisible(o, userId)) {
           return o;
         }
       }
@@ -263,10 +275,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
     if (active != null) return active;
     return _newestRideTabOrder(
       _orders,
-      include: (o) =>
-          _isRideTabTrip(o, userId) &&
-          o.status == 'delivered' &&
-          (o.rating ?? 0) < 1,
+      include: (o) => _rideTabTripVisible(o, userId) && o.status == 'delivered',
     );
   }
 
@@ -732,6 +741,9 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
       if (_activeCourier?.id == order.id) {
         unawaited(_resolveTrackingLabels(order));
       }
+      if (order.customerId == _session.user?.id && _isTerminalRideTrip(order)) {
+        _dismissRideTabTrip(order.id);
+      }
     };
     socket.onWalletUpdated = (balance) {
       if (!mounted) return;
@@ -949,6 +961,45 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
       _riderLocationPoll?.cancel();
       _riderLocationPoll = null;
       _snack('Delivery request cancelled', success: true);
+    }
+  }
+
+  void _dismissRideTabTrip(String orderId) {
+    if (!mounted) return;
+    setState(() {
+      if (_focusedTripId == orderId) _focusedTripId = null;
+      _riderPosition = null;
+      _nearbyRiderRecords = [];
+      _etaPhrase = null;
+      _etaMinutes = null;
+      _etaDistanceText = null;
+      _etaExpiresAt = null;
+      _searchPickupMinutes = null;
+      _searchPickupPhrase = null;
+      _searchPickupExpiresAt = null;
+      _routePoints = [];
+      _lastEtaFetch = null;
+      _lastEtaOrigin = null;
+      _trackingPickupLabel = null;
+      _trackingDropoffLabel = null;
+    });
+    _nearbyPoll?.cancel();
+    _nearbyPoll = null;
+    _etaPoll?.cancel();
+    _etaPoll = null;
+    _riderLocationPoll?.cancel();
+    _riderLocationPoll = null;
+    _orderStatusPoll?.cancel();
+    _orderStatusPoll = null;
+    if (_sheetScrollCtrl.hasClients) {
+      _sheetScrollCtrl.jumpTo(0);
+    }
+  }
+
+  void _onOrderUpdated(Order order) {
+    _replaceOrder(order);
+    if (_isTerminalRideTrip(order)) {
+      _dismissRideTabTrip(order.id);
     }
   }
 
@@ -1342,6 +1393,10 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
     final Order? trip = _rideTabTrip;
     final tracking = trip != null;
     final tripComplete = trip?.status == 'delivered';
+    final awaitingRating =
+        tripComplete && trip != null && (trip.rating ?? 0) < 1;
+    final activeTracking = tracking && !tripComplete;
+    final showBookingForm = !tracking || !awaitingRating;
     final fee = _deliveryFee;
     final searching = trip != null &&
         !tripComplete &&
@@ -1386,7 +1441,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
         mapPickMode: _pickMode,
         onMapTap: tracking ? null : _onMapTap,
       ),
-      floatingMapChild: tracking
+      floatingMapChild: activeTracking
           ? LiveTripMapHud(
               order: trip,
               searching: searching,
@@ -1403,20 +1458,27 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
           : null,
       sheet: RideSheet(
         scrollController: _sheetScrollCtrl,
-        collapsible: tracking,
+        collapsible: activeTracking,
         collapsedHeight: 234,
         initiallyExpanded: trip != null &&
-            (trip.status == 'arrived' || trip.status == 'delivered'),
+            (trip.status == 'arrived' || awaitingRating),
         maxHeightFraction: tracking
-            ? (tripComplete
-                ? customerTrackingSheetFraction(trip, embedded: widget.embedded)
-                : (widget.embedded ? 0.72 : 0.8))
+            ? (awaitingRating
+                ? (widget.embedded ? 0.52 : 0.56)
+                : activeTracking
+                    ? (widget.embedded ? 0.72 : 0.8)
+                    : customerTrackingSheetFraction(
+                        trip,
+                        embedded: widget.embedded,
+                      ))
             : (widget.embedded ? (fee > 0 ? 0.64 : 0.58) : (fee > 0 ? 0.78 : 0.72)),
         bottomInset: widget.embedded ? 12 : 0,
         padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
         footerPadding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
-        scrollBottomPadding: !tracking && fee > 0 ? 12 : 0,
-        footer: Column(
+        scrollBottomPadding: showBookingForm && fee > 0 ? 12 : 0,
+        footer: tracking
+            ? null
+            : Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -1466,7 +1528,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
             if (tracking) ...[
               CustomerDeliveryTracker(
                 order: trip,
-                onOrderUpdated: _replaceOrder,
+                onOrderUpdated: _onOrderUpdated,
                 etaPhrase: searching ? _searchPickupPhrase : _etaPhrase,
                 etaMinutes: searching ? _searchPickupMinutes : _etaMinutes,
                 etaDistanceText: _etaDistanceText,
@@ -1480,8 +1542,8 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
                 nearbyCount: _nearbyRiderRecords.length,
               ),
             ],
-            ...[
-              if (tracking) ...[
+            if (showBookingForm) ...[
+              if (activeTracking) ...[
                 const SizedBox(height: 12),
                 Text(
                   'Book another delivery',
