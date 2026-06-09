@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_web_auth_2/flutter_web_auth_2.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'package:sign_in_with_apple/sign_in_with_apple.dart';
 
 import '../../core/api_client.dart';
 import '../../core/env.dart';
@@ -203,6 +204,48 @@ class AuthRepository {
         data: {'credential': idToken, 'role': role.name},
       );
       return _parseAuthResponse(res.data);
+    } on DioException catch (e) {
+      throw Exception(AuthRepository.errorMessage(e));
+    }
+  }
+
+  Future<AuthResult> signInWithApple({AppRole role = AppRole.customer}) async {
+    if (defaultTargetPlatform != TargetPlatform.iOS) {
+      throw Exception('Sign in with Apple is only available on iOS.');
+    }
+
+    try {
+      final credential = await SignInWithApple.getAppleIDCredential(
+        scopes: [
+          AppleIDAuthorizationScopes.email,
+          AppleIDAuthorizationScopes.fullName,
+        ],
+      );
+      final idToken = credential.identityToken;
+      if (idToken == null || idToken.isEmpty) {
+        throw Exception('No Apple identity token');
+      }
+
+      final given = credential.givenName?.trim();
+      final family = credential.familyName?.trim();
+      final fullName = [given, family].whereType<String>().where((s) => s.isNotEmpty).join(' ');
+
+      final res = await _api.dio.post<Map<String, dynamic>>(
+        '/api/auth/apple',
+        data: {
+          'credential': idToken,
+          'role': role.name,
+          if (credential.email != null && credential.email!.isNotEmpty)
+            'email': credential.email,
+          if (fullName.isNotEmpty) 'name': fullName,
+        },
+      );
+      return _parseAuthResponse(res.data);
+    } on SignInWithAppleAuthorizationException catch (e) {
+      if (e.code == AuthorizationErrorCode.canceled) {
+        throw Exception('Apple sign-in cancelled');
+      }
+      throw Exception('Apple sign-in failed');
     } on DioException catch (e) {
       throw Exception(AuthRepository.errorMessage(e));
     }

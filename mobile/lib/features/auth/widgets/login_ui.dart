@@ -348,6 +348,61 @@ class AuthOrDivider extends StatelessWidget {
   }
 }
 
+class AuthAppleButton extends StatelessWidget {
+  const AuthAppleButton({
+    super.key,
+    required this.onPressed,
+    this.loading = false,
+  });
+
+  final VoidCallback? onPressed;
+  final bool loading;
+
+  @override
+  Widget build(BuildContext context) {
+    return PressableScale(
+      enabled: onPressed != null && !loading,
+      onTap: onPressed,
+      child: Material(
+        color: Colors.black,
+        borderRadius: BorderRadius.circular(14),
+        child: InkWell(
+          onTap: loading ? null : onPressed,
+          borderRadius: BorderRadius.circular(14),
+          child: SizedBox(
+            height: 52,
+            child: loading
+                ? const Center(
+                    child: SizedBox(
+                      height: 22,
+                      width: 22,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    ),
+                  )
+                : Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Icon(Icons.apple, color: Colors.white, size: 22),
+                      const SizedBox(width: 10),
+                      Text(
+                        'Continue with Apple',
+                        style: BytzGoTheme.sheetBody(15).copyWith(
+                          fontWeight: FontWeight.w700,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ],
+                  ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class AuthGoogleButton extends StatelessWidget {
   const AuthGoogleButton({
     super.key,
@@ -493,11 +548,17 @@ class AuthLoginExtras extends StatelessWidget {
     required this.showGoogle,
     this.onGoogle,
     this.googleLoading = false,
+    this.showApple = false,
+    this.onApple,
+    this.appleLoading = false,
   });
 
   final bool showGoogle;
   final VoidCallback? onGoogle;
   final bool googleLoading;
+  final bool showApple;
+  final VoidCallback? onApple;
+  final bool appleLoading;
 
   @override
   Widget build(BuildContext context) {
@@ -505,14 +566,22 @@ class AuthLoginExtras extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
       children: [
-        if (showGoogle) ...[
+        if (showApple || showGoogle) ...[
           const AuthSectionWaveLink(),
           const AuthOrDivider(),
           const SizedBox(height: 14),
-          AuthGoogleButton(
-            onPressed: onGoogle,
-            loading: googleLoading,
-          ),
+          if (showApple) ...[
+            AuthAppleButton(
+              onPressed: onApple,
+              loading: appleLoading,
+            ),
+            if (showGoogle) const SizedBox(height: 10),
+          ],
+          if (showGoogle)
+            AuthGoogleButton(
+              onPressed: onGoogle,
+              loading: googleLoading,
+            ),
         ],
         const SizedBox(height: 16),
         Container(

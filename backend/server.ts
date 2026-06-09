@@ -78,6 +78,41 @@ async function verifyGoogleIdToken(idToken: string) {
   }
 }
 
+const APPLE_JWKS_URL = 'https://appleid.apple.com/auth/keys';
+const APPLE_AUDIENCE = 'com.bytzgo.bytzgoMobile';
+type AppleJwk = { kid?: string; kty?: string; n?: string; e?: string; alg?: string; use?: string };
+
+let appleJwksCache: { keys: AppleJwk[]; fetchedAt: number } | null = null;
+
+async function getAppleJwks(): Promise<AppleJwk[]> {
+  if (appleJwksCache && Date.now() - appleJwksCache.fetchedAt < 3_600_000) {
+    return appleJwksCache.keys;
+  }
+  const res = await axios.get<{ keys: AppleJwk[] }>(APPLE_JWKS_URL);
+  appleJwksCache = { keys: res.data.keys, fetchedAt: Date.now() };
+  return appleJwksCache.keys;
+}
+
+async function verifyAppleIdToken(idToken: string): Promise<jwt.JwtPayload> {
+  const decoded = jwt.decode(idToken, { complete: true });
+  if (!decoded || typeof decoded === 'string' || !decoded.header?.kid) {
+    throw new Error('Invalid Apple token');
+  }
+  const keys = await getAppleJwks();
+  const jwk = keys.find((k) => k.kid === decoded.header.kid);
+  if (!jwk) throw new Error('Apple signing key not found');
+  const pubKey = crypto.createPublicKey({ key: jwk, format: 'jwk' });
+  const payload = jwt.verify(idToken, pubKey, {
+    algorithms: ['RS256'],
+    issuer: 'https://appleid.apple.com',
+    audience: APPLE_AUDIENCE,
+  });
+  if (typeof payload === 'string' || !payload.sub) {
+    throw new Error('Invalid Apple token payload');
+  }
+  return payload;
+}
+
 function resolveFirebaseServiceAccountPath(): string | null {
   const fromEnv = process.env.FIREBASE_SERVICE_ACCOUNT_PATH?.trim();
   if (fromEnv && fs.existsSync(fromEnv)) return fromEnv;
@@ -987,6 +1022,7 @@ const initDb = async () => {
         password TEXT,
         phone TEXT,
         google_id TEXT,
+        apple_id TEXT,
         cover_image TEXT,
         address TEXT,
         lat DOUBLE PRECISION,
@@ -1001,6 +1037,7 @@ const initDb = async () => {
       DO $$ BEGIN
         ALTER TABLE users ADD COLUMN IF NOT EXISTS phone TEXT;
         ALTER TABLE users ADD COLUMN IF NOT EXISTS google_id TEXT;
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS apple_id TEXT;
         ALTER TABLE users ADD COLUMN IF NOT EXISTS cover_image TEXT;
         ALTER TABLE users ADD COLUMN IF NOT EXISTS address TEXT;
         ALTER TABLE users ADD COLUMN IF NOT EXISTS lat DOUBLE PRECISION;
@@ -3222,6 +3259,67 @@ app.post('/api/auth/google', async (req, res) => {
       });
     }
     res.status(401).json({ message: 'Google authentication failed. Try phone or email sign-in.' });
+  }
+});
+
+// Apple Sign-In (iOS)
+app.post('/api/auth/apple', async (req, res) => {
+  const { credential, role, email: clientEmail, name: clientName } = req.body;
+  try {
+    if (!credential || typeof credential !== 'string') {
+      return res.status(400).json({ message: 'Apple identity token required' });
+    }
+
+    const payload = await verifyAppleIdToken(credential);
+    const appleId = payload.sub;
+    const email =
+      (typeof payload.email === 'string' && payload.email.trim()) ||
+      (typeof clientEmail === 'string' && clientEmail.trim()) ||
+      '';
+
+    let result = await pool.query('SELECT * FROM users WHERE apple_id = $1', [appleId]);
+    let user = result.rows[0];
+
+    if (!user && email) {
+      result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+      user = result.rows[0];
+    }
+
+    if (!user) {
+      if (!email) {
+        return res.status(400).json({
+          message:
+            'Apple did not provide an email. Sign in with phone or email first, or revoke BytzGo in Apple ID settings and try again.',
+        });
+      }
+      const newRole = role || 'customer';
+      if (newRole === 'admin') {
+        return res.status(403).json({ message: 'Admin accounts cannot be created via Apple sign-in.' });
+      }
+      const userStatus = (newRole === 'vendor' || newRole === 'rider') ? 'pending' : 'active';
+      const displayName = displayUserName(
+        (typeof clientName === 'string' && clientName.trim()) ||
+          email.split('@')[0],
+        { fallback: 'BytzGo member' },
+      );
+      result = await pool.query(
+        'INSERT INTO users (name, email, apple_id, role, status) VALUES ($1, $2, $3, $4, $5) RETURNING id, name, email, role, balance, phone, status',
+        [displayName, email, appleId, newRole, userStatus],
+      );
+      user = result.rows[0];
+    } else {
+      if (!user.apple_id && appleId) {
+        await pool.query('UPDATE users SET apple_id = $1 WHERE id = $2', [appleId, user.id]);
+      }
+      const { password, ...u } = user;
+      user = u;
+    }
+
+    const token = signAuthToken(user);
+    res.json({ user: await userForAuthResponse(user), token });
+  } catch (err: any) {
+    console.error('Apple auth error:', err);
+    res.status(401).json({ message: 'Apple authentication failed. Try phone or email sign-in.' });
   }
 });
 

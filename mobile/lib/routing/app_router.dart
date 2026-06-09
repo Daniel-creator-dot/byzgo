@@ -12,15 +12,18 @@ import '../shared/widgets/bytz_state_panels.dart';
 
 GoRouter createAppRouter(Session session) {
   return GoRouter(
-    initialLocation: '/login',
+    initialLocation: '/customer',
     refreshListenable: session,
     redirect: (context, state) {
       if (session.isRestoring) return null;
       final loggedIn = session.isAuthenticated;
-      final onLogin = state.matchedLocation == '/login';
+      final loc = state.matchedLocation;
+      final onLogin = loc == '/login';
+      final onCustomer = loc.startsWith('/customer');
 
       if (!loggedIn) {
-        return onLogin ? null : '/login';
+        if (onLogin || onCustomer) return null;
+        return '/customer';
       }
 
       if (onLogin) {

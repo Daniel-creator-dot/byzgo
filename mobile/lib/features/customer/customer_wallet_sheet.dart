@@ -7,10 +7,14 @@ import '../../shared/format.dart';
 import '../../shared/theme.dart';
 import '../../shared/widgets/ride_ui.dart';
 import '../../shared/widgets/sheet_theme_scope.dart';
+import '../auth/auth_gate.dart';
 import '../wallet/paystack_checkout_screen.dart';
 import '../wallet/wallet_repository.dart';
 
 Future<void> showCustomerWalletSheet(BuildContext context) {
+  if (!requireCustomerAuth(context, message: 'Sign in to access your wallet')) {
+    return Future.value();
+  }
   return showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/session.dart';
@@ -14,6 +15,7 @@ import '../../shared/widgets/user_avatar.dart';
 import '../../shared/widgets/bytz_brand.dart';
 import '../../shared/widgets/sheet_theme_scope.dart';
 import '../../shared/widgets/ride_ui.dart';
+import '../auth/auth_gate.dart';
 import 'customer_activity_tab.dart';
 import 'customer_home_screen.dart';
 import 'customer_profile_tab.dart';
@@ -30,19 +32,34 @@ class CustomerShell extends StatefulWidget {
 }
 
 class _CustomerShellState extends State<CustomerShell> {
-  CustomerTab _tab = CustomerTab.courier;
+  CustomerTab? _tab;
   LocationPoint? _shopPickup;
   final _homeKey = GlobalKey<CustomerHomeScreenState>();
   final _activityKey = GlobalKey<CustomerActivityTabState>();
 
+  CustomerTab _initialTab(bool isGuest) =>
+      isGuest ? CustomerTab.shops : CustomerTab.courier;
+
   @override
   void initState() {
     super.initState();
+    final isGuest = !context.read<Session>().isAuthenticated;
+    _tab = _initialTab(isGuest);
     BytzSystemChrome.applyMap();
   }
 
   void _goTab(CustomerTab tab) {
-    final prev = _tab;
+    final isGuest = !context.read<Session>().isAuthenticated;
+    if (isGuest &&
+        (tab == CustomerTab.activity || tab == CustomerTab.profile)) {
+      requireCustomerAuth(
+        context,
+        message: 'Sign in to access ${tab.label.toLowerCase()}',
+      );
+      return;
+    }
+
+    final prev = _tab!;
     setState(() => _tab = tab);
     if (tab == CustomerTab.courier) {
       BytzSystemChrome.applyMap();
@@ -52,6 +69,14 @@ class _CustomerShellState extends State<CustomerShell> {
     if (tab == CustomerTab.activity && prev != CustomerTab.activity) {
       _activityKey.currentState?.reload();
     }
+  }
+
+  void _openWallet() {
+    showCustomerWalletSheet(context);
+  }
+
+  void _openSignIn() {
+    context.push('/login');
   }
 
   void _onShopOrderPlaced(Order order) {
@@ -77,33 +102,38 @@ class _CustomerShellState extends State<CustomerShell> {
 
   @override
   Widget build(BuildContext context) {
-    final user = context.watch<Session>().user!;
-    final firstName = userFirstName(user);
+    final session = context.watch<Session>();
+    final user = session.user;
+    final isGuest = !session.isAuthenticated;
+    final tab = _tab ?? _initialTab(isGuest);
+    final firstName = user != null ? userFirstName(user) : 'Guest';
     final bottomPad = MediaQuery.paddingOf(context).bottom;
 
-    final onMap = _tab == CustomerTab.courier;
+    final onMap = tab == CustomerTab.courier;
     final body = Column(
       children: [
         _CustomerHeader(
-          tab: _tab,
+          tab: tab,
           firstName: firstName,
           user: user,
-          onWallet: () => showCustomerWalletSheet(context),
+          isGuest: isGuest,
+          onWallet: _openWallet,
+          onSignIn: _openSignIn,
           onProfile: () => _goTab(CustomerTab.profile),
           onNotifications: () => _goTab(CustomerTab.activity),
         ),
-        if (!onMap)
-          _walletBanner(user.balance, onTap: () => showCustomerWalletSheet(context)),
+        if (!onMap && !isGuest)
+          _walletBanner(user!.balance, onTap: _openWallet),
         Expanded(
           child: IndexedStack(
-            index: _tab.index,
+            index: tab.index,
             children: [
               CustomerHomeScreen(
                 key: _homeKey,
                 initialPickup: _shopPickup,
                 embedded: true,
                 onOpenShops: () => _goTab(CustomerTab.shops),
-                onOpenWallet: () => showCustomerWalletSheet(context),
+                onOpenWallet: _openWallet,
                 onOpenActivity: () => _goTab(CustomerTab.activity),
                 onOpenProfile: () => _goTab(CustomerTab.profile),
               ),
@@ -111,11 +141,23 @@ class _CustomerShellState extends State<CustomerShell> {
                 onShopPickup: _onShopPickup,
                 onShopOrderPlaced: _onShopOrderPlaced,
               ),
-              CustomerActivityTab(
-                key: _activityKey,
-                onTrackOrder: () => _goTab(CustomerTab.courier),
-              ),
-              const CustomerProfileTab(),
+              isGuest
+                  ? const GuestSignInPrompt(
+                      title: 'Sign in to see your trips',
+                      subtitle:
+                          'Track deliveries and view order history after you sign in.',
+                    )
+                  : CustomerActivityTab(
+                      key: _activityKey,
+                      onTrackOrder: () => _goTab(CustomerTab.courier),
+                    ),
+              isGuest
+                  ? const GuestSignInPrompt(
+                      title: 'Sign in to manage your account',
+                      subtitle:
+                          'Save your profile, wallet, and preferences when you sign in.',
+                    )
+                  : const CustomerProfileTab(),
             ],
           ),
         ),
@@ -150,7 +192,7 @@ class _CustomerShellState extends State<CustomerShell> {
           maxWidth: BytzLayout.contentMaxWidth(context),
           child: Row(
           children: CustomerTab.values.map((t) {
-            final selected = _tab == t;
+            final selected = tab == t;
             return Expanded(
               child: _NavItem(
                 tab: t,
@@ -210,15 +252,19 @@ class _CustomerHeader extends StatelessWidget {
     required this.tab,
     required this.firstName,
     required this.user,
+    required this.isGuest,
     required this.onWallet,
+    required this.onSignIn,
     required this.onProfile,
     required this.onNotifications,
   });
 
   final CustomerTab tab;
   final String firstName;
-  final AuthUser user;
+  final AuthUser? user;
+  final bool isGuest;
   final VoidCallback onWallet;
+  final VoidCallback onSignIn;
   final VoidCallback onProfile;
   final VoidCallback onNotifications;
 
@@ -258,12 +304,16 @@ class _CustomerHeader extends StatelessWidget {
           children: [
             const BytzGoLogo(fontSize: 16),
             const Spacer(),
-            _walletChip(),
-            const SizedBox(width: 6),
-            GestureDetector(
-              onTap: onProfile,
-              child: UserAvatar(user: user, radius: 18),
-            ),
+            if (isGuest)
+              _signInChip()
+            else ...[
+              _walletChip(),
+              const SizedBox(width: 6),
+              GestureDetector(
+                onTap: onProfile,
+                child: UserAvatar(user: user!, radius: 18),
+              ),
+            ],
           ],
         ),
       );
@@ -293,9 +343,9 @@ class _CustomerHeader extends StatelessWidget {
                       color: BytzGoTheme.sheetText,
                     ),
                     children: [
-                      const TextSpan(text: 'Hey, '),
+                      TextSpan(text: isGuest ? 'Browse ' : 'Hey, '),
                       TextSpan(
-                        text: firstName,
+                        text: isGuest ? 'shops' : firstName,
                         style: const TextStyle(color: BytzGoTheme.accentDark),
                       ),
                     ],
@@ -308,23 +358,50 @@ class _CustomerHeader extends StatelessWidget {
               ],
             ),
           ),
-          _HeaderIcon(
-            icon: Icons.notifications_outlined,
-            semanticLabel: 'Trip updates',
-            onTap: onNotifications,
-          ),
-          const SizedBox(width: 6),
-          _walletChip(),
-          const SizedBox(width: 6),
-          GestureDetector(
-            onTap: onProfile,
-            child: UserAvatar(
-              user: user,
-              radius: 22,
-              backgroundColor: BytzGoTheme.brandBlue.withValues(alpha: 0.12),
+          if (!isGuest)
+            _HeaderIcon(
+              icon: Icons.notifications_outlined,
+              semanticLabel: 'Trip updates',
+              onTap: onNotifications,
+            ),
+          if (!isGuest) const SizedBox(width: 6),
+          if (isGuest)
+            _signInChip()
+          else ...[
+            _walletChip(),
+            const SizedBox(width: 6),
+            GestureDetector(
+              onTap: onProfile,
+              child: UserAvatar(
+                user: user!,
+                radius: 22,
+                backgroundColor: BytzGoTheme.brandBlue.withValues(alpha: 0.12),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _signInChip() {
+    return Material(
+      color: BytzGoTheme.brandBlue.withValues(alpha: 0.12),
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        onTap: onSignIn,
+        borderRadius: BorderRadius.circular(14),
+        child: const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          child: Text(
+            'Sign in',
+            style: TextStyle(
+              fontWeight: FontWeight.w800,
+              fontSize: 13,
+              color: BytzGoTheme.brandBlue,
             ),
           ),
-        ],
+        ),
       ),
     );
   }
@@ -348,7 +425,7 @@ class _CustomerHeader extends StatelessWidget {
               ),
               const SizedBox(width: 6),
               Text(
-                formatCedisCompact(user.balance),
+                formatCedisCompact(user!.balance),
                 style: const TextStyle(
                   fontWeight: FontWeight.w900,
                   fontSize: 13,

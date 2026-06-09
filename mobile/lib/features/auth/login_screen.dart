@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -38,6 +39,7 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
   AppRole _signupRole = AppRole.customer;
   bool _loading = false;
   bool _googleLoading = false;
+  bool _appleLoading = false;
   bool _obscure = true;
   String? _error;
   String? _appVersion;
@@ -182,6 +184,31 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
       setState(() => _error = msg);
     } finally {
       if (mounted) setState(() => _googleLoading = false);
+    }
+  }
+
+  Future<void> _submitApple() async {
+    setState(() {
+      _appleLoading = true;
+      _error = null;
+    });
+    try {
+      final role = _mode == _AuthMode.signUp ? _signupRole : AppRole.customer;
+      final result = await context.read<AuthRepository>().signInWithApple(role: role);
+      await context.read<Session>().setSession(
+        token: result.token,
+        user: result.user,
+      );
+      if (!mounted) return;
+      context.go(_homePathFor(result.user.role));
+    } catch (e) {
+      final msg = AuthRepository.errorMessage(e);
+      if (msg.toLowerCase().contains('cancel')) {
+        return;
+      }
+      setState(() => _error = msg);
+    } finally {
+      if (mounted) setState(() => _appleLoading = false);
     }
   }
 
@@ -414,8 +441,11 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
               const SizedBox(height: 14),
               AuthLoginExtras(
                 showGoogle: true,
-                onGoogle: _loading ? null : _submitGoogle,
+                onGoogle: _loading || _appleLoading ? null : _submitGoogle,
                 googleLoading: _googleLoading,
+                showApple: defaultTargetPlatform == TargetPlatform.iOS,
+                onApple: _loading || _googleLoading ? null : _submitApple,
+                appleLoading: _appleLoading,
               ),
             ],
             if (_mode == _AuthMode.signIn) ...[
@@ -427,6 +457,13 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                     'Forgot password?',
                     style: TextStyle(fontWeight: FontWeight.w600),
                   ),
+                ),
+              ),
+              TextButton(
+                onPressed: () => context.go('/customer'),
+                child: const Text(
+                  'Browse shops without signing in',
+                  style: TextStyle(fontWeight: FontWeight.w600),
                 ),
               ),
             ],

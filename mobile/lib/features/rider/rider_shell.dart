@@ -49,6 +49,8 @@ import 'incoming_ride_alert.dart';
 import 'incoming_ride_overlay.dart';
 import 'rider_drive_hud.dart';
 import 'rider_drive_map_layer.dart';
+import 'rider_commission_repository.dart';
+import 'rider_commission_section.dart';
 import 'rider_verification_section.dart';
 
 enum _RiderTab { drive, trips, wallet, profile }
@@ -119,12 +121,19 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
   bool _walletOk = false;
   String? _profileMsg;
 
+  RiderCommissionSummary? _commission;
+  bool _commissionLoading = false;
+  bool _commissionPaying = false;
+  bool _commissionPaystackPaying = false;
+
   SocketService get _socket => context.read<SocketService>();
   Session get _session => context.read<Session>();
   AuthRepository get _auth => context.read<AuthRepository>();
   OrdersRepository get _ordersRepo => context.read<OrdersRepository>();
   DirectionsService get _directions => context.read<DirectionsService>();
   WalletRepository get _wallet => context.read<WalletRepository>();
+  RiderCommissionRepository get _commissionRepo =>
+      context.read<RiderCommissionRepository>();
   LocationService get _location => context.read<LocationService>();
 
   AuthUser get _user => _session.user!;
@@ -201,6 +210,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
       if (!mounted) return;
       _wireSocket();
       _refreshAll();
+      unawaited(_loadCommission());
       _startLocationStream();
       if (_isOnline) {
         _startPolling();
@@ -482,11 +492,33 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
     });
   }
 
+  Future<void> _loadCommission() async {
+    if (_commissionLoading) return;
+    setState(() => _commissionLoading = true);
+    try {
+      final summary = await _commissionRepo.fetchSummary();
+      if (!mounted) return;
+      setState(() => _commission = summary);
+    } catch (_) {
+      /* non-blocking */
+    } finally {
+      if (mounted) setState(() => _commissionLoading = false);
+    }
+  }
+
   Future<void> _setOnline(bool online) async {
     if (_pendingApproval && online) {
       _snack(_user.status == 'rejected'
           ? 'Application rejected — update documents in Account and resubmit.'
           : 'Account pending approval — upload documents in Account first.');
+      return;
+    }
+    if (online && _commission?.hasOverdue == true) {
+      final owed = _commission!.totalOwed;
+      _snack(
+        'Commission overdue — pay ${formatCedis(owed)} in Wallet before going online',
+      );
+      setState(() => _tab = _RiderTab.wallet);
       return;
     }
     setState(() => _statusLoading = true);
@@ -518,8 +550,59 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
       }
     } catch (e) {
       _snack(AuthRepository.errorMessage(e));
+      if (RiderCommissionRepository.isCommissionOverdueError(e)) {
+        unawaited(_loadCommission());
+        setState(() => _tab = _RiderTab.wallet);
+      }
     } finally {
       if (mounted) setState(() => _statusLoading = false);
+    }
+  }
+
+  Future<void> _payCommissionFromWallet() async {
+    if (_commissionPaying || _commissionPaystackPaying) return;
+    setState(() => _commissionPaying = true);
+    try {
+      final balance = await _commissionRepo.payCommission();
+      _session.patchBalance(balance);
+      await _loadCommission();
+      if (!mounted) return;
+      _snack('Commission paid — you can go online', success: true);
+    } catch (e) {
+      if (mounted) _snack(RiderCommissionRepository.errorMessage(e));
+    } finally {
+      if (mounted) setState(() => _commissionPaying = false);
+    }
+  }
+
+  Future<void> _payCommissionWithPaystack() async {
+    if (_commissionPaying || _commissionPaystackPaying) return;
+    if (_commission == null || _commission!.totalOwed < 0.01) return;
+    setState(() => _commissionPaystackPaying = true);
+    try {
+      final checkout = await _commissionRepo.initializePaystack();
+      if (!mounted) return;
+
+      final reference = await PaystackCheckoutScreen.open(
+        context,
+        authorizationUrl: checkout.authorizationUrl,
+        reference: checkout.reference,
+      );
+      if (!mounted) return;
+      if (reference == null || reference.isEmpty) {
+        _snack('Payment was not completed');
+        return;
+      }
+
+      final balance = await _commissionRepo.verifyPaystack(reference);
+      _session.patchBalance(balance);
+      await _loadCommission();
+      if (!mounted) return;
+      _snack('Commission paid', success: true);
+    } catch (e) {
+      if (mounted) _snack(RiderCommissionRepository.errorMessage(e));
+    } finally {
+      if (mounted) setState(() => _commissionPaystackPaying = false);
     }
   }
 
@@ -1950,8 +2033,26 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
                   color: user.balance < 0 ? Colors.redAccent : BytzGoTheme.accent,
                 ),
               ),
+              const SizedBox(height: 12),
+              Text(
+                'Cash collected from customers stays with you in person — it is not in this balance and cannot be withdrawn here.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 11,
+                  height: 1.45,
+                  color: Colors.white.withValues(alpha: 0.45),
+                ),
+              ),
             ],
           ),
+        ),
+        RiderCommissionSection(
+          commission: _commission,
+          loading: _commissionLoading,
+          paying: _commissionPaying,
+          paystackPaying: _commissionPaystackPaying,
+          onPayFromWallet: _payCommissionFromWallet,
+          onPayWithPaystack: _payCommissionWithPaystack,
         ),
         const SizedBox(height: 20),
         _buildPayBytzgoCard(user),
@@ -2393,9 +2494,10 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
             return Expanded(
               child: InkWell(
                 onTap: () {
-          setState(() => _tab = tab);
-          _syncOfferTimer();
-        },
+                  setState(() => _tab = tab);
+                  if (tab == _RiderTab.wallet) unawaited(_loadCommission());
+                  _syncOfferTimer();
+                },
                 child: Padding(
                   padding: const EdgeInsets.symmetric(vertical: 10),
                   child: Column(

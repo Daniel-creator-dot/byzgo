@@ -30,21 +30,34 @@ This writes `ios/Runner/MapsConfig.plist` and `lib/core/maps_key.dart`. Restrict
 
 ## Build for TestFlight / App Store
 
+### Recommended: Archive in Xcode
+
+1. Open **`mobile/ios/Runner.xcworkspace`** (not `.xcodeproj`).
+2. **Xcode → Settings → Accounts** — sign in with the Apple ID for team **MHTN5HYAHW**.
+3. Select the **Runner** target → **Signing & Capabilities**:
+   - **Team:** jeremiah anthony amissah (`MHTN5HYAHW`)
+   - **Automatically manage signing:** ON (Release uses `Runner.Release.entitlements` with **production** push).
+4. Scheme **Runner**, destination **Any iOS Device (arm64)** (not a simulator).
+5. From Terminal once (maps key + Flutter deps):
+
+   ```bash
+   cd mobile
+   flutter pub get
+   ```
+
+6. In Xcode: **Product → Archive**.
+7. **Organizer → Distribute App → App Store Connect → Upload**.
+
+If archive fails on push: enable **Push Notifications** on the App ID at [developer.apple.com](https://developer.apple.com/account/resources/identifiers), then let Xcode refresh profiles (or download a new **App Store** profile and set Manual signing).
+
+### CLI (optional)
+
 ```bash
 cd mobile
-chmod +x scripts/build_app_store_ipa.sh
 ./scripts/build_app_store_ipa.sh
 ```
 
-If signing fails (no Apple ID in Xcode):
-
-```bash
-./scripts/build_app_store_ipa.sh --open-xcode
-```
-
-Then **Product → Archive → Distribute App → App Store Connect**.
-
-Output: `build/ios/ipa/*.ipa` — upload with **Transporter** or Xcode Organizer.
+Requires the same Apple ID in Xcode (automatic signing). Output: `build/ios/ipa/*.ipa` — upload with **Transporter** or Organizer.
 
 ## Pre-submit checklist
 

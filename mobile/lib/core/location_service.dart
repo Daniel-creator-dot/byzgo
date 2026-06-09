@@ -11,12 +11,14 @@ class LocationService {
       perm = await Geolocator.requestPermission();
     }
     if (perm == LocationPermission.deniedForever) {
-      await openAppSettings();
       return false;
     }
     return perm == LocationPermission.always ||
         perm == LocationPermission.whileInUse;
   }
+
+  /// Opens app settings — call only from explicit user action (e.g. a Settings button).
+  Future<bool> openLocationSettings() => openAppSettings();
 
   Future<LocationPoint?> getCurrentLocation() async {
     final ok = await ensurePermission();

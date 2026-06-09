@@ -21,6 +21,7 @@ import '../../shared/widgets/app_network_image.dart';
 import '../../shared/widgets/vendor_shop_avatar.dart';
 import '../../shared/widgets/vendor_promo_badge.dart';
 import 'vendor_story_viewer.dart';
+import '../auth/auth_gate.dart';
 import '../orders/orders_repository.dart';
 import 'customer_shop_checkout_screen.dart';
 
@@ -218,6 +219,7 @@ class _CustomerVendorMenuScreenState extends State<CustomerVendorMenuScreen>
 
   Future<void> _openCheckout() async {
     if (_cartCount == 0) return;
+    if (!requireCustomerAuth(context, message: 'Sign in to checkout')) return;
     if (_vendor.shopOpenStatus == 'closed') {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(

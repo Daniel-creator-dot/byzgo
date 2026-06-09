@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/config_repository.dart';
+import '../../core/delivery_pricing_config.dart';
 import '../../core/directions_service.dart';
 import '../../core/location_service.dart';
 import '../../core/places_service.dart';
@@ -79,6 +80,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
   bool _resolvingDropoff = false;
   String? _error;
   double _pricePerKm = defaultDeliveryPricePerKm;
+  DeliveryPricingConfig? _pricingConfig;
   double? _quotedFee;
   double? _quoteDistanceKm;
   bool _surgeActive = false;
@@ -120,6 +122,24 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
   void didChangeDependencies() {
     super.didChangeDependencies();
     _socket ??= context.read<SocketService>();
+    final pricing = context.read<DeliveryPricingConfig>();
+    if (!identical(pricing, _pricingConfig)) {
+      _pricingConfig?.removeListener(_onLivePricingUpdated);
+      _pricingConfig = pricing..addListener(_onLivePricingUpdated);
+      _pricePerKm = pricing.pricePerKm;
+    }
+  }
+
+  void _onLivePricingUpdated() {
+    if (!mounted) return;
+    setState(() {
+      _pricePerKm = _pricingConfig?.pricePerKm ?? defaultDeliveryPricePerKm;
+      _quotedFee = null;
+      _surgeActive = _pricingConfig?.surgeActive ?? false;
+    });
+    if (_pickup != null && _destination != null) {
+      _scheduleDeliveryQuote();
+    }
   }
 
   double get _deliveryFee {
@@ -127,7 +147,14 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
     if (_quoteError != null) return 0;
     if (_pickup == null || _destination == null) return 0;
     if (!_pickup!.hasCoords || !_destination!.hasCoords) return 0;
-    return courierFeeBetween(_pickup!, _destination!, _pricePerKm);
+    final bounds = _pricingConfig?.boundsForRegion(_session.user?.region);
+    return courierFeeBetween(
+      _pickup!,
+      _destination!,
+      _pricePerKm,
+      minFee: bounds?.min,
+      maxFee: bounds?.max,
+    );
   }
 
   double get _routeDistanceKm {
@@ -234,8 +261,14 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
   Future<void> _init() async {
     _wireSocket();
     try {
-      _pricePerKm = await context.read<ConfigRepository>().fetchPricePerKm();
-    } catch (_) {}
+      final pricing = context.read<DeliveryPricingConfig>();
+      _pricePerKm = pricing.pricePerKm;
+      _surgeActive = pricing.surgeActive;
+    } catch (_) {
+      try {
+        _pricePerKm = await context.read<ConfigRepository>().fetchPricePerKm();
+      } catch (_) {}
+    }
     await _loadOrders();
     await _detectPickup();
     if (!mounted) return;
@@ -494,6 +527,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
   @override
   void dispose() {
     _quoteDebounce?.cancel();
+    _pricingConfig?.removeListener(_onLivePricingUpdated);
       _nearbyPoll?.cancel();
       _etaPoll?.cancel();
       _riderLocationPoll?.cancel();
@@ -1349,7 +1383,9 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
           children: [
             if (!tracking && widget.embedded) ...[
               DeliveryBookingHeader(
-                firstName: userFirstName(_session.user!),
+                firstName: _session.user != null
+                    ? userFirstName(_session.user!)
+                    : 'there',
                 balance: _session.user?.balance ?? 0,
                 vendorMode: widget.vendorMode,
                 onShops: widget.vendorMode ? null : widget.onOpenShops,
