@@ -154,7 +154,14 @@ class _RideSheetState extends State<RideSheet> {
   void didUpdateWidget(covariant RideSheet oldWidget) {
     super.didUpdateWidget(oldWidget);
     // When a sheet becomes non-collapsible (e.g. booking flow), keep it open.
-    if (!widget.collapsible && !_expanded) _expanded = true;
+    if (!widget.collapsible && !_expanded) {
+      _expanded = true;
+    }
+    // Fresh tracking/booking mode — reset peek vs expanded from parent intent.
+    if (widget.collapsible != oldWidget.collapsible ||
+        widget.initiallyExpanded != oldWidget.initiallyExpanded) {
+      _expanded = widget.collapsible ? widget.initiallyExpanded : true;
+    }
   }
 
   void _toggle() {
