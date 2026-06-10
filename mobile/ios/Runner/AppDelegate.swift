@@ -1,6 +1,7 @@
 import Flutter
 import UIKit
 import GoogleMaps
+import UserNotifications
 
 @main
 @objc class AppDelegate: FlutterAppDelegate {
@@ -12,6 +13,10 @@ import GoogleMaps
       GMSServices.provideAPIKey(mapsKey)
     }
     GeneratedPluginRegistrant.register(with: self)
+    if #available(iOS 10.0, *) {
+      UNUserNotificationCenter.current().delegate = self
+    }
+    application.registerForRemoteNotifications()
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 

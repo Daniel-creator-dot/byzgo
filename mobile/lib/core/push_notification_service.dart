@@ -1,4 +1,4 @@
-import 'dart:async' show unawaited;
+import 'dart:async' show StreamSubscription, unawaited;
 import 'dart:convert';
 
 import 'package:firebase_core/firebase_core.dart';
@@ -16,6 +16,7 @@ import 'api_client.dart';
 import 'fcm_background.dart';
 import 'incoming_ride_notifications.dart';
 import 'session.dart';
+
 /// Registers FCM and shows high-priority alerts when the app is backgrounded.
 class PushNotificationService {
   PushNotificationService._();
@@ -26,11 +27,28 @@ class PushNotificationService {
   bool _initialized = false;
   String? _lastToken;
   AppRole? _activeRole;
+  ApiClient? _boundApi;
+  Session? _boundSession;
+  StreamSubscription<String>? _tokenRefreshSub;
 
   bool get acceptsIncomingRideJobs => _activeRole == AppRole.rider;
 
   /// Rider shell listens to refresh offers when FCM arrives in foreground.
   void Function(Map<String, String> data)? onIncomingRidePush;
+
+  static String pushPlatformLabel() {
+    if (kIsWeb) return 'web';
+    switch (defaultTargetPlatform) {
+      case TargetPlatform.iOS:
+        return 'ios';
+      case TargetPlatform.android:
+        return 'android';
+      case TargetPlatform.macOS:
+        return 'macos';
+      default:
+        return defaultTargetPlatform.name.toLowerCase();
+    }
+  }
 
   /// Call after login, restore, or logout so incoming-job alerts respect account role.
   Future<void> syncActiveRole({
@@ -38,6 +56,8 @@ class PushNotificationService {
     required AuthUser? user,
     required Session session,
   }) async {
+    _boundApi = api;
+    _boundSession = session;
     _activeRole = user?.role;
     if (!acceptsIncomingRideJobs) {
       onIncomingRidePush = null;
@@ -103,8 +123,25 @@ class PushNotificationService {
       FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
       FirebaseMessaging.onMessage.listen(_onForegroundMessage);
       FirebaseMessaging.onMessageOpenedApp.listen(_onOpenedFromNotification);
+      await _tokenRefreshSub?.cancel();
+      _tokenRefreshSub = FirebaseMessaging.instance.onTokenRefresh.listen(
+        (token) => unawaited(_registerToken(token, force: true)),
+      );
     } catch (e, st) {
       debugPrint('BytzGo push init failed: $e\n$st');
+    }
+  }
+
+  /// Rider opened app from a killed state via notification tap.
+  Future<void> handleColdStartNotification() async {
+    if (!DefaultFirebaseOptions.isConfigured) return;
+    try {
+      final message = await FirebaseMessaging.instance.getInitialMessage();
+      if (message != null) {
+        _onOpenedFromNotification(message);
+      }
+    } catch (e) {
+      debugPrint('BytzGo push: getInitialMessage failed: $e');
     }
   }
 
@@ -116,6 +153,9 @@ class PushNotificationService {
     if (!DefaultFirebaseOptions.isConfigured) return;
     if (!session.isAuthenticated) return;
 
+    _boundApi = api;
+    _boundSession = session;
+
     if (!kIsWeb) {
       final status = await Permission.notification.request();
       if (!status.isGranted && !status.isLimited) {
@@ -125,7 +165,7 @@ class PushNotificationService {
 
     try {
       final messaging = FirebaseMessaging.instance;
-      // Rider app shows incoming jobs in-app; avoid FCM banner + sound duplicating local ring.
+      // Foreground: rider shell shows in-app ring; suppress duplicate FCM banner.
       await messaging.setForegroundNotificationPresentationOptions(
         alert: false,
         badge: true,
@@ -142,16 +182,32 @@ class PushNotificationService {
       }
       final token = await messaging.getToken();
       if (token == null || token.isEmpty) return;
-      if (token == _lastToken) return;
-      _lastToken = token;
-      await api.dio.post('/api/push/fcm-token', data: {
-        'token': token,
-        'platform': defaultTargetPlatform.name,
-      });
-      debugPrint('BytzGo push: FCM token registered');
+      await _registerToken(token);
     } catch (e) {
       debugPrint('BytzGo push: token registration failed: $e');
     }
+  }
+
+  Future<void> _registerToken(String token, {bool force = false}) async {
+    final api = _boundApi;
+    final session = _boundSession;
+    if (api == null || session == null || !session.isAuthenticated) return;
+    if (!force && token == _lastToken) {
+      // Still refresh server row so platform/user_id stay current after reinstall.
+      try {
+        await api.dio.post('/api/push/fcm-token', data: {
+          'token': token,
+          'platform': pushPlatformLabel(),
+        });
+      } catch (_) {}
+      return;
+    }
+    _lastToken = token;
+    await api.dio.post('/api/push/fcm-token', data: {
+      'token': token,
+      'platform': pushPlatformLabel(),
+    });
+    debugPrint('BytzGo push: FCM token registered (${pushPlatformLabel()})');
   }
 
   /// High-priority incoming job (socket or background FCM).
@@ -233,13 +289,16 @@ class PushNotificationService {
         for (final e in data.entries) e.key: e.value?.toString() ?? '',
       };
       onIncomingRidePush?.call(payload);
-      // Socket may be suspended; still surface alert + refresh offers.
       final orderId = data['orderId']?.toString() ?? '';
       if (orderId.isNotEmpty) {
         unawaited(showIncomingRide(
           orderId: orderId,
-          title: data['title']?.toString() ?? 'New delivery job',
-          body: data['body']?.toString() ?? 'Open BytzGo to accept',
+          title: data['title']?.toString() ??
+              message.notification?.title ??
+              'New delivery job',
+          body: data['body']?.toString() ??
+              message.notification?.body ??
+              'Open BytzGo to accept',
           playSound: true,
         ));
       }

@@ -72,9 +72,11 @@ NotificationDetails incomingRideNotificationDetails({
     iOS: DarwinNotificationDetails(
       presentAlert: true,
       presentBadge: true,
-      presentSound: playSound,
+      presentSound: true,
+      sound: playSound ? 'default' : null,
       interruptionLevel: InterruptionLevel.timeSensitive,
       threadIdentifier: 'incoming_rides_alarm',
+      categoryIdentifier: 'incoming_ride_offer',
     ),
   );
 }

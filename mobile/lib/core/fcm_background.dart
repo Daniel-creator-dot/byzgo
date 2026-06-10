@@ -1,7 +1,5 @@
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
-import 'package:flutter/foundation.dart'
-    show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
@@ -22,12 +20,6 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   final type = message.data['type']?.toString() ?? '';
   final isRide = type == 'incoming-ride';
   if (isRide && !await PushSessionContext.isRider()) {
-    return;
-  }
-  // iOS: FCM/APNs already shows the incoming-job banner + sound.
-  if (isRide &&
-      !kIsWeb &&
-      defaultTargetPlatform == TargetPlatform.iOS) {
     return;
   }
   final orderId = message.data['orderId']?.toString() ?? '';

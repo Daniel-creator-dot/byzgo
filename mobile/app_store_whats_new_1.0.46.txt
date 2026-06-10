@@ -1,0 +1,3 @@
+• Riders get loud job alerts when the app is in the background or the screen is off
+• Improved incoming delivery notifications on iPhone
+• Bug fixes and performance improvements

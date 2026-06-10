@@ -55,10 +55,20 @@ The API must send FCM using a **Firebase Admin service account** from the **same
 
 If you create a **new** Android app in Firebase with a different package (e.g. `com.bytzgo.bytzgo_mobile`), download a new `google-services.json` and update `applicationId` in `mobile/android/app/build.gradle.kts` to match.
 
+## iOS (APNs) — required for lock-screen job alerts
+
+Without this, **Android push works** but **iPhone riders get nothing when the screen is off**.
+
+1. [Apple Developer](https://developer.apple.com/account/resources/authkeys/list) → **Keys** → **+** → enable **Apple Push Notifications service (APNs)** → download `.p8` (once).
+2. [Firebase Console](https://console.firebase.google.com/) → project **bytzgo-9bd89** → **Project settings** → **Cloud Messaging**.
+3. Under **Apple app configuration** (bundle `com.bytzgo.bytzgoMobile`): upload the **APNs Authentication Key** (.p8), Key ID, and Team ID **MHTN5HYAHW**.
+4. Rebuild and install the iOS app; rider must go **Online** once (registers FCM token with `platform: ios`).
+
 ## Troubleshooting
 
 | Symptom | Fix |
 |---------|-----|
-| No alerts when app closed | Backend missing service account JSON; rider not online; notification permission denied |
-| Token never registered | Reinstall APK; check log `FCM token registered` |
+| No alerts when app closed (iOS) | Upload APNs .p8 to Firebase; rider online + notifications allowed; install build **1.0.46+** |
+| No alerts when app closed (Android) | Backend missing service account JSON; rider not online; notification permission denied |
+| Token never registered | Reinstall app; rider goes **Online**; check log `FCM token registered (ios)` |
 | Old project tokens | Users must reopen app after project migration so tokens refresh |

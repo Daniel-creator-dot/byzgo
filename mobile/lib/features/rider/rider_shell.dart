@@ -212,6 +212,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
         if (order != null) _presentIncoming(order);
       }));
     };
+    unawaited(PushNotificationService.instance.handleColdStartNotification());
     _isOnline = _user.isOnline == true;
     _profilePhone.text = _user.phone ?? '';
     _payPhone.text = _user.phone ?? '';

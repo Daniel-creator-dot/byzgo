@@ -2514,12 +2514,23 @@ async function sendPushToUserIds(userIds: string[], alert: PushAlert) {
       ...(incomingRide ? { audience: 'rider' } : {}),
     };
 
+    const iosTokenCount = rows.filter((r: { platform?: string }) => {
+      const p = String(r.platform || 'android').toLowerCase();
+      return p === 'ios' || p === 'macos';
+    }).length;
+    if (incomingRide) {
+      console.info(
+        `[push] incoming-ride → ${ids.length} rider(s), ${rows.length} FCM token(s) (${iosTokenCount} iOS)`
+      );
+    }
+
     const messages = rows.map((row: { token: string; platform?: string }) => {
       const platform = String(row.platform || 'android').toLowerCase();
       const isIos = platform === 'ios' || platform === 'macos';
       // Android incoming jobs: data-only (Flutter shows one loud local alarm).
-      // iOS incoming jobs: include notification + time-sensitive APNs (Bolt/Uber-style).
+      // iOS incoming jobs: alert push with sound — wakes lock screen (Bolt/Uber-style).
       const includeNotification = !incomingRide || isIos;
+      const iosIncomingRide = incomingRide && isIos;
       return {
         token: row.token,
         ...(includeNotification
@@ -2549,23 +2560,39 @@ async function sendPushToUserIds(userIds: string[], alert: PushAlert) {
         },
         apns: {
           headers: {
-            'apns-priority': high ? '10' : '5',
-            'apns-push-type': high ? 'alert' : 'background',
+            'apns-priority': iosIncomingRide || high ? '10' : '5',
+            'apns-push-type': iosIncomingRide || high ? 'alert' : 'background',
           },
           payload: {
             aps: {
-              alert: { title: alert.title, body: alert.body },
-              sound: incomingRide ? 'default' : 'default',
-              badge: incomingRide ? 1 : undefined,
-              'interruption-level': incomingRide ? 'time-sensitive' : 'active',
-              contentAvailable: true,
+              ...(iosIncomingRide || high
+                ? {
+                    alert: { title: alert.title, body: alert.body },
+                    sound: 'default',
+                    badge: iosIncomingRide ? 1 : undefined,
+                    'interruption-level': iosIncomingRide ? 'time-sensitive' : 'active',
+                  }
+                : {
+                    contentAvailable: true,
+                  }),
             },
           },
         },
       };
     });
 
-    await admin.messaging().sendEach(messages);
+    const result = await admin.messaging().sendEach(messages);
+    if (incomingRide && result.failureCount > 0) {
+      result.responses.forEach((r, i) => {
+        if (!r.success) {
+          console.warn(
+            `[push] incoming-ride FCM failed token[${i}]:`,
+            r.error?.code,
+            r.error?.message
+          );
+        }
+      });
+    }
   } catch (err) {
     console.warn('[push] FCM send failed:', err);
   }
@@ -7410,7 +7437,7 @@ app.post('/api/push/fcm-token', authenticateToken, async (req: any, res) => {
          user_id = EXCLUDED.user_id,
          platform = EXCLUDED.platform,
          updated_at = CURRENT_TIMESTAMP`,
-      [req.user.id, token.trim(), platform || 'android']
+      [req.user.id, token.trim(), String(platform || 'android').toLowerCase()]
     );
     res.json({ ok: true });
   } catch (err) {
@@ -7430,6 +7457,66 @@ app.delete('/api/push/fcm-token', authenticateToken, async (req: any, res) => {
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ message: 'Failed to remove FCM token' });
+  }
+});
+
+/** Rider: verify FCM token is saved (debug lock-screen job alerts). */
+app.get('/api/push/status', authenticateToken, async (req: any, res) => {
+  try {
+    const rows = await pool.query(
+      `SELECT platform, updated_at FROM fcm_tokens WHERE user_id = $1 ORDER BY updated_at DESC`,
+      [req.user.id]
+    );
+    res.json({
+      fcmEnabled: firebaseAdminHasCredentials,
+      tokens: rows.rows,
+    });
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to read push status' });
+  }
+});
+
+/** Rider must be online. Sends a test incoming-job push to this device. */
+app.post('/api/push/test-incoming-ride', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'rider') {
+    return res.status(403).json({ message: 'Riders only' });
+  }
+  if (!req.user.is_online) {
+    return res.status(400).json({
+      message: 'Go Online first — then lock the screen and call this again',
+    });
+  }
+  try {
+    const tokRes = await pool.query(
+      `SELECT token, platform FROM fcm_tokens WHERE user_id = $1`,
+      [req.user.id]
+    );
+    if (!tokRes.rows.length) {
+      return res.status(400).json({
+        message:
+          'No push token on file. Open BytzGo, allow notifications, go Online, wait a few seconds.',
+        tokens: 0,
+      });
+    }
+    await sendPushToUserIds([req.user.id], {
+      title: 'Test delivery job',
+      body: 'Screen-off alert test — tap to open BytzGo',
+      type: 'incoming-ride',
+      orderId: 'test-push',
+      channelId: 'incoming_rides_alarm',
+      highPriority: true,
+    });
+    res.json({
+      ok: true,
+      hint: 'Lock your phone now — you should get a banner and sound within a few seconds.',
+      tokens: tokRes.rows.map((r: { platform?: string; token: string }) => ({
+        platform: r.platform,
+        prefix: `${String(r.token).slice(0, 10)}…`,
+      })),
+    });
+  } catch (err) {
+    console.error('test incoming-ride push error:', err);
+    res.status(500).json({ message: 'Test push failed' });
   }
 });
 
