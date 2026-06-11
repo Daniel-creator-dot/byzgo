@@ -224,6 +224,12 @@ app.get('/api/health', async (_req, res) => {
     service: process.env.RENDER_SERVICE_NAME || 'byzgoback',
     client: 'flutter',
     fcm: firebaseAdminHasCredentials,
+    firebaseProject: FIREBASE_PROJECT_ID,
+    push: {
+      iosRequiresApnsKeyInFirebase: true,
+      testEndpoint: '/api/push/test-incoming-ride',
+      statusEndpoint: '/api/push/status',
+    },
     media: {
       storage: storage.configured ? 'supabase' : 'inline_fallback',
       bucket: storage.bucket,
@@ -2019,7 +2025,8 @@ async function settleOrderPayment(order: any) {
   }
 }
 
-const OFFER_TTL_SEC = 25;
+/** Seconds a rider can accept after push/socket (must allow time to unlock phone). */
+const OFFER_TTL_SEC = 90;
 /** Bolt-style: ping one nearest rider at a time. */
 const RIDERS_PER_WAVE = 1;
 /** Max sequential offers before giving up (each step = next nearest rider). */
@@ -2430,6 +2437,11 @@ type PushAlert = {
   ticketId?: string;
   channelId?: 'incoming_rides_alarm' | 'trip_updates' | 'support_updates';
   highPriority?: boolean;
+  expiresAt?: string;
+  status?: string;
+  pickup?: string;
+  address?: string;
+  orderType?: string;
 };
 
 /** Only active riders receive incoming-job pushes; never the ordering customer. */
@@ -2511,7 +2523,16 @@ async function sendPushToUserIds(userIds: string[], alert: PushAlert) {
       orderId: String(alert.orderId ?? ''),
       title: alert.title,
       body: alert.body,
-      ...(incomingRide ? { audience: 'rider' } : {}),
+      ...(incomingRide
+        ? {
+            audience: 'rider',
+            expiresAt: String(alert.expiresAt ?? ''),
+            status: String(alert.status ?? 'ready'),
+            pickup: String(alert.pickup ?? ''),
+            address: String(alert.address ?? ''),
+            orderType: String(alert.orderType ?? 'courier'),
+          }
+        : {}),
     };
 
     const iosTokenCount = rows.filter((r: { platform?: string }) => {
@@ -2614,6 +2635,9 @@ async function sendPushToRiders(
   if (!eligible.length) return;
   const pickup = order.pickup_address || order.pickup || 'Pickup';
   const dropoff = order.address || 'Drop-off';
+  const expiresAt = order.offer_expires_at
+    ? new Date(order.offer_expires_at).toISOString()
+    : new Date(Date.now() + OFFER_TTL_SEC * 1000).toISOString();
   await Promise.all(
     eligible.map(({ id, distanceKm }) => {
       const distLabel =
@@ -2627,6 +2651,11 @@ async function sendPushToRiders(
         orderId: order.id,
         channelId: 'incoming_rides_alarm',
         highPriority: true,
+        expiresAt,
+        status: order.status,
+        pickup: String(pickup),
+        address: String(dropoff),
+        orderType: order.order_type || order.orderType || 'courier',
       });
     })
   );
@@ -3756,6 +3785,62 @@ app.get('/api/rider/stats', authenticateToken, async (req: any, res) => {
     });
   } catch (err) {
     console.error('Rider stats error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+/** Fetch one active incoming offer (after push tap / lock-screen alert). */
+app.get('/api/rider/incoming-offer/:orderId', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'rider') {
+    return res.status(403).json({ message: 'Riders only' });
+  }
+  const orderId = String(req.params.orderId || '').trim();
+  if (!orderId) {
+    return res.status(400).json({ message: 'orderId required' });
+  }
+  try {
+    const userRes = await pool.query(
+      'SELECT status, is_online FROM users WHERE id = $1',
+      [req.user.id]
+    );
+    const rider = userRes.rows[0];
+    if (rider?.status !== 'active' || rider?.is_online !== true) {
+      return res.status(400).json({ message: 'Go Online to view incoming offers' });
+    }
+    const result = await pool.query(
+      `SELECT o.*, odo.expires_at AS rider_offer_expires_at, odo.wave AS rider_offer_wave,
+        ${ORDER_CONTACT_SELECT}
+       FROM orders o
+       ${ORDER_CONTACT_JOINS}
+       INNER JOIN order_dispatch_offers odo ON odo.order_id = o.id
+         AND odo.rider_id = $1
+         AND odo.status = 'offered'
+         AND odo.expires_at > NOW()
+       WHERE o.id = $2
+         AND o.rider_id IS NULL
+         AND (
+           o.status = 'ready'
+           OR (
+             o.status = 'pending'
+             AND o.vendor_id IS NOT NULL
+             AND o.order_type IN ('food', 'courier')
+           )
+         )
+       LIMIT 1`,
+      [req.user.id, orderId]
+    );
+    if (!result.rows.length) {
+      return res.status(404).json({ message: 'Offer not found or expired' });
+    }
+    const o = result.rows[0];
+    const row = await sanitizeOrderForRole(o, 'rider', req.user.id);
+    if (o.rider_offer_expires_at) {
+      row.expiresAt = new Date(o.rider_offer_expires_at).toISOString();
+      row.dispatchWave = o.rider_offer_wave;
+    }
+    res.json(row);
+  } catch (err) {
+    console.error('incoming-offer error:', err);
     res.status(500).json({ message: 'Server error' });
   }
 });

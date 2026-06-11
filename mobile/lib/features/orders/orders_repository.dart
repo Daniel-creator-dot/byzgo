@@ -26,6 +26,21 @@ class OrdersRepository {
 
 
 
+  /// Active dispatch offer for this rider (after push / lock-screen tap).
+  Future<Order?> fetchIncomingOffer(String orderId) async {
+    try {
+      final res = await _api.dio.get<Map<String, dynamic>>(
+        '/api/rider/incoming-offer/$orderId',
+      );
+      final data = res.data;
+      if (data == null) return null;
+      return Order.fromJson(Map<String, dynamic>.from(data));
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 404) return null;
+      rethrow;
+    }
+  }
+
   Future<List<Order>> fetchOrders() async {
 
     final res = await _api.dio.get<dynamic>('/api/orders');

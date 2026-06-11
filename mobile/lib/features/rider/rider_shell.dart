@@ -47,6 +47,7 @@ import '../../shared/widgets/ride_ui.dart';
 import 'delivery_pin_dialog.dart';
 import 'incoming_ride_alert.dart';
 import 'incoming_ride_overlay.dart';
+import 'incoming_ride_ring.dart';
 import 'rider_drive_hud.dart';
 import 'rider_drive_map_layer.dart';
 import 'rider_commission_repository.dart';
@@ -199,19 +200,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    PushNotificationService.instance.onIncomingRidePush = (data) {
-      if (!_isOnline || !mounted) return;
-      final orderId = data['orderId']?.trim() ?? '';
-      unawaited(_refreshAll(silent: true).then((_) {
-        if (!mounted || !_isOnline) return;
-        Order? order;
-        if (orderId.isNotEmpty) {
-          order = _orders.where((o) => o.id == orderId).firstOrNull;
-        }
-        order ??= _orders.where(isOfferableOrder).firstOrNull;
-        if (order != null) _presentIncoming(order);
-      }));
-    };
+    PushNotificationService.instance.onIncomingRidePush = _handleIncomingRidePush;
     unawaited(PushNotificationService.instance.handleColdStartNotification());
     _isOnline = _user.isOnline == true;
     _profilePhone.text = _user.phone ?? '';
@@ -242,6 +231,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
       unawaited(
         PushNotificationService.instance.cancelIncomingRide(order.id),
       );
+      // Rider unlocked phone — switch from banner sound to in-app ring + accept UI.
       unawaited(IncomingRideAlert.raise(order, useNotificationSound: false));
     }
   }
@@ -268,6 +258,65 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
     super.dispose();
   }
 
+  Order? _orderFromPushData(Map<String, String> data) {
+    final orderId = data['orderId']?.trim() ?? '';
+    if (orderId.isEmpty) return null;
+    final expiresRaw = data['expiresAt']?.trim() ?? '';
+    if (expiresRaw.isNotEmpty) {
+      try {
+        if (DateTime.parse(expiresRaw).isBefore(DateTime.now())) return null;
+      } catch (_) {}
+    }
+    final pickup = data['pickup']?.trim();
+    final drop = data['address']?.trim();
+    if ((pickup == null || pickup.isEmpty) && (drop == null || drop.isEmpty)) {
+      return null;
+    }
+    final orderType = data['orderType']?.trim() ?? 'courier';
+    return Order(
+      id: orderId,
+      customerId: '',
+      customerName: 'Customer',
+      total: 0,
+      status: data['status']?.trim().isNotEmpty == true ? data['status']!.trim() : 'ready',
+      createdAt: DateTime.now().toIso8601String(),
+      address: drop?.isNotEmpty == true ? drop! : 'Drop-off',
+      vendorId: orderType == 'food' ? 'vendor' : '',
+      pickup: pickup,
+      pickupAddress: pickup,
+      orderType: orderType,
+      expiresAt: expiresRaw.isNotEmpty ? expiresRaw : null,
+    );
+  }
+
+  void _handleIncomingRidePush(Map<String, String> data) {
+    if (!_isOnline || !mounted) return;
+    final orderId = data['orderId']?.trim() ?? '';
+    if (orderId == 'test-push' || orderId == 'diagnose-test') {
+      unawaited(
+        IncomingRideRing.start(maxDuration: IncomingRideAlert.callRingDuration),
+      );
+      _snack('Push works — a real job will show Accept/Decline here.', success: true);
+      return;
+    }
+    unawaited(() async {
+      Order? order;
+      if (orderId.isNotEmpty) {
+        try {
+          order = await _ordersRepo.fetchIncomingOffer(orderId);
+        } catch (_) {}
+        order ??= _orderFromPushData(data);
+      }
+      await _refreshAll(silent: true);
+      if (!mounted || !_isOnline) return;
+      if (order == null && orderId.isNotEmpty) {
+        order = _orders.where((o) => o.id == orderId).firstOrNull;
+      }
+      order ??= _orders.where(isOfferableOrder).firstOrNull;
+      if (order != null) _presentIncoming(order);
+    }());
+  }
+
   void _presentIncoming(Order order) {
     if (!mounted || !_isOnline || !isOfferableOrder(order)) return;
     setState(() {
@@ -275,8 +324,8 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
       _tab = _RiderTab.drive;
       _driveSheet = _DriveSheet.requests;
     });
-    final bg = _lifecycle != AppLifecycleState.resumed;
-    unawaited(IncomingRideAlert.raise(order, useNotificationSound: bg));
+    final screenOff = _lifecycle != AppLifecycleState.resumed;
+    unawaited(IncomingRideAlert.raise(order, useNotificationSound: screenOff));
   }
 
   void _trackOffers(List<Order> orders) {
@@ -2440,6 +2489,27 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
         ),
         const SizedBox(height: 12),
         const SizedBox(height: 20),
+        if (_isOnline) ...[
+          OutlinedButton.icon(
+            onPressed: _testLockScreenJobAlert,
+            icon: const Icon(Icons.notifications_active_outlined),
+            label: const Text('Test lock-screen job alert'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: BytzGoTheme.accent,
+              side: BorderSide(color: BytzGoTheme.accent.withValues(alpha: 0.5)),
+              padding: const EdgeInsets.symmetric(vertical: 14),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Go Online, lock your phone, then tap Test — you should hear a banner and sound.',
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.45),
+              fontSize: 12,
+            ),
+          ),
+          const SizedBox(height: 16),
+        ],
         const HelpSupportTile(dark: true),
         const SizedBox(height: 16),
         const ProfileLegalSection(),
@@ -2458,6 +2528,37 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
         ),
       ],
     );
+  }
+
+  Future<void> _testLockScreenJobAlert() async {
+    if (!_isOnline) {
+      _snack('Go Online first, then test the lock-screen alert.');
+      return;
+    }
+    try {
+      await PushNotificationService.instance.ensureRegistered(
+        api: context.read<ApiClient>(),
+        session: context.read<Session>(),
+      );
+      final status = await context.read<ApiClient>().dio.get<Map<String, dynamic>>(
+        '/api/push/status',
+      );
+      final tokens = status.data?['tokens'];
+      if (tokens is! List || tokens.isEmpty) {
+        _snack(
+          'No push token yet. Allow notifications in Settings, then go Online again.',
+        );
+        return;
+      }
+      final res = await context.read<ApiClient>().dio.post<Map<String, dynamic>>(
+        '/api/push/test-incoming-ride',
+      );
+      final hint = res.data?['hint']?.toString() ??
+          'Lock your phone now — expect a banner and sound.';
+      _snack(hint, success: true);
+    } catch (e) {
+      _snack(AuthRepository.errorMessage(e));
+    }
   }
 
   Future<void> _saveProfile() async {
