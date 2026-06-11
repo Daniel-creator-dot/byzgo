@@ -241,6 +241,7 @@ class Order {
   Order mergeWithPrevious(Order prev) {
     if (prev.id != id) return normalizedForCustomerTrip();
     var next = normalizedForCustomerTrip();
+    if (next.isCancelled) return next;
     if (prev.status == 'cancelled' && next.status != 'cancelled') return prev;
 
     final prevHasRider = _hasAssignedRiderId(prev.riderId);

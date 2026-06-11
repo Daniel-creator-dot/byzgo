@@ -292,6 +292,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
       _orders,
       include: (o) =>
           _isRideTabTrip(o, userId) &&
+          !_dismissedTripIds.contains(o.id) &&
           !['delivered', 'cancelled', 'scheduled'].contains(o.status) &&
           customerTripBlocksNewBooking(o),
     );
@@ -776,7 +777,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
           ));
         }
       }
-      if (order.status == 'cancelled' && prev?.status != 'cancelled') {
+      if (order.status == 'cancelled') {
         _nearbyPoll?.cancel();
         _nearbyPoll = null;
         _etaPoll?.cancel();
@@ -785,6 +786,10 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
         _riderLocationPoll = null;
         _orderStatusPoll?.cancel();
         _orderStatusPoll = null;
+        if (prev?.status != 'cancelled') {
+          _dismissRideTabTrip(order.id);
+          _mapKey.currentState?.fitAllMarkers();
+        }
       } else if (order.status == 'delivered' && prev?.status != 'delivered') {
         _snack('Delivered — thanks for using BytzGO!', success: true);
       } else if (order.status == 'arrived' && prev?.status != 'arrived') {
@@ -808,26 +813,31 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
           _snack('Biker found — they\'re on the way', success: true);
         }
       }
-      _syncNearbyPoll();
-      _syncEtaPoll(order);
-      _syncRiderLocationPoll(order);
-      _syncOrderStatusPoll();
-      if (customerOrderHasActiveRider(order) &&
-          prev?.riderId != order.riderId) {
-        unawaited(_hydrateRiderPosition(order));
+      if (order.status != 'cancelled') {
+        _syncNearbyPoll();
+        _syncEtaPoll(order);
+        _syncRiderLocationPoll(order);
+        _syncOrderStatusPoll();
+        if (customerOrderHasActiveRider(order) &&
+            prev?.riderId != order.riderId) {
+          unawaited(_hydrateRiderPosition(order));
+        }
+        if (prev != null &&
+            prev.status != order.status &&
+            customerOrderHasActiveRider(order)) {
+          _lastEtaFetch = null;
+          _lastEtaOrigin = null;
+          unawaited(_refreshEta(order));
+        }
+        if (_activeCourier?.id == order.id) {
+          unawaited(_resolveTrackingLabels(order));
+        }
       }
-      if (prev != null &&
-          prev.status != order.status &&
-          customerOrderHasActiveRider(order)) {
-        _lastEtaFetch = null;
-        _lastEtaOrigin = null;
-        unawaited(_refreshEta(order));
-      }
-      if (_activeCourier?.id == order.id) {
-        unawaited(_resolveTrackingLabels(order));
-      }
-      if (order.customerId == _session.user?.id && _isTerminalRideTrip(order)) {
-        _dismissRideTabTrip(order.id);
+      final current =
+          _orders.where((o) => o.id == order.id).firstOrNull ?? order;
+      if (current.customerId == _session.user?.id &&
+          _isTerminalRideTrip(current)) {
+        _dismissRideTabTrip(current.id);
       }
     };
     socket.onWalletUpdated = (balance) {
@@ -836,7 +846,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
     };
     socket.onLocationUpdated = (riderId, lat, lng) {
       final active = _activeCourier;
-      if (active == null) return;
+      if (active == null || _dismissedTripIds.contains(active.id)) return;
       if (customerIsSearchingBiker(active)) {
         unawaited(_pollOrderStatusOnce());
         return;
@@ -1054,6 +1064,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
     final prev = _orders.where((o) => o.id == raw.id).firstOrNull;
     if (!_shouldAcceptOrderUpdate(raw.normalizedForCustomerTrip(), prev)) return;
     final order = _prepareIncomingOrder(raw);
+    final cancelled = order.status == 'cancelled';
     setState(() {
       final i = _orders.indexWhere((o) => o.id == order.id);
       if (i >= 0) {
@@ -1061,22 +1072,29 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
       } else {
         _orders = [order, ..._orders];
       }
-      if (order.status == 'cancelled') {
+      if (cancelled) {
         _clearLiveTrackingState();
       }
     });
-    _syncNearbyPoll();
-    _syncEtaPoll(order);
-    _syncRiderLocationPoll(order);
-    if (order.status == 'cancelled') {
+    if (cancelled) {
       _nearbyPoll?.cancel();
       _nearbyPoll = null;
       _etaPoll?.cancel();
       _etaPoll = null;
       _riderLocationPoll?.cancel();
       _riderLocationPoll = null;
-      _snack('Delivery request cancelled', success: true);
+      _orderStatusPoll?.cancel();
+      _orderStatusPoll = null;
+      _dismissRideTabTrip(order.id);
+      if (prev?.status != 'cancelled') {
+        _snack('Delivery request cancelled', success: true);
+      }
+      _mapKey.currentState?.fitAllMarkers();
+      return;
     }
+    _syncNearbyPoll();
+    _syncEtaPoll(order);
+    _syncRiderLocationPoll(order);
   }
 
   void _dismissRideTabTrip(String orderId) {
@@ -1104,11 +1122,12 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
   void _onOrderUpdated(Order order) {
     final prev = _orders.where((o) => o.id == order.id).firstOrNull;
     _replaceOrder(order);
-    if (order.status == 'delivered' && prev?.status != 'delivered') {
-      _noteDeliveryCompleted(order);
+    final current = _orders.where((o) => o.id == order.id).firstOrNull ?? order;
+    if (current.status == 'delivered' && prev?.status != 'delivered') {
+      _noteDeliveryCompleted(current);
     }
-    if (_isTerminalRideTrip(order)) {
-      _dismissRideTabTrip(order.id);
+    if (_isTerminalRideTrip(current)) {
+      _dismissRideTabTrip(current.id);
     }
   }
 
@@ -1505,7 +1524,8 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
     final tripComplete = trip?.status == 'delivered';
     final awaitingRating =
         tripComplete && trip != null && (trip.rating ?? 0) < 1;
-    final activeTracking = tracking && !tripComplete;
+    final activeTracking =
+        tracking && !tripComplete && trip?.status != 'cancelled';
     final sheetModeKey = tracking
         ? (awaitingRating ? 'rate-${trip.id}' : 'track-${trip.id}')
         : 'book';
