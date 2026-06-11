@@ -28,6 +28,7 @@ class CustomerActivityTabState extends State<CustomerActivityTab> {
   bool _loading = true;
   String? _error;
   Session? _watchedSession;
+  String? _sessionUserId;
 
   @override
   void initState() {
@@ -55,14 +56,20 @@ class CustomerActivityTabState extends State<CustomerActivityTab> {
 
   void _onSessionChanged() {
     if (!mounted) return;
-    if (context.read<Session>().isAuthenticated) {
-      _load();
-    } else {
+    final session = context.read<Session>();
+    final userId = session.user?.id;
+    if (!session.isAuthenticated) {
+      _sessionUserId = null;
       setState(() {
         _orders = [];
         _error = null;
         _loading = false;
       });
+      return;
+    }
+    if (userId != _sessionUserId) {
+      _sessionUserId = userId;
+      _load();
     }
   }
 

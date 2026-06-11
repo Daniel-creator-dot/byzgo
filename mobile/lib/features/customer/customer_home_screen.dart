@@ -83,6 +83,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
   double _pricePerKm = defaultDeliveryPricePerKm;
   DeliveryPricingConfig? _pricingConfig;
   Session? _watchedSession;
+  String? _sessionUserId;
   String? _focusedTripId;
   String? _pendingRatingTripId;
   final Set<String> _dismissedTripIds = {};
@@ -142,14 +143,20 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
 
   void _onSessionChanged() {
     if (!mounted) return;
-    if (_session.isAuthenticated) {
-      unawaited(_loadOrders());
-    } else {
+    final userId = _session.user?.id;
+    if (!_session.isAuthenticated) {
+      _sessionUserId = null;
       setState(() {
         _orders = [];
         _error = null;
         _loading = false;
       });
+      return;
+    }
+    // Wallet/profile patches notify Session too — only refetch on login or user switch.
+    if (userId != _sessionUserId) {
+      _sessionUserId = userId;
+      unawaited(_loadOrders());
     }
   }
 
@@ -1249,11 +1256,25 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
       }
     } catch (e) {
       if (!mounted) return;
+      final msg = OrdersRepository.errorMessage(e);
+      final offline = _isOfflineError(msg);
       setState(() {
-        _error = OrdersRepository.errorMessage(e);
         _loading = false;
+        if (offline && _orders.isNotEmpty) {
+          _error = null;
+        } else {
+          _error = msg;
+        }
       });
     }
+  }
+
+  bool _isOfflineError(String message) {
+    final lower = message.toLowerCase();
+    return lower.contains('cannot reach') ||
+        lower.contains('connection') ||
+        lower.contains('internet') ||
+        lower.contains('network');
   }
 
   void _onMapTap(double lat, double lng) {
@@ -1829,13 +1850,13 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
                   ),
                 ),
               ),
-            if (_error != null)
+            if (_error != null && !tracking)
               Padding(
                 padding: const EdgeInsets.only(top: 8),
                 child: BytzErrorPanel(
                   title: _isAuthErrorMessage(_error)
                       ? 'Sign in required'
-                      : 'Could not load trip',
+                      : 'Could not reach server',
                   message: _error!,
                   onRetry: _isAuthErrorMessage(_error)
                       ? () => context.push('/login')

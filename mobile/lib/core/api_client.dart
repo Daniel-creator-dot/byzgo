@@ -104,10 +104,9 @@ class ApiClient {
       if (m != null) return m.toString();
     }
     if (err.type == DioExceptionType.connectionError ||
-        err.type == DioExceptionType.connectionTimeout) {
-      return 'Cannot reach the server at ${Env.apiBaseUrl}. '
-          'Check your internet connection. For local dev on emulator use '
-          'API_URL=http://10.0.2.2:3000 with npm run backend.';
+        err.type == DioExceptionType.connectionTimeout ||
+        err.type == DioExceptionType.receiveTimeout) {
+      return 'Cannot reach the server. Check your internet connection and try again.';
     }
     return err.message ?? fallback;
   }
