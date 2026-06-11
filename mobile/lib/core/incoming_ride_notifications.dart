@@ -73,7 +73,7 @@ NotificationDetails incomingRideNotificationDetails({
       presentAlert: true,
       presentBadge: true,
       presentSound: true,
-      sound: playSound ? 'default' : null,
+      sound: 'default',
       interruptionLevel: InterruptionLevel.timeSensitive,
       threadIdentifier: 'incoming_rides_alarm',
       categoryIdentifier: 'incoming_ride_offer',

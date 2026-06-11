@@ -14,6 +14,7 @@ import '../models/auth_user.dart';
 import '../models/role.dart';
 import 'api_client.dart';
 import 'fcm_background.dart';
+import '../features/rider/incoming_ride_ring.dart';
 import 'incoming_ride_notifications.dart';
 import 'session.dart';
 
@@ -182,7 +183,7 @@ class PushNotificationService {
       }
       final token = await messaging.getToken();
       if (token == null || token.isEmpty) return;
-      await _registerToken(token);
+      await _registerToken(token, force: true);
     } catch (e) {
       debugPrint('BytzGo push: token registration failed: $e');
     }
@@ -288,6 +289,7 @@ class PushNotificationService {
       final payload = {
         for (final e in data.entries) e.key: e.value?.toString() ?? '',
       };
+      unawaited(IncomingRideRing.start());
       onIncomingRidePush?.call(payload);
       final orderId = data['orderId']?.toString() ?? '';
       if (orderId.isNotEmpty) {
@@ -299,7 +301,7 @@ class PushNotificationService {
           body: data['body']?.toString() ??
               message.notification?.body ??
               'Open BytzGo to accept',
-          playSound: true,
+          playSound: false,
         ));
       }
       return;
@@ -316,6 +318,7 @@ class PushNotificationService {
     final type = message.data['type']?.toString() ?? '';
     if (type == 'incoming-ride') {
       if (!acceptsIncomingRideJobs) return;
+      unawaited(IncomingRideRing.start());
       onIncomingRidePush?.call({
         for (final e in message.data.entries)
           e.key: e.value?.toString() ?? '',
@@ -330,6 +333,7 @@ class PushNotificationService {
       final data = jsonDecode(response.payload!) as Map<String, dynamic>;
       final type = data['type']?.toString() ?? '';
       if (type == 'incoming-ride' && acceptsIncomingRideJobs) {
+        unawaited(IncomingRideRing.start());
         onIncomingRidePush?.call({
           for (final e in data.entries) e.key: e.value?.toString() ?? '',
         });

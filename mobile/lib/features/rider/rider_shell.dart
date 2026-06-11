@@ -299,6 +299,9 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
       _snack('Push works — a real job will show Accept/Decline here.', success: true);
       return;
     }
+    if (_lifecycle == AppLifecycleState.resumed) {
+      unawaited(IncomingRideRing.start(maxDuration: IncomingRideAlert.callRingDuration));
+    }
     unawaited(() async {
       Order? order;
       if (orderId.isNotEmpty) {
@@ -505,7 +508,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
 
   void _startPolling() {
     _pollTimer?.cancel();
-    _pollTimer = Timer.periodic(const Duration(seconds: 15), (_) {
+    _pollTimer = Timer.periodic(const Duration(seconds: 5), (_) {
       if (_isOnline && mounted) _refreshAll(silent: true);
     });
   }

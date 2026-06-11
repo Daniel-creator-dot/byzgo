@@ -15,9 +15,36 @@ import UserNotifications
     GeneratedPluginRegistrant.register(with: self)
     if #available(iOS 10.0, *) {
       UNUserNotificationCenter.current().delegate = self
+      let incomingRide = UNNotificationCategory(
+        identifier: "incoming_ride_offer",
+        actions: [],
+        intentIdentifiers: [],
+        hiddenPreviewsBodyPlaceholder: "Incoming delivery job",
+        options: [.customDismissAction]
+      )
+      UNUserNotificationCenter.current().setNotificationCategories([incomingRide])
     }
     application.registerForRemoteNotifications()
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+  }
+
+  @available(iOS 10.0, *)
+  override func userNotificationCenter(
+    _ center: UNUserNotificationCenter,
+    willPresent notification: UNNotification,
+    withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+  ) {
+    let userInfo = notification.request.content.userInfo
+    let type = (userInfo["type"] as? String) ?? ""
+    if type == "incoming-ride" {
+      if #available(iOS 14.0, *) {
+        completionHandler([.banner, .list, .sound, .badge])
+      } else {
+        completionHandler([.alert, .sound, .badge])
+      }
+      return
+    }
+    super.userNotificationCenter(center, willPresent: notification, withCompletionHandler: completionHandler)
   }
 
   private static func resolveMapsApiKey() -> String? {

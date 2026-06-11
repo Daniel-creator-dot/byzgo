@@ -1,5 +1,7 @@
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
@@ -20,6 +22,13 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   final type = message.data['type']?.toString() ?? '';
   final isRide = type == 'incoming-ride';
   if (isRide && !await PushSessionContext.isRider()) {
+    return;
+  }
+  // iOS: lock-screen alert+sound comes from APNs — skip duplicate local banner.
+  if (isRide &&
+      !kIsWeb &&
+      defaultTargetPlatform == TargetPlatform.iOS &&
+      message.notification != null) {
     return;
   }
   final orderId = message.data['orderId']?.toString() ?? '';

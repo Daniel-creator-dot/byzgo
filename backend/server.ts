@@ -2031,7 +2031,8 @@ const OFFER_TTL_SEC = 90;
 const RIDERS_PER_WAVE = 1;
 /** Max sequential offers before giving up (each step = next nearest rider). */
 const MAX_DISPATCH_WAVES = 15;
-const LOCATION_MAX_AGE_MIN = 15;
+/** Max age for rider GPS row; profile lat/lng still used when socket GPS is stale. */
+const LOCATION_MAX_AGE_MIN = 45;
 /** Expanding pickup radius (km) as dispatch steps progress. */
 const DISPATCH_RADIUS_KM_TIERS = [4, 8, 15] as const;
 const NEARBY_RIDERS_MAX_KM = 6;
@@ -2146,14 +2147,28 @@ async function queryNearestActiveRiders(
       SELECT u.id,
         (6371 * acos(
           LEAST(1, GREATEST(-1,
-            cos(radians($1)) * cos(radians(rl.lat)) * cos(radians(rl.lng) - radians($2))
-            + sin(radians($1)) * sin(radians(rl.lat))
+            cos(radians($1)) * cos(radians(eff.lat)) * cos(radians(eff.lng) - radians($2))
+            + sin(radians($1)) * sin(radians(eff.lat))
           ))
         )) AS distance_km
        FROM users u
-       INNER JOIN rider_locations rl ON rl.rider_id = u.id
+       LEFT JOIN rider_locations rl ON rl.rider_id = u.id
+       CROSS JOIN LATERAL (
+         SELECT
+           COALESCE(rl.lat, u.lat::double precision) AS lat,
+           COALESCE(rl.lng, u.lng::double precision) AS lng
+       ) eff
        WHERE u.role = 'rider' AND u.status = 'active' AND u.is_online = true
-       AND rl.updated_at > NOW() - INTERVAL '1 minute' * $5
+       AND eff.lat IS NOT NULL AND eff.lng IS NOT NULL
+       AND ABS(eff.lat) > 0.001 AND ABS(eff.lng) > 0.001
+       AND (
+         rl.updated_at > NOW() - INTERVAL '1 minute' * $5
+         OR (
+           u.lat IS NOT NULL AND u.lng IS NOT NULL
+           AND (rl.rider_id IS NULL OR rl.updated_at IS NULL
+             OR rl.updated_at <= NOW() - INTERVAL '1 minute' * $5)
+         )
+       )
        AND (COALESCE(array_length($3::uuid[], 1), 0) = 0 OR NOT (u.id = ANY($3::uuid[])))
        AND NOT EXISTS (
          SELECT 1 FROM orders busy
@@ -2213,7 +2228,11 @@ async function emitOffersToRiders(order: any, candidates: NearbyRider[], wave: n
   const orderPayload = { ...order };
   const expiresIso = expiresAt.toISOString();
 
-  // Socket + in-app ring first — do not block on DB or push delivery.
+  // FCM first (lock-screen alarm), then socket (in-app ring) — never block on DB.
+  void sendPushToRiders(order, eligible, { skipRecipientFilter: true }).catch((err) =>
+    console.warn('[push] incoming ride send failed:', err)
+  );
+
   for (const { id: riderId, distanceKm } of eligible) {
     const dist =
       Number.isFinite(distanceKm) && distanceKm >= 0
@@ -2232,10 +2251,6 @@ async function emitOffersToRiders(order: any, candidates: NearbyRider[], wave: n
   const next = eligible[0];
   console.info(
     `[dispatch] order ${order.id} step ${wave}: offered to ${next.id.slice(0, 8)}… (${next.distanceKm.toFixed(1)} km)`,
-  );
-
-  void sendPushToRiders(order, eligible, { skipRecipientFilter: true }).catch((err) =>
-    console.warn('[push] incoming ride send failed:', err)
   );
 
   await Promise.all(
@@ -2545,13 +2560,21 @@ async function sendPushToUserIds(userIds: string[], alert: PushAlert) {
       );
     }
 
+    const apnsExpires =
+      incomingRide && alert.expiresAt
+        ? String(Math.floor(new Date(alert.expiresAt).getTime() / 1000))
+        : String(Math.floor(Date.now() / 1000) + 90);
+
     const messages = rows.map((row: { token: string; platform?: string }) => {
-      const platform = String(row.platform || 'android').toLowerCase();
+      const platform = String(row.platform || '').toLowerCase();
       const isIos = platform === 'ios' || platform === 'macos';
+      const isAndroid = platform === 'android';
       // Android incoming jobs: data-only (Flutter shows one loud local alarm).
-      // iOS incoming jobs: alert push with sound — wakes lock screen (Bolt/Uber-style).
-      const includeNotification = !incomingRide || isIos;
-      const iosIncomingRide = incomingRide && isIos;
+      // iOS / unknown platform: APNs alert+sound only (no FCM notification key — avoids silent iOS banners).
+      const androidIncomingRide = incomingRide && isAndroid;
+      const iosIncomingRide = incomingRide && (isIos || !isAndroid);
+      const loudAlert = iosIncomingRide || (high && !androidIncomingRide);
+      const includeNotification = !incomingRide;
       return {
         token: row.token,
         ...(includeNotification
@@ -2566,7 +2589,7 @@ async function sendPushToUserIds(userIds: string[], alert: PushAlert) {
         android: {
           priority: high ? 'high' : 'normal',
           ttl: high ? 30 * 1000 : 3600 * 1000,
-          ...(incomingRide
+          ...(androidIncomingRide || (incomingRide && !isAndroid)
             ? {}
             : {
                 notification: {
@@ -2581,12 +2604,13 @@ async function sendPushToUserIds(userIds: string[], alert: PushAlert) {
         },
         apns: {
           headers: {
-            'apns-priority': iosIncomingRide || high ? '10' : '5',
-            'apns-push-type': iosIncomingRide || high ? 'alert' : 'background',
+            'apns-priority': loudAlert ? '10' : '5',
+            'apns-push-type': loudAlert ? 'alert' : 'background',
+            ...(iosIncomingRide ? { 'apns-expiration': apnsExpires } : {}),
           },
           payload: {
             aps: {
-              ...(iosIncomingRide || high
+              ...(loudAlert
                 ? {
                     alert: { title: alert.title, body: alert.body },
                     sound: 'default',
