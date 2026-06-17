@@ -22,6 +22,7 @@
     "icons": "python mobile/scripts/generate_app_icon.py",
     "mobile:sync-maps": "node mobile/scripts/sync_maps_key.mjs",
     "flutter:chrome": "cd mobile && ..\\.flutter-sdk\\bin\\flutter run -d chrome --dart-define-from-file=dart_defines.json",
+    "setup:android-studio": "powershell -ExecutionPolicy Bypass -File mobile/scripts/setup_android_studio.ps1",
     "flutter:android": "cd mobile && ..\\.flutter-sdk\\bin\\flutter run -d emulator-5554 --dart-define-from-file=dart_defines.json --dart-define=API_URL=https://www.bytzgo.net",
     "flutter:android:local": "cd mobile && ..\\.flutter-sdk\\bin\\flutter run -d emulator-5554 --dart-define-from-file=dart_defines.json --dart-define=API_URL=http://10.0.2.2:3000",
     "flutter:android:live": "npm run flutter:android",

@@ -26,8 +26,29 @@ Cross-platform iOS and Android client for **BytzGo** — **Bolt / Uber–style**
 
 1. [Flutter SDK](https://docs.flutter.dev/get-started/install/windows) (stable, 3.24+) — add `flutter\bin` to **PATH**
 2. Android Studio (Android SDK) and/or Xcode on macOS for iOS
-3. Backend: `npm run backend` from repo root (port **3000**)
+3. Backend: `npm run backend` from repo root (port **3000**) — only for local API testing
 4. Env: root `.env.example` and `backend/.env`
+
+## Android Studio (Windows) — quick start
+
+After cloning the repo, run **once** from PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File mobile\scripts\setup_android_studio.ps1
+```
+
+This creates `android/local.properties` and `dart_defines.json` (both gitignored) with your Flutter + Android SDK paths.
+
+Then in Android Studio:
+
+1. **File → Open** → select the **`mobile`** folder (not only `mobile/android`)
+2. Install **Flutter** and **Dart** plugins if prompted
+3. **View → Tool Windows → Device Manager** → **▶ Play** on a virtual device
+4. Open `lib/main.dart` → choose run config **BytzGo (production)** → **Run ▶**
+
+Or from repo root: `npm run flutter:android` (uses live API at `https://www.bytzgo.net`).
+
+**Important:** Use branch **`main`** for the latest app fixes. Older feature branches may lag behind production.
 
 ## App Store (iOS)
 
