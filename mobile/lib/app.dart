@@ -18,6 +18,7 @@ import 'features/auth/auth_repository.dart';
 import 'features/orders/orders_repository.dart';
 import 'features/rider/rider_commission_repository.dart';
 import 'features/rider/rider_documents_repository.dart';
+import 'features/owner/owner_repository.dart';
 import 'features/vendor/vendor_repository.dart';
 import 'features/riders/riders_repository.dart';
 import 'features/support/support_repository.dart';
@@ -130,6 +131,7 @@ class _BytzGoAppState extends State<BytzGoApp> {
         Provider(create: (ctx) => AdminRepository(ctx.read<ApiClient>())),
         Provider(create: (ctx) => OrdersRepository(ctx.read<ApiClient>())),
         Provider(create: (ctx) => VendorRepository(ctx.read<ApiClient>())),
+        Provider(create: (ctx) => OwnerRepository(ctx.read<ApiClient>())),
         Provider(create: (ctx) => RidersRepository(ctx.read<ApiClient>())),
         Provider(create: (ctx) => WalletRepository(ctx.read<ApiClient>())),
         Provider(create: (ctx) => RiderStatsRepository(ctx.read<ApiClient>())),

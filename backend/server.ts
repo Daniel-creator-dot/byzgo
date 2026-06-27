@@ -365,6 +365,41 @@ async function vendorRowForClient(row: Record<string, unknown>) {
   };
 }
 
+const VEHICLE_STATUSES = ['active', 'maintenance', 'retired'] as const;
+const VEHICLE_TYPES = ['motorcycle', 'bicycle', 'car', 'van'] as const;
+
+function normalizeVehicleStatus(value: unknown): string | null {
+  if (value == null || value === '') return null;
+  const s = String(value).trim().toLowerCase();
+  return (VEHICLE_STATUSES as readonly string[]).includes(s) ? s : null;
+}
+
+function normalizeVehicleType(value: unknown): string | null {
+  if (value == null || value === '') return null;
+  const s = String(value).trim().toLowerCase();
+  return (VEHICLE_TYPES as readonly string[]).includes(s) ? s : null;
+}
+
+function vehicleRowForClient(row: Record<string, unknown>) {
+  return {
+    id: row.id,
+    owner_id: row.owner_id,
+    plate_number: row.plate_number,
+    make: row.make ?? null,
+    model: row.model ?? null,
+    year: row.year != null ? Number(row.year) : null,
+    color: row.color ?? null,
+    vehicle_type: row.vehicle_type ?? 'motorcycle',
+    status: row.status ?? 'active',
+    assigned_rider_id: row.assigned_rider_id ?? null,
+    assigned_rider_name: row.assigned_rider_name ?? null,
+    assigned_rider_phone: row.assigned_rider_phone ?? null,
+    notes: row.notes ?? null,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
 const PRIMECARE_CANONICAL_EMAIL = 'vendor@bytzgo.net';
 
 function isPrimeCareVendorRow(row: { name?: string; email?: string }): boolean {
@@ -1033,7 +1068,7 @@ const initDb = async () => {
         address TEXT,
         lat DOUBLE PRECISION,
         lng DOUBLE PRECISION,
-        role TEXT NOT NULL CHECK (role IN ('customer', 'vendor', 'rider', 'admin')),
+        role TEXT NOT NULL CHECK (role IN ('customer', 'vendor', 'rider', 'admin', 'owner')),
         balance DECIMAL(10,2) DEFAULT 0.00,
         status TEXT DEFAULT 'active',
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -1253,7 +1288,7 @@ const initDb = async () => {
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         display_id TEXT NOT NULL UNIQUE,
         created_by UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        created_by_role TEXT NOT NULL CHECK (created_by_role IN ('customer', 'vendor', 'rider', 'admin')),
+        created_by_role TEXT NOT NULL CHECK (created_by_role IN ('customer', 'vendor', 'rider', 'admin', 'owner')),
         category TEXT NOT NULL CHECK (category IN ('order', 'payment', 'account', 'delivery', 'shop', 'other')),
         subject TEXT NOT NULL,
         status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'pending', 'resolved', 'closed')),
@@ -1296,7 +1331,42 @@ const initDb = async () => {
         ALTER TABLE orders ADD COLUMN IF NOT EXISTS offer_expires_at TIMESTAMP WITH TIME ZONE;
       EXCEPTION WHEN others THEN NULL;
       END $$;
+
+      CREATE TABLE IF NOT EXISTS vehicles (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        owner_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        plate_number TEXT NOT NULL,
+        make TEXT,
+        model TEXT,
+        year INTEGER,
+        color TEXT,
+        vehicle_type TEXT NOT NULL DEFAULT 'motorcycle',
+        status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'maintenance', 'retired')),
+        assigned_rider_id UUID REFERENCES users(id) ON DELETE SET NULL,
+        notes TEXT,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (owner_id, plate_number)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_vehicles_owner_id ON vehicles(owner_id, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_vehicles_assigned_rider ON vehicles(assigned_rider_id)
+        WHERE assigned_rider_id IS NOT NULL;
     `);
+
+    await pool.query(`
+      DO $$ BEGIN
+        ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
+        ALTER TABLE users ADD CONSTRAINT users_role_check
+          CHECK (role IN ('customer', 'vendor', 'rider', 'admin', 'owner'));
+      EXCEPTION WHEN others THEN NULL;
+      END $$;
+      DO $$ BEGIN
+        ALTER TABLE support_tickets DROP CONSTRAINT IF EXISTS support_tickets_created_by_role_check;
+        ALTER TABLE support_tickets ADD CONSTRAINT support_tickets_created_by_role_check
+          CHECK (created_by_role IN ('customer', 'vendor', 'rider', 'admin', 'owner'));
+      EXCEPTION WHEN others THEN NULL;
+      END $$;
 
     // Seed SMS gateway configurations
     await pool.query(`
@@ -3219,7 +3289,7 @@ app.post('/api/auth/register', async (req, res) => {
   }
   try {
     const hashedPassword = await bcrypt.hash(password, 10);
-    const userStatus = role === 'vendor' || role === 'rider' ? 'pending' : 'active';
+    const userStatus = role === 'vendor' || role === 'rider' || role === 'owner' ? 'pending' : 'active';
     const storePhone = phone ? formatGhanaPhone(phone) : phone;
     const result = await pool.query(
       'INSERT INTO users (name, email, password, role, status, phone) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, name, email, role, balance, phone, status',
@@ -3449,7 +3519,7 @@ app.post('/api/auth/supabase', async (req, res) => {
     let result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
     let user = result.rows[0];
     if (!user) {
-      const userStatus = role === 'vendor' || role === 'rider' ? 'pending' : 'active';
+      const userStatus = role === 'vendor' || role === 'rider' || role === 'owner' ? 'pending' : 'active';
       result = await pool.query(
         'INSERT INTO users (name, email, google_id, role, status) VALUES ($1, $2, $3, $4, $5) RETURNING id, name, email, role, balance, phone, status',
         [name, email, googleId, role || 'customer', userStatus]
@@ -3502,6 +3572,9 @@ app.delete('/api/auth/account', authenticateToken, async (req: any, res) => {
     }
 
     await client.query('BEGIN');
+    if (row.role === 'owner') {
+      await client.query('DELETE FROM vehicles WHERE owner_id = $1', [userId]);
+    }
     if (row.role === 'vendor') {
       await client.query('DELETE FROM products WHERE vendor_id = $1', [userId]);
       await client.query('UPDATE orders SET vendor_id = NULL WHERE vendor_id = $1', [userId]);
@@ -4900,6 +4973,232 @@ app.get('/api/vendor/products', authenticateToken, async (req: any, res) => {
   }
 });
 
+/** Fleet owner — dashboard + vehicle registry */
+app.get('/api/owner/dashboard', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'owner') return res.status(403).json({ message: 'Fleet owners only' });
+  try {
+    const ownerId = req.user.id;
+    const [statsRes, vehiclesRes] = await Promise.all([
+      pool.query(
+        `SELECT
+          (SELECT COUNT(*)::int FROM vehicles WHERE owner_id = $1) AS total_vehicles,
+          (SELECT COUNT(*)::int FROM vehicles WHERE owner_id = $1 AND status = 'active') AS active_vehicles,
+          (SELECT COUNT(*)::int FROM vehicles WHERE owner_id = $1 AND assigned_rider_id IS NOT NULL) AS assigned_vehicles,
+          (SELECT COUNT(*)::int FROM vehicles WHERE owner_id = $1 AND status = 'maintenance') AS maintenance_vehicles`,
+        [ownerId]
+      ),
+      pool.query(
+        `SELECT v.*, r.name AS assigned_rider_name, r.phone AS assigned_rider_phone
+         FROM vehicles v
+         LEFT JOIN users r ON r.id = v.assigned_rider_id
+         WHERE v.owner_id = $1
+         ORDER BY v.updated_at DESC, v.plate_number ASC
+         LIMIT 100`,
+        [ownerId]
+      ),
+    ]);
+    const userRes = await pool.query(
+      `SELECT id, name, email, phone, status, balance, created_at FROM users WHERE id = $1`,
+      [ownerId]
+    );
+    res.json({
+      owner: userRes.rows[0],
+      stats: statsRes.rows[0],
+      vehicles: vehiclesRes.rows.map(vehicleRowForClient),
+    });
+  } catch (err) {
+    console.error('Owner dashboard error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.get('/api/owner/vehicles', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'owner') return res.status(403).json({ message: 'Fleet owners only' });
+  try {
+    const result = await pool.query(
+      `SELECT v.*, r.name AS assigned_rider_name, r.phone AS assigned_rider_phone
+       FROM vehicles v
+       LEFT JOIN users r ON r.id = v.assigned_rider_id
+       WHERE v.owner_id = $1
+       ORDER BY v.updated_at DESC, v.plate_number ASC`,
+      [req.user.id]
+    );
+    res.json(result.rows.map(vehicleRowForClient));
+  } catch (err) {
+    console.error('Owner vehicles list error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.post('/api/owner/vehicles', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'owner') return res.status(403).json({ message: 'Fleet owners only' });
+  const ownerRes = await pool.query('SELECT status FROM users WHERE id = $1', [req.user.id]);
+  if (ownerRes.rows[0]?.status !== 'active') {
+    return res.status(403).json({
+      message: 'Your owner account is pending approval. You can add vehicles after admin approves your account.',
+    });
+  }
+  const plate = String(req.body.plate_number || '').trim().toUpperCase();
+  if (!plate || plate.length < 3) {
+    return res.status(400).json({ message: 'Enter a valid plate number' });
+  }
+  const status = normalizeVehicleStatus(req.body.status) ?? 'active';
+  const vehicleType = normalizeVehicleType(req.body.vehicle_type) ?? 'motorcycle';
+  const yearRaw = req.body.year;
+  const year =
+    yearRaw != null && String(yearRaw).trim() !== '' ? parseInt(String(yearRaw), 10) : null;
+  if (year != null && (Number.isNaN(year) || year < 1980 || year > new Date().getFullYear() + 1)) {
+    return res.status(400).json({ message: 'Enter a valid vehicle year' });
+  }
+  try {
+    const result = await pool.query(
+      `INSERT INTO vehicles (
+         owner_id, plate_number, make, model, year, color, vehicle_type, status, notes
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING *`,
+      [
+        req.user.id,
+        plate,
+        String(req.body.make || '').trim() || null,
+        String(req.body.model || '').trim() || null,
+        year,
+        String(req.body.color || '').trim() || null,
+        vehicleType,
+        status,
+        String(req.body.notes || '').trim() || null,
+      ]
+    );
+    res.status(201).json(vehicleRowForClient(result.rows[0]));
+  } catch (err: any) {
+    if (err?.code === '23505') {
+      return res.status(409).json({ message: 'You already registered a vehicle with this plate number' });
+    }
+    console.error('Create vehicle error:', err);
+    res.status(500).json({ message: 'Failed to add vehicle' });
+  }
+});
+
+app.patch('/api/owner/vehicles/:id', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'owner') return res.status(403).json({ message: 'Fleet owners only' });
+  const { id } = req.params;
+  try {
+    const existing = await pool.query(
+      'SELECT * FROM vehicles WHERE id = $1 AND owner_id = $2',
+      [id, req.user.id]
+    );
+    if (!existing.rows[0]) return res.status(404).json({ message: 'Vehicle not found' });
+
+    const plate = req.body.plate_number != null
+      ? String(req.body.plate_number).trim().toUpperCase()
+      : existing.rows[0].plate_number;
+    if (!plate || plate.length < 3) {
+      return res.status(400).json({ message: 'Enter a valid plate number' });
+    }
+    const status = req.body.status != null
+      ? normalizeVehicleStatus(req.body.status) ?? existing.rows[0].status
+      : existing.rows[0].status;
+    const vehicleType = req.body.vehicle_type != null
+      ? normalizeVehicleType(req.body.vehicle_type) ?? existing.rows[0].vehicle_type
+      : existing.rows[0].vehicle_type;
+    let year = existing.rows[0].year;
+    if (req.body.year !== undefined) {
+      const yearRaw = req.body.year;
+      year =
+        yearRaw != null && String(yearRaw).trim() !== ''
+          ? parseInt(String(yearRaw), 10)
+          : null;
+      if (year != null && (Number.isNaN(year) || year < 1980 || year > new Date().getFullYear() + 1)) {
+        return res.status(400).json({ message: 'Enter a valid vehicle year' });
+      }
+    }
+
+    let assignedRiderId = existing.rows[0].assigned_rider_id;
+    if (req.body.assigned_rider_id !== undefined) {
+      const raw = req.body.assigned_rider_id;
+      if (raw == null || raw === '') {
+        assignedRiderId = null;
+      } else {
+        const riderId = String(raw).trim();
+        const riderRes = await pool.query(
+          `SELECT id FROM users WHERE id = $1 AND role = 'rider' AND status = 'active'`,
+          [riderId]
+        );
+        if (!riderRes.rows[0]) {
+          return res.status(400).json({ message: 'Assigned rider must be an active BytzGo driver' });
+        }
+        assignedRiderId = riderId;
+      }
+    }
+
+    const result = await pool.query(
+      `UPDATE vehicles SET
+         plate_number = $1,
+         make = $2,
+         model = $3,
+         year = $4,
+         color = $5,
+         vehicle_type = $6,
+         status = $7,
+         notes = $8,
+         assigned_rider_id = $9,
+         updated_at = CURRENT_TIMESTAMP
+       WHERE id = $10 AND owner_id = $11
+       RETURNING *`,
+      [
+        plate,
+        req.body.make !== undefined
+          ? String(req.body.make || '').trim() || null
+          : existing.rows[0].make,
+        req.body.model !== undefined
+          ? String(req.body.model || '').trim() || null
+          : existing.rows[0].model,
+        year,
+        req.body.color !== undefined
+          ? String(req.body.color || '').trim() || null
+          : existing.rows[0].color,
+        vehicleType,
+        status,
+        req.body.notes !== undefined
+          ? String(req.body.notes || '').trim() || null
+          : existing.rows[0].notes,
+        assignedRiderId,
+        id,
+        req.user.id,
+      ]
+    );
+    const joined = await pool.query(
+      `SELECT v.*, r.name AS assigned_rider_name, r.phone AS assigned_rider_phone
+       FROM vehicles v
+       LEFT JOIN users r ON r.id = v.assigned_rider_id
+       WHERE v.id = $1`,
+      [result.rows[0].id]
+    );
+    res.json(vehicleRowForClient(joined.rows[0]));
+  } catch (err: any) {
+    if (err?.code === '23505') {
+      return res.status(409).json({ message: 'You already registered a vehicle with this plate number' });
+    }
+    console.error('Update vehicle error:', err);
+    res.status(500).json({ message: 'Failed to update vehicle' });
+  }
+});
+
+app.delete('/api/owner/vehicles/:id', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'owner') return res.status(403).json({ message: 'Fleet owners only' });
+  const { id } = req.params;
+  try {
+    const result = await pool.query(
+      'DELETE FROM vehicles WHERE id = $1 AND owner_id = $2 RETURNING id',
+      [id, req.user.id]
+    );
+    if (!result.rows[0]) return res.status(404).json({ message: 'Vehicle not found' });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Delete vehicle error:', err);
+    res.status(500).json({ message: 'Failed to delete vehicle' });
+  }
+});
+
 app.delete('/api/products/:id', authenticateToken, async (req: any, res) => {
   const { id } = req.params;
   if (req.user.role !== 'vendor' && req.user.role !== 'admin') return res.sendStatus(403);
@@ -5197,6 +5496,68 @@ app.patch('/api/admin/riders/:id/reject', authenticateToken, async (req: any, re
   } catch (err) {
     console.error('Reject rider error:', err);
     res.status(500).json({ message: 'Failed to reject rider' });
+  }
+});
+
+});
+
+app.get('/api/admin/pending-owners', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'admin') return res.sendStatus(403);
+  try {
+    const result = await pool.query(
+      `SELECT u.id, u.name, u.email, u.phone, u.region, u.status, u.created_at,
+        (SELECT COUNT(*)::int FROM vehicles v WHERE v.owner_id = u.id) AS vehicle_count
+       FROM users u
+       WHERE u.role = 'owner' AND u.status IN ('pending', 'rejected')
+       ORDER BY u.created_at DESC`
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Pending owners error:', err);
+    res.status(500).json({ message: 'Failed to fetch pending fleet owners' });
+  }
+});
+
+app.patch('/api/admin/owners/:id/approve', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'admin') return res.sendStatus(403);
+  const { id } = req.params;
+  try {
+    const check = await pool.query('SELECT id, role FROM users WHERE id = $1', [id]);
+    if (!check.rows[0] || check.rows[0].role !== 'owner') {
+      return res.status(404).json({ message: 'Fleet owner not found' });
+    }
+    const result = await pool.query(
+      `UPDATE users SET status = 'active' WHERE id = $1
+       RETURNING id, name, email, role, status, phone, region`,
+      [id]
+    );
+    res.json(result.rows[0]);
+    io.to(id).emit('status:updated', { status: 'active' });
+  } catch (err) {
+    console.error('Approve owner error:', err);
+    res.status(500).json({ message: 'Failed to approve fleet owner' });
+  }
+});
+
+app.patch('/api/admin/owners/:id/reject', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'admin') return res.sendStatus(403);
+  const { id } = req.params;
+  const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+  try {
+    const check = await pool.query('SELECT id, role FROM users WHERE id = $1', [id]);
+    if (!check.rows[0] || check.rows[0].role !== 'owner') {
+      return res.status(404).json({ message: 'Fleet owner not found' });
+    }
+    const result = await pool.query(
+      `UPDATE users SET status = 'rejected' WHERE id = $1
+       RETURNING id, name, email, role, status, phone, region`,
+      [id]
+    );
+    res.json(result.rows[0]);
+    io.to(id).emit('status:updated', { status: 'rejected', reason: reason || 'Application rejected' });
+  } catch (err) {
+    console.error('Reject owner error:', err);
+    res.status(500).json({ message: 'Failed to reject fleet owner' });
   }
 });
 

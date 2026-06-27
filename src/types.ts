@@ -57,4 +57,4 @@ export interface Rider {
   lng: number;
 }
 
-export type Role = 'customer' | 'vendor' | 'rider' | 'admin';
+export type Role = 'customer' | 'vendor' | 'rider' | 'admin' | 'owner';

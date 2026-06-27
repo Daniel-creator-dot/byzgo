@@ -6,6 +6,7 @@ import '../features/admin/admin_home_screen.dart';
 import '../features/auth/login_screen.dart';
 import '../features/customer/customer_shell.dart';
 import '../features/rider/rider_home_screen.dart';
+import '../features/owner/owner_home_screen.dart';
 import '../features/vendor/vendor_home_screen.dart';
 import '../models/role.dart';
 import '../shared/widgets/bytz_state_panels.dart';
@@ -44,6 +45,9 @@ GoRouter createAppRouter(Session session) {
       if (path.startsWith('/admin') && role != AppRole.admin) {
         return _homeForRole(role);
       }
+      if (path.startsWith('/owner') && role != AppRole.owner) {
+        return _homeForRole(role);
+      }
       return null;
     },
     routes: [
@@ -66,6 +70,10 @@ GoRouter createAppRouter(Session session) {
       GoRoute(
         path: '/admin',
         pageBuilder: (context, state) => _fadePage(state, const AdminHomeScreen()),
+      ),
+      GoRoute(
+        path: '/owner',
+        pageBuilder: (context, state) => _fadePage(state, const OwnerHomeScreen()),
       ),
     ],
     errorBuilder: (context, state) => BytzRouteErrorScreen(
@@ -104,5 +112,7 @@ String _homeForRole(AppRole role) {
       return '/vendor';
     case AppRole.admin:
       return '/admin';
+    case AppRole.owner:
+      return '/owner';
   }
 }
