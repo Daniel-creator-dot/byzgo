@@ -2,7 +2,8 @@ enum AppRole {
   customer,
   vendor,
   rider,
-  admin;
+  admin,
+  owner;
 
   static AppRole fromString(String? value) {
     return AppRole.values.firstWhere(
@@ -16,11 +17,13 @@ enum AppRole {
       case AppRole.customer:
         return 'Customer';
       case AppRole.vendor:
-        return 'Vendor';
+        return 'Vendor / Shop';
       case AppRole.rider:
-        return 'Rider';
+        return 'Driver / Rider';
       case AppRole.admin:
         return 'Admin';
+      case AppRole.owner:
+        return 'Fleet owner';
     }
   }
 }

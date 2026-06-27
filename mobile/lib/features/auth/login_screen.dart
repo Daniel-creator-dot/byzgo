@@ -162,6 +162,8 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
         return '/vendor';
       case AppRole.admin:
         return '/admin';
+      case AppRole.owner:
+        return '/owner';
     }
   }
 

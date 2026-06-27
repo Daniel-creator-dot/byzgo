@@ -114,6 +114,8 @@ class SupportTicket {
         return 'Driver';
       case 'admin':
         return 'Admin';
+      case 'owner':
+        return 'Fleet owner';
       default:
         return role;
     }
