@@ -275,7 +275,7 @@ function isRiderDocType(value: string): value is RiderDocType {
 }
 
 const USER_PUBLIC_FIELDS =
-  'id, name, email, role, balance, phone, cover_image, avatar_url, address, lat, lng, region, status, is_online, shop_category';
+  'id, name, email, role, balance, phone, cover_image, avatar_url, address, lat, lng, region, status, is_online, shop_category, rider_vehicle_type';
 
 /** Minimal JWT — large payloads (e.g. base64 in token) trigger HTTP 431 on Render/nginx. */
 function signAuthToken(user: { id: string | number; role?: string }): string {
@@ -366,7 +366,94 @@ async function vendorRowForClient(row: Record<string, unknown>) {
 }
 
 const VEHICLE_STATUSES = ['active', 'maintenance', 'retired'] as const;
-const VEHICLE_TYPES = ['motorcycle', 'bicycle', 'car', 'van'] as const;
+const VEHICLE_TYPES = ['motorcycle', 'bicycle', 'car', 'van', 'keke'] as const;
+
+/** Customer-facing ride tiers (Nigeria/India-style okada + keke + package). */
+const RIDE_SERVICE_TYPES = ['package', 'okada', 'keke'] as const;
+type RideServiceType = (typeof RIDE_SERVICE_TYPES)[number];
+
+const RIDER_VEHICLE_TYPES = ['motorcycle', 'keke', 'bicycle'] as const;
+
+const RIDE_SERVICE_META: Record<
+  RideServiceType,
+  { rateKey: string; minKey: string; defaultRate: number; defaultMin: number; label: string; maxPassengers: number }
+> = {
+  package: {
+    rateKey: 'delivery_price_per_km',
+    minKey: 'delivery_min_fee',
+    defaultRate: 4,
+    defaultMin: 5,
+    label: 'Package',
+    maxPassengers: 0,
+  },
+  okada: {
+    rateKey: 'okada_price_per_km',
+    minKey: 'okada_min_fee',
+    defaultRate: 3.5,
+    defaultMin: 6,
+    label: 'Okada',
+    maxPassengers: 2,
+  },
+  keke: {
+    rateKey: 'keke_price_per_km',
+    minKey: 'keke_min_fee',
+    defaultRate: 2.5,
+    defaultMin: 5,
+    label: 'Keke',
+    maxPassengers: 4,
+  },
+};
+
+function normalizeRideServiceType(value: unknown): RideServiceType {
+  const s = String(value ?? 'package').trim().toLowerCase();
+  if (s === 'courier' || s === 'delivery' || s === 'package') return 'package';
+  if (s === 'okada' || s === 'bike' || s === 'motorbike' || s === 'ride') return 'okada';
+  if (s === 'keke' || s === 'tricycle' || s === 'napep' || s === 'auto' || s === 'rickshaw') {
+    return 'keke';
+  }
+  return (RIDE_SERVICE_TYPES as readonly string[]).includes(s) ? (s as RideServiceType) : 'package';
+}
+
+function normalizeRiderVehicleType(value: unknown): string {
+  const s = String(value ?? 'motorcycle').trim().toLowerCase();
+  if (s === 'okada' || s === 'motorbike') return 'motorcycle';
+  if (s === 'keke' || s === 'tricycle' || s === 'napep' || s === 'auto') return 'keke';
+  if ((RIDER_VEHICLE_TYPES as readonly string[]).includes(s)) return s;
+  return 'motorcycle';
+}
+
+/** Which online riders can take a given service (Gokada-style matching). */
+function riderServesService(riderVehicle: string | null | undefined, service: RideServiceType): boolean {
+  const v = normalizeRiderVehicleType(riderVehicle);
+  if (service === 'package') return v === 'motorcycle' || v === 'bicycle';
+  if (service === 'okada') return v === 'motorcycle';
+  if (service === 'keke') return v === 'keke';
+  return false;
+}
+
+function rideServiceSqlFilter(service: RideServiceType): string {
+  if (service === 'okada') {
+    return `AND COALESCE(u.rider_vehicle_type, 'motorcycle') IN ('motorcycle')`;
+  }
+  if (service === 'keke') {
+    return `AND COALESCE(u.rider_vehicle_type, 'motorcycle') = 'keke'`;
+  }
+  return `AND COALESCE(u.rider_vehicle_type, 'motorcycle') IN ('motorcycle', 'bicycle')`;
+}
+
+async function getRideServiceRate(service: RideServiceType): Promise<number> {
+  const meta = RIDE_SERVICE_META[service];
+  const raw = await getSetting(meta.rateKey);
+  const parsed = parseFloat(raw || '');
+  return Math.max(0.01, Number.isFinite(parsed) && parsed > 0 ? parsed : meta.defaultRate);
+}
+
+async function getRideServiceMinFee(service: RideServiceType): Promise<number> {
+  const meta = RIDE_SERVICE_META[service];
+  const raw = await getSetting(meta.minKey);
+  const parsed = parseFloat(raw || '');
+  return Math.max(0, Number.isFinite(parsed) && parsed >= 0 ? parsed : meta.defaultMin);
+}
 
 function normalizeVehicleStatus(value: unknown): string | null {
   if (value == null || value === '') return null;
@@ -792,6 +879,15 @@ async function buildPublicPricingPayload() {
     surge_end_time: surge.end_time,
     surge_active: surge.surge_active,
     ghana_time: surge.ghana_time,
+    ride_services: await Promise.all(
+      RIDE_SERVICE_TYPES.map(async (id) => ({
+        id,
+        label: RIDE_SERVICE_META[id].label,
+        price_per_km: await getRideServiceRate(id),
+        min_fee: await getRideServiceMinFee(id),
+        max_passengers: RIDE_SERVICE_META[id].maxPassengers,
+      }))
+    ),
   };
 }
 
@@ -862,7 +958,8 @@ async function calculateDeliveryFeeFromCoords(
   destLat: number,
   destLng: number,
   pickupRegion?: string | null,
-  destinationRegion?: string | null
+  destinationRegion?: string | null,
+  serviceType: RideServiceType = 'package'
 ): Promise<{
   distance_km: number;
   delivery_fee: number;
@@ -871,10 +968,16 @@ async function calculateDeliveryFeeFromCoords(
   base_delivery_fee: number;
   surge_active: boolean;
   surge_multiplier: number;
+  service_type: RideServiceType;
 }> {
   const distance_km = haversineDistanceKm(pickupLat, pickupLng, destLat, destLng);
-  const globalRate = Math.max(0.01, parseFloat((await getSetting('delivery_price_per_km')) || '4') || 4);
+  const globalRate = await getRideServiceRate(serviceType);
+  const serviceMin = await getRideServiceMinFee(serviceType);
   const globalBounds = await getGlobalDeliveryBounds();
+  const effectiveBounds = {
+    min: Math.max(globalBounds.min, serviceMin),
+    max: globalBounds.max,
+  };
 
   let zone: any = null;
   if (destinationRegion) {
@@ -893,15 +996,15 @@ async function calculateDeliveryFeeFromCoords(
   }
 
   const feeFromDistance = Math.round(distance_km * globalRate * 100) / 100;
-  const base = applyDeliveryFeeCaps(feeFromDistance, zone, globalBounds);
+  const base = applyDeliveryFeeCaps(feeFromDistance, zone, effectiveBounds);
   const { fee, surge } = await applySurgeToFee(base);
   const effectiveRate = surge.surge_active
     ? Math.round(globalRate * surge.multiplier * 100) / 100
     : globalRate;
   const zoneMin =
     zone && Number.isFinite(Number(zone.min_price)) && Number(zone.min_price) > 0
-      ? Number(zone.min_price)
-      : globalBounds.min;
+      ? Math.max(Number(zone.min_price), serviceMin)
+      : effectiveBounds.min;
   const zoneMax =
     zone?.max_price != null && Number.isFinite(Number(zone.max_price))
       ? Number(zone.max_price)
@@ -918,6 +1021,7 @@ async function calculateDeliveryFeeFromCoords(
     zone_max_price: zoneMax,
     surge_active: surge.surge_active,
     surge_multiplier: surge.multiplier,
+    service_type: serviceType,
   };
 }
 
@@ -1365,6 +1469,15 @@ const initDb = async () => {
         ALTER TABLE support_tickets DROP CONSTRAINT IF EXISTS support_tickets_created_by_role_check;
         ALTER TABLE support_tickets ADD CONSTRAINT support_tickets_created_by_role_check
           CHECK (created_by_role IN ('customer', 'vendor', 'rider', 'admin', 'owner'));
+      EXCEPTION WHEN others THEN NULL;
+      END $$;
+    `);
+
+    await pool.query(`
+      DO $$ BEGIN
+        ALTER TABLE orders ADD COLUMN IF NOT EXISTS service_type TEXT NOT NULL DEFAULT 'package';
+        ALTER TABLE orders ADD COLUMN IF NOT EXISTS passenger_count INTEGER NOT NULL DEFAULT 1;
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS rider_vehicle_type TEXT DEFAULT 'motorcycle';
       EXCEPTION WHEN others THEN NULL;
       END $$;
     `);
@@ -2133,12 +2246,17 @@ function normalizeRegion(region?: string | null): string | null {
 }
 
 /** Active online riders; widens to all riders if regional filter matches nobody. */
-async function getActiveRiderIds(region?: string | null): Promise<string[]> {
+async function getActiveRiderIds(
+  region?: string | null,
+  serviceType: RideServiceType = 'package'
+): Promise<string[]> {
+  const serviceFilter = rideServiceSqlFilter(serviceType);
   const norm = normalizeRegion(region);
   if (norm) {
     const regional = await pool.query(
       `SELECT id FROM users
        WHERE role = 'rider' AND status = 'active' AND is_online = true
+       ${serviceFilter}
        AND (
          region IS NULL OR TRIM(region) = ''
          OR LOWER(TRIM(region)) = $1
@@ -2150,7 +2268,7 @@ async function getActiveRiderIds(region?: string | null): Promise<string[]> {
     }
   }
   const all = await pool.query(
-    `SELECT id FROM users WHERE role = 'rider' AND status = 'active' AND is_online = true`
+    `SELECT id FROM users WHERE role = 'rider' AND status = 'active' AND is_online = true ${serviceFilter}`
   );
   return all.rows.map((r: { id: string }) => r.id);
 }
@@ -2197,9 +2315,11 @@ async function queryNearestActiveRiders(
   excludeRiderIds: string[],
   limit: number,
   maxRadiusKm: number,
-  useRegionFilter: boolean
+  useRegionFilter: boolean,
+  serviceType: RideServiceType = 'package'
 ): Promise<NearbyRider[]> {
   const norm = normalizeRegion(region);
+  const serviceFilter = rideServiceSqlFilter(serviceType);
   const regionClause = useRegionFilter && norm
     ? `AND (u.region IS NULL OR TRIM(u.region) = '' OR LOWER(TRIM(u.region)) = $7)`
     : '';
@@ -2246,6 +2366,7 @@ async function queryNearestActiveRiders(
          WHERE busy.rider_id = u.id
          AND busy.status IN ('ready', 'picked_up', 'arrived')
        )
+       ${serviceFilter}
        ${regionClause}
      ) ranked
      WHERE distance_km <= $6
@@ -2264,7 +2385,8 @@ async function getNearestActiveRiders(
   region: string | null,
   excludeRiderIds: string[],
   limit: number,
-  maxRadiusKm: number = DISPATCH_RADIUS_KM_TIERS[0]
+  maxRadiusKm: number = DISPATCH_RADIUS_KM_TIERS[0],
+  serviceType: RideServiceType = 'package'
 ): Promise<NearbyRider[]> {
   let riders = await queryNearestActiveRiders(
     pickup,
@@ -2272,7 +2394,8 @@ async function getNearestActiveRiders(
     excludeRiderIds,
     limit,
     maxRadiusKm,
-    true
+    true,
+    serviceType
   );
   if (riders.length === 0 && normalizeRegion(region)) {
     riders = await queryNearestActiveRiders(
@@ -2281,7 +2404,8 @@ async function getNearestActiveRiders(
       excludeRiderIds,
       limit,
       maxRadiusKm,
-      false
+      false,
+      serviceType
     );
   }
   return riders;
@@ -2378,6 +2502,7 @@ async function advanceDispatchWave(order: any, wave: number) {
   if (!isOfferableOrder(order)) return;
   if (wave > MAX_DISPATCH_WAVES) return;
 
+  const serviceType = normalizeRideServiceType(order.service_type);
   const exclude = await getOfferedRiderIds(order.id);
   const pickup = await getPickupPoint(order);
   const radiusKm = dispatchRadiusKm(wave);
@@ -2393,7 +2518,8 @@ async function advanceDispatchWave(order: any, wave: number) {
       order.region,
       exclude,
       RIDERS_PER_WAVE,
-      radiusKm
+      radiusKm,
+      serviceType
     );
     // Centralized fallback: once we've widened to the largest radius and still
     // find nobody nearby, offer the job to ANY online rider (region first, then
@@ -2401,7 +2527,7 @@ async function advanceDispatchWave(order: any, wave: number) {
     // request reaches available riders across platforms even when the rider's
     // GPS is stale, missing, or far from the pickup.
     if (candidates.length === 0 && radiusKm >= widestRadiusKm) {
-      const fallbackIds = (await getActiveRiderIds(order.region)).filter(
+      const fallbackIds = (await getActiveRiderIds(order.region, serviceType)).filter(
         (id) => !exclude.includes(id)
       );
       candidates = fallbackIds
@@ -2410,7 +2536,7 @@ async function advanceDispatchWave(order: any, wave: number) {
       usedGlobalFallback = candidates.length > 0;
     }
   } else {
-    const fallback = (await getActiveRiderIds(order.region)).filter(
+    const fallback = (await getActiveRiderIds(order.region, serviceType)).filter(
       (id) => !exclude.includes(id)
     );
     candidates = fallback
@@ -3735,6 +3861,26 @@ app.patch('/api/auth/status', authenticateToken, async (req: any, res) => {
   } catch (err: any) {
     console.error('Status update error:', err);
     res.status(500).json({ message: 'Status update failed' });
+  }
+});
+
+
+/** Rider declares okada (motorcycle) or keke (tricycle) for job matching. */
+app.patch('/api/rider/vehicle-type', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'rider') {
+    return res.status(403).json({ message: 'Riders only' });
+  }
+  const vehicleType = normalizeRiderVehicleType(req.body?.vehicle_type ?? req.body?.rider_vehicle_type);
+  try {
+    const result = await pool.query(
+      `UPDATE users SET rider_vehicle_type = $1 WHERE id = $2 RETURNING ${USER_PUBLIC_FIELDS}`,
+      [vehicleType, req.user.id]
+    );
+    const user = result.rows[0];
+    res.json({ user: await userForAuthResponse(user), rider_vehicle_type: vehicleType });
+  } catch (err) {
+    console.error('Rider vehicle type error:', err);
+    res.status(500).json({ message: 'Failed to update vehicle type' });
   }
 });
 
@@ -6232,6 +6378,10 @@ app.post('/api/orders', authenticateToken, async (req: any, res) => {
     payment_reference,
     payment_method,
     delivery_fee,
+    service_type,
+    serviceType,
+    passenger_count,
+    passengerCount,
   } = req.body;
   
   let paymentStatus = 'pending';
@@ -6282,6 +6432,11 @@ app.post('/api/orders', authenticateToken, async (req: any, res) => {
   }
 
   const finalOrderType = orderType || order_type || 'food';
+  const finalServiceType = normalizeRideServiceType(service_type ?? serviceType);
+  const maxPax = RIDE_SERVICE_META[finalServiceType].maxPassengers;
+  const rawPax = parseInt(String(passenger_count ?? passengerCount ?? 1), 10) || 1;
+  const finalPassengerCount =
+    finalServiceType === 'package' ? 0 : Math.max(1, Math.min(maxPax, rawPax));
   try {
     let finalPickup = pickup;
     let pickupLat = null;
@@ -6354,7 +6509,8 @@ app.post('/api/orders', authenticateToken, async (req: any, res) => {
         Number(lat),
         Number(lng),
         finalRegion,
-        finalRegion
+        finalRegion,
+        finalServiceType
       );
       finalDeliveryFee = quote.delivery_fee;
       const itemsSubtotal = Array.isArray(items)
@@ -6394,8 +6550,32 @@ app.post('/api/orders', authenticateToken, async (req: any, res) => {
         : 'pending';
 
     const result = await pool.query(
-      'INSERT INTO orders (customer_id, vendor_id, items, total, status, address, pickup_address, order_type, scheduled_time, lat, lng, pickup_lat, pickup_lng, region, payment_status, payment_method, delivery_fee) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) RETURNING *',
-      [req.user.id, vendorId, JSON.stringify(items), total, initialStatus, address || 'Customer Address', finalPickup || 'Pickup', finalOrderType, scheduled, lat, lng, pickupLat, pickupLng, finalRegion, paymentStatus, finalPaymentMethod, finalDeliveryFee]
+      `INSERT INTO orders (
+        customer_id, vendor_id, items, total, status, address, pickup_address, order_type,
+        scheduled_time, lat, lng, pickup_lat, pickup_lng, region, payment_status, payment_method,
+        delivery_fee, service_type, passenger_count
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19) RETURNING *`,
+      [
+        req.user.id,
+        vendorId,
+        JSON.stringify(items),
+        total,
+        initialStatus,
+        address || 'Customer Address',
+        finalPickup || 'Pickup',
+        finalOrderType,
+        scheduled,
+        lat,
+        lng,
+        pickupLat,
+        pickupLng,
+        finalRegion,
+        paymentStatus,
+        finalPaymentMethod,
+        finalDeliveryFee,
+        finalServiceType,
+        finalServiceType === 'package' ? 0 : finalPassengerCount,
+      ]
     );
     const order = result.rows[0];
     res.json(order);
@@ -7856,11 +8036,14 @@ app.post('/api/delivery/calculate', authenticateToken, async (req: any, res) => 
     destination_lng,
     pickup_region,
     destination_region,
+    service_type,
+    serviceType,
   } = req.body;
   const pLat = Number(pickup_lat);
   const pLng = Number(pickup_lng);
   const dLat = Number(dest_lat ?? destination_lat);
   const dLng = Number(dest_lng ?? destination_lng);
+  const rideService = normalizeRideServiceType(service_type ?? serviceType);
   if (!pLat || !pLng || !dLat || !dLng) {
     return res.status(400).json({ message: 'pickup and destination coordinates required' });
   }
@@ -7871,16 +8054,24 @@ app.post('/api/delivery/calculate', authenticateToken, async (req: any, res) => 
       dLat,
       dLng,
       pickup_region,
-      destination_region
+      destination_region,
+      rideService
     );
+    const meta = RIDE_SERVICE_META[rideService];
     res.json({
       ...quote,
+      service_type: rideService,
+      service_label: meta.label,
+      max_passengers: meta.maxPassengers,
       route: {
         legs: [
           {
-            from: 'shop',
-            to: 'customer',
-            label: 'Shop → You',
+            from: rideService === 'package' ? 'pickup' : 'you',
+            to: 'destination',
+            label:
+              rideService === 'package'
+                ? 'Pickup → Drop-off'
+                : `${meta.label} ride`,
             distance_km: quote.distance_km,
           },
         ],

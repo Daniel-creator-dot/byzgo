@@ -4,6 +4,7 @@ import 'package:dio/dio.dart';
 
 import '../../core/api_client.dart';
 
+import '../../models/ride_service.dart';
 import '../../models/delivery_quote.dart';
 import '../../models/location_point.dart';
 
@@ -103,20 +104,27 @@ class OrdersRepository {
     String paymentMethod = 'pay_on_delivery',
     String? region,
     String? scheduledTime,
+    RideServiceType serviceType = RideServiceType.package,
+    int passengerCount = 1,
   }) async {
+    final itemName = serviceType.isPassengerRide
+        ? rideServiceItemLabel(serviceType, passengers: passengerCount)
+        : 'Delivery: $itemDescription';
     final res = await _api.dio.post<Map<String, dynamic>>(
       '/api/orders',
       data: {
         'items': [
           {
             'id': 'courier-1',
-            'name': 'Delivery: $itemDescription',
+            'name': itemName,
             'quantity': 1,
             'price': 0,
           },
         ],
         'total': deliveryFee,
         'order_type': 'courier',
+        'service_type': serviceType.id,
+        if (serviceType.isPassengerRide) 'passenger_count': passengerCount,
         'address': destination.address,
         'pickup': pickup.address,
         'lat': destination.lat,
@@ -146,6 +154,7 @@ class OrdersRepository {
     required double destLng,
     String? pickupRegion,
     String? destinationRegion,
+    RideServiceType serviceType = RideServiceType.package,
   }) async {
     final res = await _api.dio.post<Map<String, dynamic>>(
       '/api/delivery/calculate',
@@ -156,6 +165,7 @@ class OrdersRepository {
         'dest_lng': destLng,
         if (pickupRegion != null) 'pickup_region': pickupRegion,
         if (destinationRegion != null) 'destination_region': destinationRegion,
+        'service_type': serviceType.id,
       },
     );
     final data = res.data;

@@ -316,6 +316,16 @@ class AuthRepository {
     return _parseAuthResponse(res.data);
   }
 
+  Future<AuthUser> updateRiderVehicleType(String vehicleType) async {
+    final res = await _api.dio.patch<Map<String, dynamic>>(
+      '/api/rider/vehicle-type',
+      data: {'vehicle_type': vehicleType},
+    );
+    final userJson = res.data?['user'];
+    if (userJson is! Map) throw Exception('Invalid vehicle type response');
+    return AuthUser.fromJson(Map<String, dynamic>.from(userJson));
+  }
+
   Future<AuthResult> updateStatus(String status) async {
     final res = await _api.dio.patch<Map<String, dynamic>>(
       '/api/auth/status',

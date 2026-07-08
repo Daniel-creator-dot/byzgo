@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 
+import '../../models/ride_service.dart';
 import '../../models/order.dart';
 import '../../models/vendor.dart';
 import '../../shared/format.dart';
@@ -190,13 +191,27 @@ class _IncomingRideOverlayState extends State<IncomingRideOverlay>
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  order.isCourier ? 'Courier mission' : 'Delivery pickup',
+                  order.isPassengerRide
+                      ? '${order.rideServiceLabel} passenger'
+                      : (order.isCourier ? 'Courier mission' : 'Delivery pickup'),
                   style: const TextStyle(
                     color: Colors.white,
                     fontSize: 24,
                     fontWeight: FontWeight.w900,
                   ),
                 ),
+                if (order.isPassengerRide &&
+                    (order.passengerCount ?? 0) > 0) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    '${order.passengerCount} passenger${order.passengerCount == 1 ? '' : 's'}',
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.7),
+                      fontWeight: FontWeight.w600,
+                      fontSize: 14,
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 6),
                 if (order.offerDistanceKm != null && order.offerDistanceKm! > 0)
                   Padding(

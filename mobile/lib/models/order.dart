@@ -1,4 +1,5 @@
 import '../core/json_parse.dart';
+import 'ride_service.dart';
 
 
 
@@ -74,6 +75,8 @@ class Order {
     this.pulseGuideAt,
     this.pulseGuidePhase,
     this.pulseGuideActive,
+    this.serviceType,
+    this.passengerCount,
 
   });
 
@@ -161,7 +164,17 @@ class Order {
   final String? pulseGuidePhase;
   final bool? pulseGuideActive;
 
+  final RideServiceType? serviceType;
+
+  final int? passengerCount;
+
   bool get isCourier => orderType == 'courier';
+
+  bool get isPassengerRide =>
+      serviceType == RideServiceType.okada || serviceType == RideServiceType.keke;
+
+  String get rideServiceLabel =>
+      serviceType?.label ?? (isCourier ? 'Bike' : 'Trip');
 
   bool get hasShopPickup => vendorId.trim().isNotEmpty;
 
@@ -449,6 +462,9 @@ class Order {
       pulseGuideAt: (json['pulseGuideAt'] ?? json['pulse_guide_at'])?.toString(),
       pulseGuidePhase: (json['pulseGuidePhase'] ?? json['pulse_guide_phase'])?.toString(),
       pulseGuideActive: json['pulseGuideActive'] == true || json['pulse_guide_active'] == true,
+
+      serviceType: RideServiceType.fromString(json['service_type']?.toString()),
+      passengerCount: parseJsonInt(json['passenger_count']),
 
     );
 

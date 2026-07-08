@@ -45,6 +45,7 @@ import '../../shared/widgets/customer_trip_identity.dart';
 import '../../shared/widgets/pulse_guide_hud.dart';
 import '../../shared/widgets/ride_ui.dart';
 import 'delivery_pin_dialog.dart';
+import 'rider_vehicle_selector.dart';
 import 'incoming_ride_alert.dart';
 import 'incoming_ride_overlay.dart';
 import 'incoming_ride_ring.dart';
@@ -1074,6 +1075,8 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
                 ),
               ),
             ),
+          const SizedBox(height: 10),
+          const RiderVehicleSelector(),
           const SizedBox(height: 10),
           Row(
             children: [

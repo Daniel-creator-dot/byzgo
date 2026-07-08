@@ -613,7 +613,8 @@ class _VehicleEditorSheetState extends State<_VehicleEditorSheet> {
                 value: _vehicleType,
                 decoration: _inputDeco('Vehicle type'),
                 items: const [
-                  DropdownMenuItem(value: 'motorcycle', child: Text('Motorcycle')),
+                  DropdownMenuItem(value: 'motorcycle', child: Text('Motorcycle / Okada')),
+                  DropdownMenuItem(value: 'keke', child: Text('Keke (tricycle)')),
                   DropdownMenuItem(value: 'bicycle', child: Text('Bicycle')),
                   DropdownMenuItem(value: 'car', child: Text('Car')),
                   DropdownMenuItem(value: 'van', child: Text('Van')),
