@@ -1,7 +1,7 @@
 # Redeploy the production API (byzgoback — hosts www.bytzgo.net / bytzgo.net).
 # Requires RENDER_API_KEY in the environment.
 param(
-  [string]$ServiceId = 'srv-d7use31o3t8c73fu3eig'
+  [string]$ServiceId = 'srv-d8a8j34m0tmc739suuqg'
 )
 
 $ErrorActionPreference = 'Stop'

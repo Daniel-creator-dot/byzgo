@@ -3,7 +3,7 @@
 # Requires RENDER_API_KEY in the environment.
 set -euo pipefail
 
-SERVICE_ID="${1:-srv-d7use31o3t8c73fu3eig}"
+SERVICE_ID="${1:-srv-d8a8j34m0tmc739suuqg}"
 
 if [[ -z "${RENDER_API_KEY:-}" ]]; then
   echo "Set RENDER_API_KEY first (Render Dashboard → Account Settings → API Keys)." >&2
