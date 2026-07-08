@@ -117,9 +117,9 @@ class _OwnerHomeScreenState extends State<OwnerHomeScreen> {
     final dash = _dash;
 
     return Scaffold(
-      backgroundColor: BytzGoTheme.heroBg,
+      backgroundColor: const Color(0xFF020617),
       appBar: AppBar(
-        backgroundColor: BytzGoTheme.heroBg,
+        backgroundColor: const Color(0xFF020617),
         foregroundColor: Colors.white,
         title: const Text('My fleet'),
         actions: [
