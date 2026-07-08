@@ -1367,6 +1367,7 @@ const initDb = async () => {
           CHECK (created_by_role IN ('customer', 'vendor', 'rider', 'admin', 'owner'));
       EXCEPTION WHEN others THEN NULL;
       END $$;
+    `);
 
     // Seed SMS gateway configurations
     await pool.query(`
@@ -5497,8 +5498,6 @@ app.patch('/api/admin/riders/:id/reject', authenticateToken, async (req: any, re
     console.error('Reject rider error:', err);
     res.status(500).json({ message: 'Failed to reject rider' });
   }
-});
-
 });
 
 app.get('/api/admin/pending-owners', authenticateToken, async (req: any, res) => {
