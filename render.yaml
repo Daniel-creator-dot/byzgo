@@ -12,7 +12,7 @@ services:
     runtime: node
     plan: free
     region: oregon
-    buildCommand: npm ci && npm run build && npm install --prefix backend --omit=dev
+    buildCommand: npm ci && npm run build:render
     startCommand: npm --prefix backend run start
     healthCheckPath: /api/health
     envVars:
