@@ -32,6 +32,7 @@
   <script>
     const params = new URLSearchParams(location.search);
     const role = params.get('role') || 'customer';
+    const vehicleType = params.get('vehicle_type') || '';
     const clientId = '645977332644-4gjjf08268b3irafs4bh8b7guct1i1jb.apps.googleusercontent.com';
     const status = document.getElementById('status');
 
@@ -52,7 +53,11 @@
         const res = await fetch('/api/auth/google', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ credential: response.credential, role }),
+          body: JSON.stringify({
+            credential: response.credential,
+            role,
+            ...(vehicleType ? { vehicle_type: vehicleType } : {}),
+          }),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {

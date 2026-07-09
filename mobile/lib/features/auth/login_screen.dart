@@ -11,6 +11,7 @@ import '../../shared/responsive_layout.dart';
 import '../../shared/theme.dart';
 import '../../shared/widgets/bytz_brand.dart';
 import '../../shared/widgets/ride_ui.dart';
+import '../../shared/widgets/rider_vehicle_type_picker.dart';
 import 'auth_repository.dart';
 import 'ghana_phone.dart';
 import 'widgets/login_decor.dart';
@@ -37,6 +38,7 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
 
   _AuthMode _mode = _AuthMode.signIn;
   AppRole _signupRole = AppRole.customer;
+  String _riderVehicleType = 'motorcycle';
   bool _loading = false;
   bool _googleLoading = false;
   bool _appleLoading = false;
@@ -112,6 +114,10 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
               return;
             }
           }
+          if (_signupRole == AppRole.rider && _riderVehicleType.isEmpty) {
+            setState(() => _error = 'Choose your vehicle type (Okada, Keke, or Bicycle).');
+            return;
+          }
           final registered = await repo.register(
             name: _name.text,
             email: _email.text,
@@ -120,6 +126,8 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
             phone: _signupRole == AppRole.customer || _phone.text.isNotEmpty
                 ? _phone.text
                 : null,
+            riderVehicleType:
+                _signupRole == AppRole.rider ? _riderVehicleType : null,
           );
           await session.setSession(
             token: registered.token,
@@ -169,7 +177,17 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
     });
     try {
       final role = _mode == _AuthMode.signUp ? _signupRole : AppRole.customer;
-      final result = await context.read<AuthRepository>().signInWithGoogle(role: role);
+      if (_mode == _AuthMode.signUp &&
+          role == AppRole.rider &&
+          _riderVehicleType.isEmpty) {
+        setState(() => _error = 'Choose your vehicle type before continuing.');
+        return;
+      }
+      final result = await context.read<AuthRepository>().signInWithGoogle(
+            role: role,
+            riderVehicleType:
+                role == AppRole.rider ? _riderVehicleType : null,
+          );
       await context.read<Session>().setSession(
         token: result.token,
         user: result.user,
@@ -194,7 +212,17 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
     });
     try {
       final role = _mode == _AuthMode.signUp ? _signupRole : AppRole.customer;
-      final result = await context.read<AuthRepository>().signInWithApple(role: role);
+      if (_mode == _AuthMode.signUp &&
+          role == AppRole.rider &&
+          _riderVehicleType.isEmpty) {
+        setState(() => _error = 'Choose your vehicle type before continuing.');
+        return;
+      }
+      final result = await context.read<AuthRepository>().signInWithApple(
+            role: role,
+            riderVehicleType:
+                role == AppRole.rider ? _riderVehicleType : null,
+          );
       await context.read<Session>().setSession(
         token: result.token,
         user: result.user,
@@ -425,9 +453,39 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                     )
                     .toList(),
                 onChanged: (v) {
-                  if (v != null) setState(() => _signupRole = v);
+                  if (v != null) {
+                    setState(() {
+                      _signupRole = v;
+                      if (v != AppRole.rider) _riderVehicleType = 'motorcycle';
+                    });
+                  }
                 },
               ),
+              if (_signupRole == AppRole.rider) ...[
+                const SizedBox(height: 14),
+                Text(
+                  'Your vehicle',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                    color: BytzGoTheme.sheetText.withValues(alpha: 0.85),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'We match you to Okada rides, Keke trips, or package jobs.',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: BytzGoTheme.sheetMuted,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                RiderVehicleTypePicker(
+                  value: _riderVehicleType,
+                  onChanged: (v) => setState(() => _riderVehicleType = v),
+                ),
+              ],
             ],
             const SizedBox(height: 22),
             RidePrimaryButton(

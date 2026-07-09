@@ -4007,6 +4007,11 @@ function AdminView({
                           <p className="text-slate-400 text-xs font-bold uppercase tracking-widest">{r.email}</p>
                           {r.phone && <p className="text-slate-500 text-xs mt-1">{r.phone}</p>}
                           {r.region && <p className="text-slate-500 text-xs">{r.region}</p>}
+                          {r.rider_vehicle_type && (
+                            <p className="text-brand-green text-xs font-black uppercase tracking-widest mt-1">
+                              Vehicle: {({ motorcycle: 'Okada', keke: 'Keke', bicycle: 'Bicycle' } as Record<string, string>)[r.rider_vehicle_type] || r.rider_vehicle_type}
+                            </p>
+                          )}
                         </div>
                         <span className={cn(
                           'px-3 py-1 rounded-lg text-[10px] font-black uppercase',

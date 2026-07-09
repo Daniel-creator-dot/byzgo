@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../core/json_parse.dart';
 import '../../shared/format.dart';
 import '../../shared/theme.dart';
+import '../../shared/widgets/rider_vehicle_type_picker.dart';
 import 'admin_repository.dart';
 
 /// Full driver dossier for admin (map tap / fleet).
@@ -201,6 +202,13 @@ class _AdminDriverProfileBodyState extends State<_AdminDriverProfileBody> {
                       ),
                       if (driver['region'] != null)
                         _chip(driver['region'].toString(), Colors.white38),
+                      if (driver['rider_vehicle_type'] != null)
+                        _chip(
+                          RiderVehicleTypePicker.labelFor(
+                            driver['rider_vehicle_type']?.toString(),
+                          ).toUpperCase(),
+                          BytzGoTheme.accent,
+                        ),
                     ],
                   ),
                 ],

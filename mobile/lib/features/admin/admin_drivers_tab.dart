@@ -5,6 +5,7 @@ import '../../models/rider_document.dart';
 import '../../shared/data_url_image.dart';
 import '../../shared/theme.dart';
 import '../../shared/widgets/ride_ui.dart';
+import '../../shared/widgets/rider_vehicle_type_picker.dart';
 import 'admin_repository.dart';
 import 'widgets/admin_hero_header.dart';
 
@@ -254,6 +255,18 @@ class AdminDriversTabState extends State<AdminDriversTab> {
                       ),
                     ),
                     Text(r.email, style: TextStyle(color: Colors.white.withValues(alpha: 0.5), fontSize: 12)),
+                    if (r.riderVehicleType != null && r.riderVehicleType!.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(
+                          'Vehicle: ${RiderVehicleTypePicker.labelFor(r.riderVehicleType)}',
+                          style: const TextStyle(
+                            color: BytzGoTheme.accent,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
                   ],
                 ),
               ),

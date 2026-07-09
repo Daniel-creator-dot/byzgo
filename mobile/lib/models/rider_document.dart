@@ -64,6 +64,7 @@ class PendingRiderApplication {
     this.phone,
     this.region,
     this.status,
+    this.riderVehicleType,
     required this.documents,
   });
 
@@ -73,6 +74,7 @@ class PendingRiderApplication {
   final String? phone;
   final String? region;
   final String? status;
+  final String? riderVehicleType;
   final List<RiderDocument> documents;
 
   factory PendingRiderApplication.fromJson(Map<String, dynamic> json) {
@@ -91,6 +93,7 @@ class PendingRiderApplication {
       phone: json['phone']?.toString(),
       region: json['region']?.toString(),
       status: json['status']?.toString(),
+      riderVehicleType: json['rider_vehicle_type']?.toString(),
       documents: docs,
     );
   }

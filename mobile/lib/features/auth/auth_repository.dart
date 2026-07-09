@@ -88,6 +88,7 @@ class AuthRepository {
     required AppRole role,
     String? phone,
     String? otp,
+    String? riderVehicleType,
   }) async {
     final res = await _api.dio.post<Map<String, dynamic>>(
       '/api/auth/register',
@@ -98,6 +99,8 @@ class AuthRepository {
         'role': role.name,
         if (phone != null && phone.isNotEmpty) 'phone': phone.trim(),
         if (otp != null) 'otp': otp.trim(),
+        if (riderVehicleType != null && riderVehicleType.isNotEmpty)
+          'vehicle_type': riderVehicleType,
       },
     );
     return _parseAuthResponse(res.data);
@@ -134,7 +137,10 @@ class AuthRepository {
     );
   }
 
-  Future<AuthResult> signInWithGoogle({AppRole role = AppRole.customer}) async {
+  Future<AuthResult> signInWithGoogle({
+    AppRole role = AppRole.customer,
+    String? riderVehicleType,
+  }) async {
     if (!Env.isGoogleSignInEnabled) {
       throw Exception(
         'Google Sign-In is not configured. Set GOOGLE_WEB_CLIENT_ID and run flutterfire configure.',
@@ -143,14 +149,18 @@ class AuthRepository {
 
     // Sideload APKs: native Google Sign-In often fails with certificate error 10; use web OAuth instead.
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
-      return _signInWithGoogleWeb(role);
+      return _signInWithGoogleWeb(role, riderVehicleType: riderVehicleType);
     }
-    return _signInWithGoogleNative(role);
+    return _signInWithGoogleNative(role, riderVehicleType: riderVehicleType);
   }
 
   /// Browser-based Google Sign-In (same as bytzgo.net web) — no APK certificate check.
-  Future<AuthResult> _signInWithGoogleWeb(AppRole role) async {
-    final url = '${Env.apiBaseUrl}/auth/google-mobile?role=${role.name}';
+  Future<AuthResult> _signInWithGoogleWeb(
+    AppRole role, {
+    String? riderVehicleType,
+  }) async {
+    final url = '${Env.apiBaseUrl}/auth/google-mobile?role=${role.name}'
+        '${riderVehicleType != null && riderVehicleType.isNotEmpty ? '&vehicle_type=${Uri.encodeComponent(riderVehicleType)}' : ''}';
     try {
       final result = await FlutterWebAuth2.authenticate(
         url: url,
@@ -180,7 +190,10 @@ class AuthRepository {
     }
   }
 
-  Future<AuthResult> _signInWithGoogleNative(AppRole role) async {
+  Future<AuthResult> _signInWithGoogleNative(
+    AppRole role, {
+    String? riderVehicleType,
+  }) async {
     final googleSignIn = GoogleSignIn(
       clientId: defaultTargetPlatform == TargetPlatform.iOS ? kGoogleIosClientId : null,
       serverClientId: Env.googleWebClientId.trim().isNotEmpty
@@ -201,7 +214,12 @@ class AuthRepository {
     try {
       final res = await _api.dio.post<Map<String, dynamic>>(
         '/api/auth/google',
-        data: {'credential': idToken, 'role': role.name},
+        data: {
+          'credential': idToken,
+          'role': role.name,
+          if (riderVehicleType != null && riderVehicleType.isNotEmpty)
+            'vehicle_type': riderVehicleType,
+        },
       );
       return _parseAuthResponse(res.data);
     } on DioException catch (e) {
@@ -209,7 +227,10 @@ class AuthRepository {
     }
   }
 
-  Future<AuthResult> signInWithApple({AppRole role = AppRole.customer}) async {
+  Future<AuthResult> signInWithApple({
+    AppRole role = AppRole.customer,
+    String? riderVehicleType,
+  }) async {
     if (defaultTargetPlatform != TargetPlatform.iOS) {
       throw Exception('Sign in with Apple is only available on iOS.');
     }
@@ -238,6 +259,8 @@ class AuthRepository {
           if (credential.email != null && credential.email!.isNotEmpty)
             'email': credential.email,
           if (fullName.isNotEmpty) 'name': fullName,
+          if (riderVehicleType != null && riderVehicleType.isNotEmpty)
+            'vehicle_type': riderVehicleType,
         },
       );
       return _parseAuthResponse(res.data);

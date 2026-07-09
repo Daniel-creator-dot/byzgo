@@ -8,6 +8,7 @@ import '../../models/rider_document.dart';
 import '../../shared/data_url_image.dart';
 import '../../shared/theme.dart';
 import '../../shared/widgets/ride_ui.dart';
+import '../../shared/widgets/rider_vehicle_type_picker.dart';
 import 'rider_documents_repository.dart';
 
 const _docSlots = [
@@ -155,6 +156,34 @@ class _RiderVerificationSectionState extends State<RiderVerificationSection> {
             'Upload JPEG photos of your licence, Ghana card, and a clear profile picture. Admin must approve before you can go online.',
             style: BytzGoTheme.sheetBody().copyWith(fontSize: 11),
           ),
+          if (widget.user.riderVehicleType != null &&
+              widget.user.riderVehicleType!.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: BytzGoTheme.accent.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: BytzGoTheme.accent.withValues(alpha: 0.35)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.directions_bike, color: BytzGoTheme.accent, size: 18),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'Registered vehicle: ${RiderVehicleTypePicker.labelFor(widget.user.riderVehicleType)}',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
           const SizedBox(height: 16),
           if (_loading)
             const Center(child: Padding(

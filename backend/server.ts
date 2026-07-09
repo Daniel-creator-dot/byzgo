@@ -3393,7 +3393,7 @@ app.post('/api/auth/reset-password-otp', async (req, res) => {
 });
 
 app.post('/api/auth/register', async (req, res) => {
-  const { name, email, password, role, phone, adminInviteSecret, otp } = req.body;
+  const { name, email, password, role, phone, adminInviteSecret, otp, vehicle_type, rider_vehicle_type } = req.body;
   if (role === 'admin') {
     const expected = process.env.ADMIN_INVITE_SECRET;
     if (!expected || adminInviteSecret !== expected) {
@@ -3414,13 +3414,24 @@ app.post('/api/auth/register', async (req, res) => {
       }
     }
   }
+  let riderVehicle: string | null = null;
+  if (role === 'rider') {
+    if (!vehicle_type && !rider_vehicle_type) {
+      return res.status(400).json({
+        message: 'Choose your vehicle type: Okada (motorcycle), Keke (tricycle), or Bicycle.',
+      });
+    }
+    riderVehicle = normalizeRiderVehicleType(vehicle_type ?? rider_vehicle_type);
+  }
   try {
     const hashedPassword = await bcrypt.hash(password, 10);
     const userStatus = role === 'vendor' || role === 'rider' || role === 'owner' ? 'pending' : 'active';
     const storePhone = phone ? formatGhanaPhone(phone) : phone;
     const result = await pool.query(
-      'INSERT INTO users (name, email, password, role, status, phone) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, name, email, role, balance, phone, status',
-      [name, email, hashedPassword, role, userStatus, storePhone]
+      `INSERT INTO users (name, email, password, role, status, phone, rider_vehicle_type)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id, name, email, role, balance, phone, status, rider_vehicle_type`,
+      [name, email, hashedPassword, role, userStatus, storePhone, riderVehicle]
     );
     if (role === 'customer' && phone) {
       await pool.query('DELETE FROM otps WHERE phone = ANY($1) AND purpose = $2', [
@@ -3505,7 +3516,7 @@ app.post('/api/auth/google', async (req, res) => {
       message: 'Google sign-in is disabled. Sign in with your phone or email and password.',
     });
   }
-  const { credential, role } = req.body;
+  const { credential, role, vehicle_type, rider_vehicle_type } = req.body;
   try {
     const payload = await verifyGoogleIdToken(credential);
     if (!payload || !payload.email) {
@@ -3525,10 +3536,21 @@ app.post('/api/auth/google', async (req, res) => {
       if (newRole === 'admin') {
         return res.status(403).json({ message: 'Admin accounts cannot be created via Google sign-in.' });
       }
-      const userStatus = (newRole === 'vendor' || newRole === 'rider') ? 'pending' : 'active';
+      const userStatus = (newRole === 'vendor' || newRole === 'rider' || newRole === 'owner') ? 'pending' : 'active';
+      if (newRole === 'rider' && !vehicle_type && !rider_vehicle_type) {
+        return res.status(400).json({
+          message: 'Choose your vehicle type: Okada (motorcycle), Keke (tricycle), or Bicycle.',
+        });
+      }
+      const riderVehicle =
+        newRole === 'rider'
+          ? normalizeRiderVehicleType(vehicle_type ?? rider_vehicle_type)
+          : null;
       result = await pool.query(
-        'INSERT INTO users (name, email, google_id, role, status) VALUES ($1, $2, $3, $4, $5) RETURNING id, name, email, role, balance, phone, status',
-        [displayName, payload.email, googleId, newRole, userStatus]
+        `INSERT INTO users (name, email, google_id, role, status, rider_vehicle_type)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         RETURNING id, name, email, role, balance, phone, status, rider_vehicle_type`,
+        [displayName, payload.email, googleId, newRole, userStatus, riderVehicle]
       );
       user = result.rows[0];
     } else {
@@ -3557,7 +3579,7 @@ app.post('/api/auth/google', async (req, res) => {
 
 // Apple Sign-In (iOS)
 app.post('/api/auth/apple', async (req, res) => {
-  const { credential, role, email: clientEmail, name: clientName } = req.body;
+  const { credential, role, email: clientEmail, name: clientName, vehicle_type, rider_vehicle_type } = req.body;
   try {
     if (!credential || typeof credential !== 'string') {
       return res.status(400).json({ message: 'Apple identity token required' });
@@ -3589,15 +3611,26 @@ app.post('/api/auth/apple', async (req, res) => {
       if (newRole === 'admin') {
         return res.status(403).json({ message: 'Admin accounts cannot be created via Apple sign-in.' });
       }
-      const userStatus = (newRole === 'vendor' || newRole === 'rider') ? 'pending' : 'active';
+      const userStatus = (newRole === 'vendor' || newRole === 'rider' || newRole === 'owner') ? 'pending' : 'active';
+      if (newRole === 'rider' && !vehicle_type && !rider_vehicle_type) {
+        return res.status(400).json({
+          message: 'Choose your vehicle type: Okada (motorcycle), Keke (tricycle), or Bicycle.',
+        });
+      }
+      const riderVehicle =
+        newRole === 'rider'
+          ? normalizeRiderVehicleType(vehicle_type ?? rider_vehicle_type)
+          : null;
       const displayName = displayUserName(
         (typeof clientName === 'string' && clientName.trim()) ||
           email.split('@')[0],
         { fallback: 'BytzGo member' },
       );
       result = await pool.query(
-        'INSERT INTO users (name, email, apple_id, role, status) VALUES ($1, $2, $3, $4, $5) RETURNING id, name, email, role, balance, phone, status',
-        [displayName, email, appleId, newRole, userStatus],
+        `INSERT INTO users (name, email, apple_id, role, status, rider_vehicle_type)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         RETURNING id, name, email, role, balance, phone, status, rider_vehicle_type`,
+        [displayName, email, appleId, newRole, userStatus, riderVehicle],
       );
       user = result.rows[0];
     } else {
@@ -5544,6 +5577,7 @@ app.get('/api/admin/pending-riders', authenticateToken, async (req: any, res) =>
   try {
     const result = await pool.query(
       `SELECT u.id, u.name, u.email, u.phone, u.region, u.status, u.is_online, u.created_at,
+        u.rider_vehicle_type,
         COALESCE(
           json_agg(
             json_build_object(
@@ -6134,7 +6168,7 @@ app.get('/api/admin/riders/:id/profile', authenticateToken, async (req: any, res
   try {
     const userRes = await pool.query(
       `SELECT u.id, u.name, u.email, u.phone, u.region, u.status, u.is_online, u.balance,
-              u.lat, u.lng, u.address, u.avatar_url, u.created_at,
+              u.lat, u.lng, u.address, u.avatar_url, u.created_at, u.rider_vehicle_type,
               rl.lat AS live_lat, rl.lng AS live_lng, rl.updated_at AS location_updated_at
        FROM users u
        LEFT JOIN rider_locations rl ON rl.rider_id = u.id
@@ -6220,6 +6254,7 @@ app.get('/api/admin/riders/:id/profile', authenticateToken, async (req: any, res
         balance: parseFloat(user.balance),
         address: user.address,
         avatar_url: user.avatar_url,
+        rider_vehicle_type: user.rider_vehicle_type ?? 'motorcycle',
         created_at: user.created_at,
         profile_lat: user.lat != null ? parseFloat(user.lat) : null,
         profile_lng: user.lng != null ? parseFloat(user.lng) : null,
