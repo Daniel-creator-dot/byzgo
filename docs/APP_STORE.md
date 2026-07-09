@@ -6,7 +6,7 @@
 |--------|--------|
 | App name | BytzGo |
 | Bundle ID | `com.bytzgo.bytzgoMobile` |
-| Version | From `mobile/pubspec.yaml` (current **1.0.45+54** → marketing **1.0.45**, build **54**) |
+| Version | From `mobile/pubspec.yaml` (current **1.0.50+69** → marketing **1.0.50**, build **69**) |
 
 ## One-time Mac setup
 
@@ -60,6 +60,18 @@ cd mobile
 
 Requires the same Apple ID in Xcode (automatic signing). Output: `build/ios/ipa/*.ipa` — upload with **Transporter** or Organizer.
 
+## What's New (App Store Connect — v1.0.50)
+
+Copy from `mobile/app_store_whats_new_1.0.50.txt` when submitting build **69**.
+
+Highlights for this release:
+
+- **Okada & Keke** passenger rides (motorcycle taxi + tricycle)
+- **Package delivery** with tiered per-km pricing
+- **Driver signup** — choose Okada, Keke, or Bicycle
+- **Dispatch matching** by rider vehicle type
+- **Admin KYC** shows registered vehicle type
+
 ## What's New (App Store Connect — v1.0.45)
 
 Copy from `mobile/app_store_whats_new_1.0.45.txt` when submitting build **54**.
@@ -80,8 +92,25 @@ App Store Connect:
 - **Export compliance:** Standard encryption only (HTTPS) — `ITSAppUsesNonExemptEncryption` = false in Info.plist  
 - **Category:** Navigation or Food & Drink (delivery)  
 - **Screenshots:** iPhone 6.7" (1284×2778) — see `mobile/app_store_screenshots/iphone/` and `mobile/scripts/capture_app_store_screenshots.sh`  
-- **Sign in with Google** visible on login (iPad + iPhone); **Apple Maps** option for rider navigation  
+- **Sign in with Google** visible on login (iPad + iPhone); **Sign in with Apple** on iOS
+- **Driver signup** includes vehicle type picker (Okada / Keke / Bicycle) before Apple or Google sign-up
 - **Google OAuth branding:** App name **BytzGo** verified in Cloud Console (not `project-645977332644`) — see `docs/GOOGLE_OAUTH_CONSENT.md`  
+
+## CI / TestFlight (GitHub Actions)
+
+On a Mac or via GitHub Actions (`.github/workflows/ios-testflight.yml`):
+
+1. Add repository secrets (Settings → Secrets → Actions):
+   - `APPLE_CERTIFICATE_BASE64` — Distribution `.p12` (base64)
+   - `APPLE_CERTIFICATE_PASSWORD`
+   - `APPLE_PROVISIONING_PROFILE_BASE64` — App Store profile for `com.bytzgo.bytzgoMobile`
+   - `KEYCHAIN_PASSWORD` — any strong random string for the CI keychain
+   - `APPLE_ID` — Apple Developer account email
+   - `APPLE_APP_SPECIFIC_PASSWORD` — from [account.apple.com](https://account.apple.com) → App-Specific Passwords
+2. Run workflow **iOS TestFlight** (manual dispatch) on `main`.
+3. In App Store Connect, attach build **69** to version **1.0.50** and paste release notes from `app_store_whats_new_1.0.50.txt`.
+
+iOS build metadata (no IPA hosted): `GET https://www.bytzgo.net/download/ios/version`
 
 ## Test on simulator
 

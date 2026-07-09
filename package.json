@@ -32,6 +32,8 @@
     "flutter:validate:ios": "bash mobile/scripts/validate_app_store.sh",
     "flutter:build:ipa": "bash mobile/scripts/build_ios_ipa.sh",
     "flutter:build:ios": "bash mobile/scripts/build_ios.sh",
+    "sync:ios-version": "bash scripts/sync-ios-version.sh",
+    "release:ios": "bash scripts/sync-ios-version.sh && bash mobile/scripts/build_app_store_ipa.sh",
     "play:setup": "powershell -ExecutionPolicy Bypass -File mobile/scripts/setup_play_store.ps1",
     "play:validate": "powershell -ExecutionPolicy Bypass -File mobile/scripts/validate_play_release.ps1",
     "setup:firebase:android": "npm --prefix backend run setup:firebase:android",

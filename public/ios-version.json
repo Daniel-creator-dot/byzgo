@@ -1,0 +1,9 @@
+{
+  "version": "1.0.50+69",
+  "marketing_version": "1.0.50",
+  "build_number": "69",
+  "updated_at": "2026-07-09T00:29:38.000Z",
+  "platform": "ios",
+  "release_notes": "Okada & Keke passenger rides, rider vehicle type at signup, smarter dispatch matching.",
+  "install_note": "Install from the App Store or TestFlight."
+}

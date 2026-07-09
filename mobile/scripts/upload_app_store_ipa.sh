@@ -43,4 +43,4 @@ echo "→ Uploading to App Store Connect"
 "$TRANSPORTER" -m upload -assetFile "$IPA" -u "$APPLE_ID" -p "$APPLE_APP_SPECIFIC_PASSWORD" 2>&1 | tail -20
 
 echo ""
-echo "Done. In App Store Connect, attach build $(grep '^version:' "$MOBILE_ROOT/pubspec.yaml" | awk '{print $2}' | cut -d+ -f2) to version 1.0.43."
+echo "Done. In App Store Connect, attach build $(grep '^version:' "$MOBILE_ROOT/pubspec.yaml" | awk '{print $2}' | cut -d+ -f2) to marketing version $(grep '^version:' "$MOBILE_ROOT/pubspec.yaml" | awk '{print $2}' | cut -d+ -f1)."

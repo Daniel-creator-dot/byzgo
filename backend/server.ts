@@ -8332,6 +8332,20 @@ app.get('/auth/google-mobile', (_req, res) => {
   res.type('html').sendFile(file);
 });
 
+/** iOS build metadata (App Store / TestFlight — no IPA hosted here). */
+app.get('/download/ios/version', (_req, res) => {
+  const candidates = [
+    path.join(__dirname, '..', 'public', 'ios-version.json'),
+    path.join(__dirname, '..', 'dist', 'ios-version.json'),
+  ];
+  const file = candidates.find((p) => fs.existsSync(p));
+  if (!file) {
+    return res.json({ version: 'unknown', platform: 'ios' });
+  }
+  res.setHeader('Cache-Control', 'no-store');
+  res.type('json').sendFile(file);
+});
+
 /** Direct APK install for testers / before Play listing (file copied by scripts/copy-apk-to-public.mjs). */
 app.get('/download/android/version', (_req, res) => {
   const candidates = [

@@ -1,0 +1,100 @@
+name: iOS TestFlight
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'mobile/**'
+      - '.github/workflows/ios-testflight.yml'
+
+jobs:
+  build-and-upload:
+    runs-on: macos-latest
+    # Skip when signing secrets are not configured (local Mac build still works).
+    if: >-
+      ${{ secrets.APPLE_CERTIFICATE_BASE64 != '' &&
+          secrets.APPLE_PROVISIONING_PROFILE_BASE64 != '' &&
+          secrets.APPLE_APP_SPECIFIC_PASSWORD != '' }}
+    defaults:
+      run:
+        working-directory: mobile
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install CocoaPods
+        run: gem install cocoapods --no-document
+
+      - name: Sync maps key + dart defines
+        run: |
+          API_URL="https://www.bytzgo.net"
+          GOOGLE_CLIENT="645977332644-4gjjf08268b3irafs4bh8b7guct1i1jb.apps.googleusercontent.com"
+          MAPS_KEY="$(curl -fsSL "${API_URL}/api/config/maps" | python3 -c "import sys,json; print(json.load(sys.stdin).get('apiKey',''))" 2>/dev/null || true)"
+          cat > dart_defines.json <<EOF
+          {
+            "API_URL": "${API_URL}",
+            "GOOGLE_WEB_CLIENT_ID": "${GOOGLE_CLIENT}",
+            "GOOGLE_MAPS_API_KEY": "${MAPS_KEY}"
+          }
+          EOF
+          if [[ -n "$MAPS_KEY" ]]; then
+            mkdir -p ios/Runner lib/core
+            cat > ios/Runner/MapsConfig.plist <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict><key>GOOGLE_MAPS_API_KEY</key><string>${MAPS_KEY}</string></dict></plist>
+          PLIST
+          fi
+
+      - name: Import signing certificate
+        env:
+          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          CERT_PATH="$RUNNER_TEMP/cert.p12"
+          echo "$APPLE_CERTIFICATE_BASE64" | base64 --decode > "$CERT_PATH"
+          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+      - name: Install provisioning profile
+        env:
+          APPLE_PROVISIONING_PROFILE_BASE64: ${{ secrets.APPLE_PROVISIONING_PROFILE_BASE64 }}
+        run: |
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          echo "$APPLE_PROVISIONING_PROFILE_BASE64" | base64 --decode > ~/Library/MobileDevice/Provisioning\ Profiles/profile.mobileprovision
+
+      - name: Validate + pod install
+        run: |
+          bash scripts/validate_app_store.sh
+          cd ios && pod install
+
+      - name: Build IPA
+        run: flutter build ipa --release --dart-define-from-file=dart_defines.json --export-options-plist=ios/ExportOptions.plist
+
+      - name: Upload to App Store Connect
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: |
+          IPA="$(ls -1 build/ios/ipa/*.ipa | head -1)"
+          xcrun altool --validate-app -f "$IPA" -t ios -u "$APPLE_ID" -p "$APPLE_APP_SPECIFIC_PASSWORD"
+          xcrun altool --upload-app -f "$IPA" -t ios -u "$APPLE_ID" -p "$APPLE_APP_SPECIFIC_PASSWORD"
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bytzgo-ios-ipa
+          path: mobile/build/ios/ipa/*.ipa
+          retention-days: 14

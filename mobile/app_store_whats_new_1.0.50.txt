@@ -1,0 +1,6 @@
+• Okada & Keke passenger rides — request a motorcycle taxi or tricycle like Gokada/Bolt Bike
+• Package delivery with tiered pricing per ride type
+• Drivers choose vehicle type at signup (Okada, Keke, or Bicycle)
+• Smarter job matching — riders only get offers that fit their vehicle
+• Admin sees each driver’s vehicle type during KYC review
+• Bug fixes and performance improvements
