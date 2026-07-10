@@ -1,3 +1,4 @@
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
@@ -76,31 +77,48 @@ class _BytzGoAppState extends State<BytzGoApp> {
 
   Future<void> _boot() async {
     final started = DateTime.now();
-    for (var attempt = 0; attempt < 3; attempt++) {
-      try {
-        final health = await _api.dio.get<Map<String, dynamic>>('/api/health');
-        await ClientImageUrl.loadFromHealth(health.data);
-        break;
-      } catch (_) {
-        if (attempt == 2) {
-          ClientImageUrl.setPublicBase(ClientImageUrl.defaultPublicBase);
-        } else {
-          await Future<void>.delayed(Duration(milliseconds: 400 * (attempt + 1)));
+
+    Future<void> loadHealth() async {
+      for (var attempt = 0; attempt < 3; attempt++) {
+        try {
+          final health = await _api.dio.get<Map<String, dynamic>>(
+            '/api/health',
+            options: Options(
+              sendTimeout: const Duration(seconds: 5),
+              receiveTimeout: const Duration(seconds: 5),
+            ),
+          );
+          await ClientImageUrl.loadFromHealth(health.data);
+          return;
+        } catch (_) {
+          if (attempt == 2) {
+            ClientImageUrl.setPublicBase(ClientImageUrl.defaultPublicBase);
+          } else {
+            await Future<void>.delayed(Duration(milliseconds: 250 * (attempt + 1)));
+          }
         }
       }
     }
-    await _session.restore();
+
+    await Future.wait([
+      loadHealth(),
+      _session.restore(),
+    ]);
+
+    final postAuth = <Future<void>>[];
     if (_session.isAuthenticated) {
-      await _session.refreshAuthFromServer();
+      postAuth.add(_session.refreshAuthFromServer());
     }
-    await _deliveryPricing.start();
-    await _mapsRuntime.ensureLoaded();
+    postAuth.add(_deliveryPricing.start());
+    postAuth.add(_mapsRuntime.ensureLoaded());
+    await Future.wait(postAuth);
+
     await PushNotificationService.instance.syncActiveRole(
       api: _api,
       user: _session.user,
       session: _session,
     );
-    const minSplash = Duration(milliseconds: 900);
+    const minSplash = Duration(milliseconds: 600);
     final elapsed = DateTime.now().difference(started);
     if (elapsed < minSplash) {
       await Future.delayed(minSplash - elapsed);

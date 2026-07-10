@@ -3,6 +3,7 @@ import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
+import compression from 'compression';
 import helmet from 'helmet';
 import { Pool } from 'pg';
 import bcrypt from 'bcryptjs';
@@ -209,18 +210,47 @@ if (corsAllowedOrigins.length) {
 } else {
   app.use(cors());
 }
+app.use(compression());
 // Product photos are stored as data URLs in JSON — need headroom beyond default 100kb.
 app.use(express.json({ limit: '12mb' }));
 app.use(express.urlencoded({ extended: true, limit: '12mb' }));
 
-app.get('/api/health', async (_req, res) => {
+app.get('/api/health', async (req, res) => {
+  const deep = req.query.deep === '1';
+  let dbOk = true;
+  try {
+    await pool.query('SELECT 1');
+  } catch {
+    dbOk = false;
+  }
+
   const storage = getStorageConfig();
+  if (!deep) {
+    return res.json({
+      ok: dbOk,
+      service: process.env.RENDER_SERVICE_NAME || 'byzgoback',
+      client: 'flutter',
+      fast: true,
+      fcm: firebaseAdminHasCredentials,
+      firebaseProject: FIREBASE_PROJECT_ID,
+      database: {
+        ...dbConnectionDiagnostics(),
+        poolMax: (pool as any).options?.max ?? null,
+      },
+      media: {
+        storage: storage.configured ? 'supabase' : 'inline_fallback',
+        bucket: storage.bucket,
+        publicBaseUrl: storage.publicBaseUrl,
+      },
+    });
+  }
+
   let storageProbe: { ok: boolean; message?: string } = { ok: false, message: 'not configured' };
   if (storage.configured) {
     storageProbe = await probeStorage();
   }
   res.json({
-    ok: true,
+    ok: dbOk,
     service: process.env.RENDER_SERVICE_NAME || 'byzgoback',
     client: 'flutter',
     fcm: firebaseAdminHasCredentials,
@@ -589,11 +619,56 @@ async function riderHasAllDocuments(userId: string): Promise<boolean> {
   return (result.rows[0]?.n ?? 0) >= RIDER_DOC_TYPES.length;
 }
 
-// Helper to get system settings from DB
+// Helper to get system settings from DB (60s in-memory cache)
+const SETTING_CACHE_MS = 60_000;
+const settingCache = new Map<string, { value: string | null; expires: number }>();
+
+async function getSettings(keys: string[]): Promise<Record<string, string | null>> {
+  const result: Record<string, string | null> = {};
+  const missing: string[] = [];
+  const now = Date.now();
+  for (const key of keys) {
+    const cached = settingCache.get(key);
+    if (cached && now < cached.expires) {
+      result[key] = cached.value;
+    } else {
+      missing.push(key);
+    }
+  }
+  if (missing.length) {
+    try {
+      const q = await pool.query(
+        'SELECT key, value FROM system_settings WHERE key = ANY($1)',
+        [missing]
+      );
+      const found = new Set<string>();
+      for (const row of q.rows) {
+        result[row.key] = row.value;
+        settingCache.set(row.key, { value: row.value, expires: now + SETTING_CACHE_MS });
+        found.add(row.key);
+      }
+      for (const key of missing) {
+        if (!found.has(key)) {
+          result[key] = null;
+          settingCache.set(key, { value: null, expires: now + SETTING_CACHE_MS });
+        }
+      }
+    } catch (err) {
+      console.error('Error fetching settings batch:', err);
+      for (const key of missing) result[key] = null;
+    }
+  }
+  return result;
+}
+
 async function getSetting(key: string) {
+  const cached = settingCache.get(key);
+  if (cached && Date.now() < cached.expires) return cached.value;
   try {
     const result = await pool.query('SELECT value FROM system_settings WHERE key = $1', [key]);
-    return result.rows[0]?.value;
+    const value = result.rows[0]?.value ?? null;
+    settingCache.set(key, { value, expires: Date.now() + SETTING_CACHE_MS });
+    return value;
   } catch (err) {
     console.error(`Error fetching setting ${key}:`, err);
     return null;
@@ -606,6 +681,7 @@ async function setSetting(key: string, value: string) {
      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
     [key, String(value)]
   );
+  settingCache.delete(key);
 }
 
 function parseOptionalPositiveAmount(raw: string | null | undefined): number | null {
@@ -953,13 +1029,16 @@ function broadcastPricingUpdated() {
 }
 
 async function getSurgePricingState() {
-  const enabled = (await getSetting('surge_enabled')) === 'true';
-  const multiplier = Math.max(
-    1,
-    parseFloat((await getSetting('surge_multiplier')) || '1.25') || 1.25
-  );
-  const startStr = (await getSetting('surge_start_time')) || '17:00';
-  const endStr = (await getSetting('surge_end_time')) || '21:00';
+  const s = await getSettings([
+    'surge_enabled',
+    'surge_multiplier',
+    'surge_start_time',
+    'surge_end_time',
+  ]);
+  const enabled = s.surge_enabled === 'true';
+  const multiplier = Math.max(1, parseFloat(s.surge_multiplier || '1.25') || 1.25);
+  const startStr = s.surge_start_time || '17:00';
+  const endStr = s.surge_end_time || '21:00';
   const start = parseTimeToMinutes(startStr) ?? 17 * 60;
   const end = parseTimeToMinutes(endStr) ?? 21 * 60;
   const now = ghanaMinutesNow();
@@ -1628,7 +1707,11 @@ const initDb = async () => {
   }
 };
 
-initDb();
+if (process.env.NODE_ENV !== 'production') {
+  initDb();
+} else {
+  console.log('Skipping initDb DDL in production (run migrations separately).');
+}
 
 let vapidPublicKey = '';
 
@@ -3035,6 +3118,9 @@ async function broadcastRideOfferToRiders(order: any) {
 ensureVapidKeys().catch((err) => console.error('[push] VAPID setup failed:', err));
 
 // Middleware
+const AUTH_STATUS_CACHE_MS = 60_000;
+const authStatusCache = new Map<string, { ok: boolean; expires: number }>();
+
 const authenticateToken = (req: any, res: any, next: any) => {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
@@ -3052,11 +3138,21 @@ const authenticateToken = (req: any, res: any, next: any) => {
     if (err) {
       return res.status(403).json({ message: 'Session expired. Please sign in again.' });
     }
-    
-    // Check if user is still active in DB
+
+    const cached = authStatusCache.get(user.id);
+    if (cached && Date.now() < cached.expires) {
+      if (!cached.ok) {
+        return res.status(403).json({ error: 'Account disabled or not found' });
+      }
+      req.user = user;
+      return next();
+    }
+
     try {
       const result = await pool.query('SELECT status FROM users WHERE id = $1', [user.id]);
-      if (result.rowCount === 0 || result.rows[0].status === 'disabled') {
+      const ok = result.rowCount !== 0 && result.rows[0].status !== 'disabled';
+      authStatusCache.set(user.id, { ok, expires: Date.now() + AUTH_STATUS_CACHE_MS });
+      if (!ok) {
         return res.status(403).json({ error: 'Account disabled or not found' });
       }
       req.user = user;
@@ -6401,7 +6497,6 @@ app.patch('/api/admin/users/:id/status', authenticateToken, async (req: any, res
 // Order Routes
 app.get('/api/orders', authenticateToken, async (req: any, res) => {
   try {
-    await activateDueScheduledOrders();
     if (req.user.role === 'customer') {
       await repairStaleTripsForCustomer(req.user.id);
     }

@@ -11,8 +11,8 @@ class ApiClient {
     _dio = Dio(
       BaseOptions(
         baseUrl: Env.apiBaseUrl,
-        connectTimeout: const Duration(seconds: 20),
-        receiveTimeout: const Duration(seconds: 30),
+        connectTimeout: const Duration(seconds: 12),
+        receiveTimeout: const Duration(seconds: 20),
         followRedirects: true,
         maxRedirects: 5,
         headers: {'Content-Type': 'application/json'},
@@ -21,6 +21,20 @@ class ApiClient {
     _dio.interceptors.add(
       InterceptorsWrapper(
         onError: (err, handler) async {
+          final opts = err.requestOptions;
+          final retries = (opts.extra['retry_count'] as int?) ?? 0;
+          final isTransient = err.type == DioExceptionType.connectionTimeout ||
+              err.type == DioExceptionType.connectionError ||
+              err.type == DioExceptionType.receiveTimeout;
+          if (isTransient && retries < 2 && opts.extra['auth_retry'] != true) {
+            opts.extra['retry_count'] = retries + 1;
+            await Future<void>.delayed(Duration(milliseconds: 300 * (retries + 1)));
+            try {
+              final response = await _dio.fetch<dynamic>(opts);
+              handler.resolve(response);
+              return;
+            } catch (_) {}
+          }
           final status = err.response?.statusCode;
           if (status == 431 || isHeaderTooLargeError(err)) {
             onUnauthorized?.call();
