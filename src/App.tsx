@@ -483,7 +483,16 @@ function MainApp() {
     const interceptor = axios.interceptors.response.use(
       (response) => response,
       (error) => {
-        if (error.response && (error.response.status === 401 || error.response.status === 403)) {
+        const url = String(error.config?.url || '');
+        const isAuthAttempt =
+          url.includes('/api/auth/login') ||
+          url.includes('/api/auth/register') ||
+          url.includes('/api/auth/google');
+        if (
+          !isAuthAttempt &&
+          error.response &&
+          (error.response.status === 401 || error.response.status === 403)
+        ) {
           console.warn('Session expired or unauthorized. Logging out.');
           handleLogout();
         }
@@ -494,6 +503,17 @@ function MainApp() {
       axios.interceptors.response.eject(interceptor);
     };
   }, []);
+
+  // Wrong-role session on /admin blocks admin login — clear it so the login form works
+  useEffect(() => {
+    if (
+      location.pathname.startsWith('/admin') &&
+      user &&
+      user.role !== 'admin'
+    ) {
+      handleLogout();
+    }
+  }, [location.pathname, user?.role]);
 
   // Fetch initial data and setup sockets
   useEffect(() => {
@@ -730,6 +750,8 @@ function MainApp() {
     setUser(userData);
     setToken(authToken);
     localStorage.setItem('user', JSON.stringify(userData));
+    localStorage.setItem('token', authToken);
+    axios.defaults.headers.common['Authorization'] = `Bearer ${authToken}`;
     if (needsDeviceSetup(userData.role)) {
       setShowDeviceSetup(true);
     }
@@ -1512,16 +1534,22 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
 
                 {isLogin ? (
                   <div className="space-y-2">
-                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-4">Phone or Email</label>
+                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-4">
+                      {forcedRole === 'admin' ? 'Admin email' : 'Phone or Email'}
+                    </label>
                     <div className="relative">
-                      <Phone className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" size={18} />
+                      {forcedRole === 'admin' ? (
+                        <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" size={18} />
+                      ) : (
+                        <Phone className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" size={18} />
+                      )}
                       <input
-                        type="text"
+                        type={forcedRole === 'admin' ? 'email' : 'text'}
                         required
                         autoComplete="username"
                         value={loginId}
                         onChange={(e) => setLoginId(e.target.value)}
-                        placeholder="0247904675 or name@example.com"
+                        placeholder={forcedRole === 'admin' ? 'admin@bytzgo.net' : '0247904675 or name@example.com'}
                         className="w-full bg-slate-50 border border-slate-100 p-4 pl-12 rounded-2xl focus:outline-none focus:border-brand-blue font-bold text-sm"
                       />
                     </div>
