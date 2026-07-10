@@ -2897,6 +2897,8 @@ async function sendPushToUserIds(userIds: string[], alert: PushAlert) {
                     alert: { title: alert.title, body: alert.body },
                     sound: 'default',
                     badge: iosIncomingRide ? 1 : undefined,
+                    contentAvailable: iosIncomingRide ? true : undefined,
+                    category: iosIncomingRide ? 'incoming_ride_offer' : undefined,
                     'interruption-level': iosIncomingRide ? 'time-sensitive' : 'active',
                   }
                 : {

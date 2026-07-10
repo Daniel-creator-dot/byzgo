@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 import '../../core/api_client.dart';
 import '../../core/directions_service.dart';
 import '../../core/location_service.dart';
+import '../../core/pending_incoming_ride_store.dart';
 import '../../core/push_notification_service.dart';
 import '../../core/session.dart';
 import '../../core/socket_service.dart';
@@ -211,6 +212,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
       if (!mounted) return;
       _wireSocket();
       _refreshAll();
+      unawaited(_onAppResumed());
       unawaited(_loadCommission());
       _startLocationStream();
       if (_isOnline) {
@@ -226,15 +228,32 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _lifecycle = state;
+    if (state == AppLifecycleState.resumed && _isOnline) {
+      unawaited(_onAppResumed());
+    }
+  }
+
+  Future<void> _onAppResumed() async {
+    await PushNotificationService.instance.dispatchPendingIncomingRideIfAny();
+    await _refreshAll(silent: true);
+    if (!mounted || !_isOnline) return;
+
     final order = _incoming;
-    if (order == null) return;
-    if (state == AppLifecycleState.resumed) {
+    if (order != null) {
       unawaited(
         PushNotificationService.instance.cancelIncomingRide(order.id),
       );
-      // Rider unlocked phone — switch from banner sound to in-app ring + accept UI.
       unawaited(IncomingRideAlert.raise(order, useNotificationSound: false));
+      return;
     }
+
+    final pending = await PendingIncomingRideStore.load();
+    if (pending != null) {
+      _handleIncomingRidePush(pending);
+      return;
+    }
+
+    _trackOffers(_orders);
   }
 
   @override
@@ -293,6 +312,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
   void _handleIncomingRidePush(Map<String, String> data) {
     if (!_isOnline || !mounted) return;
     final orderId = data['orderId']?.trim() ?? '';
+    if (orderId.isNotEmpty && _incoming?.id == orderId) return;
     if (orderId == 'test-push' || orderId == 'diagnose-test') {
       unawaited(
         IncomingRideRing.start(maxDuration: IncomingRideAlert.callRingDuration),
@@ -330,6 +350,9 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
     });
     final screenOff = _lifecycle != AppLifecycleState.resumed;
     unawaited(IncomingRideAlert.raise(order, useNotificationSound: screenOff));
+    if (!screenOff) {
+      unawaited(PendingIncomingRideStore.clear());
+    }
   }
 
   void _trackOffers(List<Order> orders) {

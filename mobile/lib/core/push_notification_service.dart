@@ -16,6 +16,7 @@ import 'api_client.dart';
 import 'fcm_background.dart';
 import '../features/rider/incoming_ride_ring.dart';
 import 'incoming_ride_notifications.dart';
+import 'pending_incoming_ride_store.dart';
 import 'session.dart';
 
 /// Registers FCM and shows high-priority alerts when the app is backgrounded.
@@ -135,6 +136,12 @@ class PushNotificationService {
 
   /// Rider opened app from a killed state via notification tap.
   Future<void> handleColdStartNotification() async {
+    final launch = await _local.getNotificationAppLaunchDetails();
+    if (launch?.didNotificationLaunchApp == true &&
+        launch?.notificationResponse != null) {
+      _onNotificationTap(launch!.notificationResponse!);
+    }
+
     if (!DefaultFirebaseOptions.isConfigured) return;
     try {
       final message = await FirebaseMessaging.instance.getInitialMessage();
@@ -144,6 +151,18 @@ class PushNotificationService {
     } catch (e) {
       debugPrint('BytzGo push: getInitialMessage failed: $e');
     }
+  }
+
+  /// After background push or opening the app without tapping the banner.
+  Future<void> dispatchPendingIncomingRideIfAny() async {
+    await _dispatchPendingIncomingRide();
+  }
+
+  Future<void> _dispatchPendingIncomingRide() async {
+    final pending = await PendingIncomingRideStore.load();
+    if (pending == null || !acceptsIncomingRideJobs) return;
+    unawaited(IncomingRideRing.start());
+    onIncomingRidePush?.call(pending);
   }
 
   Future<void> ensureRegistered({
@@ -217,20 +236,33 @@ class PushNotificationService {
     required String title,
     required String body,
     bool playSound = false,
+    Map<String, String>? data,
   }) async {
     if (!acceptsIncomingRideJobs) return;
     await initialize();
+    final payload = data ??
+        {
+          'type': 'incoming-ride',
+          'orderId': orderId,
+          'title': title,
+          'body': body,
+        };
+    await PendingIncomingRideStore.save(payload);
     await _local.show(
       incomingRideNotificationId(orderId),
       title,
       body,
       incomingRideNotificationDetails(playSound: playSound),
-      payload: jsonEncode({'type': 'incoming-ride', 'orderId': orderId}),
+      payload: jsonEncode(payload),
     );
   }
 
   Future<void> cancelIncomingRide(String orderId) async {
     await _local.cancel(incomingRideNotificationId(orderId));
+    final pending = await PendingIncomingRideStore.load();
+    if (pending?['orderId'] == orderId) {
+      await PendingIncomingRideStore.clear();
+    }
   }
 
   /// In-app alert for trip/chat updates.
@@ -289,6 +321,7 @@ class PushNotificationService {
       final payload = {
         for (final e in data.entries) e.key: e.value?.toString() ?? '',
       };
+      unawaited(PendingIncomingRideStore.save(payload));
       unawaited(IncomingRideRing.start());
       onIncomingRidePush?.call(payload);
       final orderId = data['orderId']?.toString() ?? '';
@@ -302,6 +335,7 @@ class PushNotificationService {
               message.notification?.body ??
               'Open BytzGo to accept',
           playSound: false,
+          data: payload,
         ));
       }
       return;
@@ -318,11 +352,13 @@ class PushNotificationService {
     final type = message.data['type']?.toString() ?? '';
     if (type == 'incoming-ride') {
       if (!acceptsIncomingRideJobs) return;
-      unawaited(IncomingRideRing.start());
-      onIncomingRidePush?.call({
+      final payload = {
         for (final e in message.data.entries)
           e.key: e.value?.toString() ?? '',
-      });
+      };
+      unawaited(PendingIncomingRideStore.save(payload));
+      unawaited(IncomingRideRing.start());
+      onIncomingRidePush?.call(payload);
     }
     debugPrint('BytzGo push opened: ${message.data}');
   }
@@ -333,10 +369,12 @@ class PushNotificationService {
       final data = jsonDecode(response.payload!) as Map<String, dynamic>;
       final type = data['type']?.toString() ?? '';
       if (type == 'incoming-ride' && acceptsIncomingRideJobs) {
-        unawaited(IncomingRideRing.start());
-        onIncomingRidePush?.call({
+        final payload = {
           for (final e in data.entries) e.key: e.value?.toString() ?? '',
-        });
+        };
+        unawaited(PendingIncomingRideStore.save(payload));
+        unawaited(IncomingRideRing.start());
+        onIncomingRidePush?.call(payload);
       }
       debugPrint('BytzGo notification tap: $data');
     } catch (_) {}

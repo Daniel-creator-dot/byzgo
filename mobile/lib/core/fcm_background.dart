@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart'
@@ -7,6 +9,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 import '../firebase_options.dart';
 import 'incoming_ride_notifications.dart';
+import 'pending_incoming_ride_store.dart';
 import 'push_session_context.dart';
 
 /// FCM while app is backgrounded or screen is off — one alarm notification (no in-app ring).
@@ -24,6 +27,14 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   if (isRide && !await PushSessionContext.isRider()) {
     return;
   }
+
+  final payload = {
+    for (final e in message.data.entries) e.key: e.value?.toString() ?? '',
+  };
+  if (isRide) {
+    await PendingIncomingRideStore.save(payload);
+  }
+
   // iOS: lock-screen alert+sound comes from APNs — skip duplicate local banner.
   if (isRide &&
       !kIsWeb &&
@@ -90,5 +101,6 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
               presentSound: true,
             ),
           ),
+    payload: isRide ? jsonEncode(payload) : null,
   );
 }

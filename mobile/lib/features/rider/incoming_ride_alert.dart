@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../../core/push_notification_service.dart';
+import '../../core/pending_incoming_ride_store.dart';
 import '../../models/order.dart';
 import '../../shared/rider_trip.dart';
 import 'incoming_ride_ring.dart';
@@ -115,6 +116,7 @@ class IncomingRideAlert {
     if (id != null) {
       await PushNotificationService.instance.cancelIncomingRide(id);
     }
+    await PendingIncomingRideStore.clear();
   }
 }
 
