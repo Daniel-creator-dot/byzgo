@@ -92,6 +92,8 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
   double? _quotedFee;
   double? _quoteDistanceKm;
   bool _surgeActive = false;
+  double _promotionDiscount = 0;
+  String? _promotionName;
   bool _quoteLoading = false;
   String? _quoteError;
   bool _scheduleLater = false;
@@ -182,6 +184,8 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
       _quotedFee = null;
       _quoteDistanceKm = null;
       _quoteError = null;
+      _promotionDiscount = 0;
+      _promotionName = null;
       _surgeActive = _pricingConfig?.surgeActive ?? false;
     });
     if (_hasRoutableCoords) {
@@ -222,6 +226,8 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
       _quotedFee = null;
       _quoteDistanceKm = null;
       _quoteError = null;
+      _promotionDiscount = 0;
+      _promotionName = null;
       _quoteLoading = true;
     });
     _scheduleDeliveryQuote();
@@ -690,6 +696,8 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
         _quoteDistanceKm = q.distanceKm;
         _pricePerKm = q.pricePerKm;
         _surgeActive = q.surgeActive;
+        _promotionDiscount = q.promotionDiscount;
+        _promotionName = q.promotionName;
         _quoteLoading = false;
         _quoteError = null;
       });
@@ -1704,11 +1712,15 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
               child: Padding(
                 padding: const EdgeInsets.only(bottom: 10),
                 child: DeliveryQuoteCard(
-                  key: ValueKey('fee-${_quotedFee ?? 0}-$_surgeActive-$_quoteLoading'),
+                  key: ValueKey(
+                    'fee-${_quotedFee ?? 0}-$_surgeActive-$_promotionDiscount-$_quoteLoading',
+                  ),
                   fee: _deliveryFee,
                   distanceKm: _routeDistanceKm,
                   surgeActive: _surgeActive,
                   loading: _quoteLoading,
+                  promotionDiscount: _promotionDiscount,
+                  promotionName: _promotionName,
                 ),
               ),
             ),

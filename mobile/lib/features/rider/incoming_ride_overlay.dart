@@ -103,6 +103,7 @@ class _IncomingRideOverlayState extends State<IncomingRideOverlay>
   Widget build(BuildContext context) {
     final order = widget.order;
     final fee = order.deliveryFee ?? order.total;
+    final promoBonus = order.riderBonusAmount ?? 0;
     final offerTtl = _secs ?? 30;
     final ringMax = IncomingRideAlert.callRingDuration.inSeconds;
 
@@ -264,6 +265,17 @@ class _IncomingRideOverlayState extends State<IncomingRideOverlay>
                           fontWeight: FontWeight.w900,
                         ),
                       ),
+                      if (promoBonus > 0) ...[
+                        const SizedBox(height: 6),
+                        Text(
+                          '+ ${formatCedis(promoBonus)} promo bonus',
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.85),
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
                       const SizedBox(height: 8),
                       _PaymentChip(order: order),
                       const SizedBox(height: 12),

@@ -9,6 +9,9 @@ class DeliveryQuote {
     this.baseDeliveryFee,
     this.surgeActive = false,
     this.surgeMultiplier,
+    this.promotionDiscount = 0,
+    this.promotionName,
+    this.riderBonusAmount = 0,
   });
 
   final double distanceKm;
@@ -18,8 +21,18 @@ class DeliveryQuote {
   final double? baseDeliveryFee;
   final bool surgeActive;
   final double? surgeMultiplier;
+  final double promotionDiscount;
+  final String? promotionName;
+  final double riderBonusAmount;
+
+  double get feeBeforePromotion => deliveryFee + promotionDiscount;
 
   factory DeliveryQuote.fromJson(Map<String, dynamic> json) {
+    final promo = json['promotion'];
+    String? promoName;
+    if (promo is Map) {
+      promoName = promo['name']?.toString();
+    }
     return DeliveryQuote(
       distanceKm: parseJsonDoubleOrZero(json['distance_km']),
       deliveryFee: parseJsonDouble(json['delivery_fee']) ??
@@ -30,6 +43,9 @@ class DeliveryQuote {
       baseDeliveryFee: parseJsonDouble(json['base_delivery_fee']),
       surgeActive: json['surge_active'] == true,
       surgeMultiplier: parseJsonDouble(json['surge_multiplier']),
+      promotionDiscount: parseJsonDouble(json['promotion_discount']) ?? 0,
+      promotionName: promoName,
+      riderBonusAmount: parseJsonDouble(json['rider_bonus_amount']) ?? 0,
     );
   }
 }

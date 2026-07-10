@@ -7,6 +7,7 @@ import '../../models/delivery_zone.dart';
 import '../../models/admin_pending_product.dart';
 import '../../models/admin_vendor.dart';
 import '../../models/admin_ride_promotion.dart';
+import '../../models/rider_document.dart';
 
 class AdminRepository {
   AdminRepository(this._api);

@@ -77,6 +77,7 @@ class Order {
     this.pulseGuideActive,
     this.serviceType,
     this.passengerCount,
+    this.riderBonusAmount,
 
   });
 
@@ -168,6 +169,8 @@ class Order {
 
   final int? passengerCount;
 
+  final double? riderBonusAmount;
+
   bool get isCourier => orderType == 'courier';
 
   bool get isPassengerRide =>
@@ -217,6 +220,9 @@ class Order {
       pulseGuideAt: pulseGuideAt,
       pulseGuidePhase: pulseGuidePhase,
       pulseGuideActive: pulseGuideActive,
+      serviceType: serviceType,
+      passengerCount: passengerCount,
+      riderBonusAmount: riderBonusAmount,
     );
   }
 
@@ -465,6 +471,9 @@ class Order {
 
       serviceType: RideServiceType.fromString(json['service_type']?.toString()),
       passengerCount: parseJsonInt(json['passenger_count']),
+      riderBonusAmount: parseJsonDouble(
+        json['rider_bonus_amount'] ?? json['riderBonusAmount'],
+      ),
 
     );
 
@@ -519,6 +528,9 @@ class Order {
       pulseGuideAt: at ?? DateTime.now().toUtc().toIso8601String(),
       pulseGuidePhase: phase,
       pulseGuideActive: active,
+      serviceType: serviceType,
+      passengerCount: passengerCount,
+      riderBonusAmount: riderBonusAmount,
     );
   }
 

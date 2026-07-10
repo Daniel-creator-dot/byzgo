@@ -400,12 +400,16 @@ class DeliveryQuoteCard extends StatelessWidget {
     required this.distanceKm,
     this.surgeActive = false,
     this.loading = false,
+    this.promotionDiscount = 0,
+    this.promotionName,
   });
 
   final double fee;
   final double distanceKm;
   final bool surgeActive;
   final bool loading;
+  final double promotionDiscount;
+  final String? promotionName;
 
   @override
   Widget build(BuildContext context) {
@@ -509,30 +513,69 @@ class DeliveryQuoteCard extends StatelessWidget {
                                 ),
                               ),
                             ],
+                            if (!loading && promotionDiscount > 0) ...[
+                              const SizedBox(width: 8),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 6,
+                                  vertical: 2,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: BytzGoTheme.accent,
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: Text(
+                                  (promotionName?.trim().isNotEmpty == true)
+                                      ? promotionName!.trim().toUpperCase()
+                                      : 'PROMO',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 8,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                              ),
+                            ],
                           ],
                         ),
                         Text(
                           loading
                               ? 'Calculating…'
                               : distanceKm > 0
-                                  ? '${distanceKm.toStringAsFixed(1)} km · Pay on arrival'
+                                  ? promotionDiscount > 0
+                                      ? '${distanceKm.toStringAsFixed(1)} km · Save ${formatCedis(promotionDiscount)}'
+                                      : '${distanceKm.toStringAsFixed(1)} km · Pay on arrival'
                                   : 'Pay when rider arrives',
                           style: BytzGoTheme.sheetBody(12),
                         ),
                       ],
                     ),
                   ),
-                  Text(
-                    loading
-                        ? 'Calculating…'
-                        : formatCedis(fee),
-                    style: TextStyle(
-                      fontWeight: FontWeight.w900,
-                      fontSize: loading ? 16 : 20,
-                      color: loading
-                          ? BytzGoTheme.sheetMuted
-                          : BytzGoTheme.accentDark,
-                    ),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      if (!loading && promotionDiscount > 0)
+                        Text(
+                          formatCedis(fee + promotionDiscount),
+                          style: TextStyle(
+                            decoration: TextDecoration.lineThrough,
+                            fontSize: 12,
+                            color: BytzGoTheme.sheetMuted.withValues(alpha: 0.9),
+                          ),
+                        ),
+                      Text(
+                        loading
+                            ? 'Calculating…'
+                            : formatCedis(fee),
+                        style: TextStyle(
+                          fontWeight: FontWeight.w900,
+                          fontSize: loading ? 16 : 20,
+                          color: loading
+                              ? BytzGoTheme.sheetMuted
+                              : BytzGoTheme.accentDark,
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
