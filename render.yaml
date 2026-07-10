@@ -12,7 +12,7 @@ services:
     name: byzgo
     runtime: node
     plan: free
-    region: oregon
+    region: frankfurt
     buildCommand: npm ci && npm run build:render
     startCommand: npm --prefix backend run start
     healthCheckPath: /api/health
