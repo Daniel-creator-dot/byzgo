@@ -15,6 +15,7 @@ import '../models/role.dart';
 import 'api_client.dart';
 import 'fcm_background.dart';
 import '../features/rider/incoming_ride_ring.dart';
+import 'incoming_ride_callkit.dart';
 import 'incoming_ride_notifications.dart';
 import 'pending_incoming_ride_store.dart';
 import 'session.dart';
@@ -97,6 +98,11 @@ class PushNotificationService {
     await android?.createNotificationChannel(kIncomingRideChannel);
     await android?.createNotificationChannel(kTripChannel);
     await android?.createNotificationChannel(kSupportChannel);
+    try {
+      await IncomingRideCallKit.initialize();
+    } catch (e, st) {
+      debugPrint('BytzGo CallKit init failed: $e\n$st');
+    }
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
       await android?.requestNotificationsPermission();
       await android?.requestFullScreenIntentPermission();
@@ -197,6 +203,13 @@ class PushNotificationService {
         sound: true,
         criticalAlert: false,
       );
+      if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
+        for (var attempt = 0; attempt < 8; attempt++) {
+          final apns = await messaging.getAPNSToken();
+          if (apns != null && apns.isNotEmpty) break;
+          await Future<void>.delayed(const Duration(milliseconds: 400));
+        }
+      }
       if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
         await messaging.setAutoInitEnabled(true);
       }
@@ -248,16 +261,11 @@ class PushNotificationService {
           'body': body,
         };
     await PendingIncomingRideStore.save(payload);
-    await _local.show(
-      incomingRideNotificationId(orderId),
-      title,
-      body,
-      incomingRideNotificationDetails(playSound: playSound),
-      payload: jsonEncode(payload),
-    );
+    await IncomingRideCallKit.showIncomingRide(payload);
   }
 
   Future<void> cancelIncomingRide(String orderId) async {
+    await IncomingRideCallKit.endCall(orderId);
     await _local.cancel(incomingRideNotificationId(orderId));
     final pending = await PendingIncomingRideStore.load();
     if (pending?['orderId'] == orderId) {
@@ -322,22 +330,7 @@ class PushNotificationService {
         for (final e in data.entries) e.key: e.value?.toString() ?? '',
       };
       unawaited(PendingIncomingRideStore.save(payload));
-      unawaited(IncomingRideRing.start());
       onIncomingRidePush?.call(payload);
-      final orderId = data['orderId']?.toString() ?? '';
-      if (orderId.isNotEmpty) {
-        unawaited(showIncomingRide(
-          orderId: orderId,
-          title: data['title']?.toString() ??
-              message.notification?.title ??
-              'New delivery job',
-          body: data['body']?.toString() ??
-              message.notification?.body ??
-              'Open BytzGo to accept',
-          playSound: false,
-          data: payload,
-        ));
-      }
       return;
     }
     if (type == 'trip-message') {

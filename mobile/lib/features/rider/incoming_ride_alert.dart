@@ -3,6 +3,7 @@ import 'dart:async' show Timer, unawaited;
 import 'package:flutter/foundation.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
+import '../../core/incoming_ride_callkit.dart';
 import '../../core/push_notification_service.dart';
 import '../../core/pending_incoming_ride_store.dart';
 import '../../models/order.dart';
@@ -26,8 +27,8 @@ class IncomingRideAlert {
 
   static Future<void> raise(
     Order order, {
-    /// True when app is backgrounded / screen off — use notification alarm only.
-    bool useNotificationSound = false,
+    /// True when app is backgrounded / screen off — use CallKit full-screen UI.
+    bool useCallKit = false,
   }) async {
     if (!isOfferableOrder(order)) return;
     if (!PushNotificationService.instance.acceptsIncomingRideJobs) return;
@@ -40,41 +41,43 @@ class IncomingRideAlert {
     final title = 'Incoming delivery job';
     final body = '$pickup → $drop';
 
+    final payload = <String, String>{
+      'type': 'incoming-ride',
+      'orderId': order.id,
+      'title': title,
+      'body': body,
+      'pickup': pickup,
+      'address': drop,
+      'status': order.status,
+      'orderType': order.orderType ?? 'courier',
+      if (order.expiresAt != null) 'expiresAt': order.expiresAt!,
+    };
+
     if (_activeOrderId == order.id) {
-      if (useNotificationSound) {
-        unawaited(PushNotificationService.instance.showIncomingRide(
-          orderId: order.id,
-          title: title,
-          body: body,
-          playSound: true,
-        ));
+      if (useCallKit) {
+        unawaited(IncomingRideCallKit.showIncomingRide(payload));
       } else {
         unawaited(IncomingRideRing.start(maxDuration: callRingDuration));
       }
-      _scheduleRingEnd(order.id, cancelNotification: useNotificationSound);
+      _scheduleRingEnd(order.id, endCallKit: useCallKit);
       return;
     }
 
     _activeOrderId = order.id;
 
-    if (useNotificationSound) {
+    if (useCallKit) {
       IncomingRideRing.stop();
-      unawaited(PushNotificationService.instance.showIncomingRide(
-        orderId: order.id,
-        title: title,
-        body: body,
-        playSound: true,
-      ));
+      unawaited(IncomingRideCallKit.showIncomingRide(payload));
       unawaited(WakelockPlus.enable());
     } else {
       unawaited(IncomingRideRing.start(maxDuration: callRingDuration));
       unawaited(WakelockPlus.enable());
       unawaited(PushNotificationService.instance.cancelIncomingRide(order.id));
     }
-    _scheduleRingEnd(order.id, cancelNotification: useNotificationSound);
+    _scheduleRingEnd(order.id, endCallKit: useCallKit);
   }
 
-  static void _scheduleRingEnd(String orderId, {required bool cancelNotification}) {
+  static void _scheduleRingEnd(String orderId, {required bool endCallKit}) {
     _ringEndTimer?.cancel();
     var left = callRingDuration.inSeconds;
     ringSecondsLeft.value = left;
@@ -85,10 +88,8 @@ class IncomingRideAlert {
         _ringEndTimer = null;
         ringSecondsLeft.value = 0;
         IncomingRideRing.stop();
-        if (cancelNotification) {
-          unawaited(
-            PushNotificationService.instance.cancelIncomingRide(orderId),
-          );
+        if (endCallKit) {
+          unawaited(IncomingRideCallKit.endCall(orderId));
         }
         return;
       }
@@ -114,6 +115,7 @@ class IncomingRideAlert {
     IncomingRideRing.stop();
     await WakelockPlus.disable();
     if (id != null) {
+      await IncomingRideCallKit.endCall(id);
       await PushNotificationService.instance.cancelIncomingRide(id);
     }
     await PendingIncomingRideStore.clear();

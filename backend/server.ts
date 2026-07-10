@@ -3154,9 +3154,10 @@ async function sendPushToUserIds(userIds: string[], alert: PushAlert) {
       // Android incoming jobs: data-only (Flutter shows one loud local alarm).
       // iOS / unknown platform: APNs alert+sound only (no FCM notification key — avoids silent iOS banners).
       const androidIncomingRide = incomingRide && isAndroid;
-      const iosIncomingRide = incomingRide && (isIos || !isAndroid);
+      const iosIncomingRide = incomingRide && isIos;
       const loudAlert = iosIncomingRide || (high && !androidIncomingRide);
-      const includeNotification = !incomingRide;
+      // iOS incoming jobs: alert + content-available so the device wakes and AppDelegate can show CallKit.
+      const includeNotification = !incomingRide || iosIncomingRide;
       return {
         token: row.token,
         ...(includeNotification
@@ -3171,7 +3172,7 @@ async function sendPushToUserIds(userIds: string[], alert: PushAlert) {
         android: {
           priority: high ? 'high' : 'normal',
           ttl: high ? 30 * 1000 : 3600 * 1000,
-          ...(androidIncomingRide || (incomingRide && !isAndroid)
+          ...(androidIncomingRide
             ? {}
             : {
                 notification: {
@@ -3186,25 +3187,28 @@ async function sendPushToUserIds(userIds: string[], alert: PushAlert) {
         },
         apns: {
           headers: {
-            'apns-priority': loudAlert ? '10' : '5',
-            'apns-push-type': loudAlert ? 'alert' : 'background',
+            'apns-priority': iosIncomingRide || loudAlert ? '10' : '5',
+            'apns-push-type': iosIncomingRide || loudAlert ? 'alert' : 'background',
             ...(iosIncomingRide ? { 'apns-expiration': apnsExpires } : {}),
           },
           payload: {
-            aps: {
-              ...(loudAlert
+            aps: iosIncomingRide
+              ? {
+                  alert: { title: alert.title, body: alert.body },
+                  sound: 'default',
+                  'interruption-level': 'time-sensitive',
+                  category: 'incoming_ride_offer',
+                  contentAvailable: true,
+                }
+              : loudAlert
                 ? {
                     alert: { title: alert.title, body: alert.body },
                     sound: 'default',
-                    badge: iosIncomingRide ? 1 : undefined,
-                    contentAvailable: iosIncomingRide ? true : undefined,
-                    category: iosIncomingRide ? 'incoming_ride_offer' : undefined,
-                    'interruption-level': iosIncomingRide ? 'time-sensitive' : 'active',
+                    'interruption-level': 'time-sensitive',
                   }
                 : {
                     contentAvailable: true,
-                  }),
-            },
+                  },
           },
         },
       };

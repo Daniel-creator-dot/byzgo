@@ -173,7 +173,12 @@ class _BytzGoAppState extends State<BytzGoApp> {
                   child: AppLaunchCarousel(message: 'Loading your city…'),
                 );
               }
-              return child ?? const SizedBox.shrink();
+              if (child == null) {
+                return const Material(
+                  child: AppLaunchCarousel(message: 'Loading your city…'),
+                );
+              }
+              return child;
             },
           );
         },

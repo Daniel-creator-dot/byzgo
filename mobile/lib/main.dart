@@ -15,7 +15,15 @@ Future<void> main() async {
   if (kDebugMode) {
     debugPrint('BytzGo API: ${Env.apiBaseUrl}');
   }
-  await bootstrapFirebase();
-  await PushNotificationService.instance.initialize();
+  try {
+    await bootstrapFirebase();
+  } catch (e, st) {
+    debugPrint('BytzGo Firebase bootstrap failed: $e\n$st');
+  }
+  try {
+    await PushNotificationService.instance.initialize();
+  } catch (e, st) {
+    debugPrint('BytzGo push init failed at startup: $e\n$st');
+  }
   runApp(const BytzGoApp());
 }

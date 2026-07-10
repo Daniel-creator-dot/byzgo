@@ -8,6 +8,8 @@ import 'package:provider/provider.dart';
 import '../../core/api_client.dart';
 import '../../core/directions_service.dart';
 import '../../core/location_service.dart';
+import '../../core/incoming_ride_callkit.dart';
+import '../../core/pending_incoming_ride_action_store.dart';
 import '../../core/pending_incoming_ride_store.dart';
 import '../../core/push_notification_service.dart';
 import '../../core/session.dart';
@@ -203,6 +205,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     PushNotificationService.instance.onIncomingRidePush = _handleIncomingRidePush;
+    IncomingRideCallKit.onRideAction = _handleIncomingRideCallAction;
     unawaited(PushNotificationService.instance.handleColdStartNotification());
     _isOnline = _user.isOnline == true;
     _profilePhone.text = _user.phone ?? '';
@@ -234,6 +237,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
   }
 
   Future<void> _onAppResumed() async {
+    await _processPendingCallKitAction();
     await PushNotificationService.instance.dispatchPendingIncomingRideIfAny();
     await _refreshAll(silent: true);
     if (!mounted || !_isOnline) return;
@@ -243,7 +247,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
       unawaited(
         PushNotificationService.instance.cancelIncomingRide(order.id),
       );
-      unawaited(IncomingRideAlert.raise(order, useNotificationSound: false));
+      unawaited(IncomingRideAlert.raise(order, useCallKit: false));
       return;
     }
 
@@ -260,6 +264,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     PushNotificationService.instance.onIncomingRidePush = null;
+    IncomingRideCallKit.onRideAction = null;
     _posSub?.cancel();
     _pollTimer?.cancel();
     _offerTimer?.cancel();
@@ -309,6 +314,65 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
     );
   }
 
+  void _handleIncomingRideCallAction(String action, Map<String, String> data) {
+    if (!_isOnline) return;
+    unawaited(_processCallKitAction(action, data));
+  }
+
+  Future<void> _processPendingCallKitAction() async {
+    final pending = await PendingIncomingRideActionStore.load();
+    if (pending == null) return;
+    await PendingIncomingRideActionStore.clear();
+    await _processCallKitAction(pending.action, pending.data);
+  }
+
+  Future<void> _processCallKitAction(
+    String action,
+    Map<String, String> data,
+  ) async {
+    if (!_isOnline || !mounted) return;
+    final orderId = data['orderId']?.trim() ?? '';
+    if (orderId.isEmpty) return;
+
+    if (action == 'decline' || action == 'timeout') {
+      await IncomingRideCallKit.endCall(orderId);
+      if (_incoming?.id == orderId) {
+        await _declineRide();
+      } else {
+        try {
+          await _ordersRepo.declineOrder(orderId);
+        } catch (_) {}
+        await IncomingRideAlert.dismiss(orderId: orderId);
+      }
+      return;
+    }
+
+    if (action != 'accept') return;
+
+    await IncomingRideCallKit.endCall(orderId);
+    Order? order = _incoming?.id == orderId ? _incoming : null;
+    order ??= await () async {
+      try {
+        return await _ordersRepo.fetchIncomingOffer(orderId);
+      } catch (_) {
+        return null;
+      }
+    }();
+    order ??= _orderFromPushData(data);
+    if (!mounted || !_isOnline || order == null) {
+      await PendingIncomingRideActionStore.save('accept', data);
+      return;
+    }
+    if (_incoming?.id != orderId) {
+      setState(() {
+        _incoming = order;
+        _tab = _RiderTab.drive;
+        _driveSheet = _DriveSheet.requests;
+      });
+    }
+    await _acceptOrder(order);
+  }
+
   void _handleIncomingRidePush(Map<String, String> data) {
     if (!_isOnline || !mounted) return;
     final orderId = data['orderId']?.trim() ?? '';
@@ -349,7 +413,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
       _driveSheet = _DriveSheet.requests;
     });
     final screenOff = _lifecycle != AppLifecycleState.resumed;
-    unawaited(IncomingRideAlert.raise(order, useNotificationSound: screenOff));
+    unawaited(IncomingRideAlert.raise(order, useCallKit: screenOff));
     if (!screenOff) {
       unawaited(PendingIncomingRideStore.clear());
     }
