@@ -1590,7 +1590,7 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
                         autoComplete="username"
                         value={loginId}
                         onChange={(e) => setLoginId(e.target.value)}
-                        placeholder={forcedRole === 'admin' ? 'admin@bytzgo.net' : '0247904675 or name@example.com'}
+                        placeholder={forcedRole === 'admin' ? 'your admin email' : '0247904675 or name@example.com'}
                         className="w-full bg-slate-50 border border-slate-100 p-4 pl-12 rounded-2xl focus:outline-none focus:border-brand-blue font-bold text-sm"
                       />
                     </div>
@@ -4670,6 +4670,7 @@ function AdminView({
                ))}
              </div>
            )}
+         </div>
        ) : activeTab === 'sms' ? (
          <div className="space-y-6 max-w-2xl">
            <DarkCard>
