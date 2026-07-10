@@ -414,6 +414,11 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
       _alertedOfferIds.add(order.id);
       _presentIncoming(order);
     };
+    final pending = _socket.consumePendingIncomingRide();
+    if (pending != null && _isOnline && isOfferableOrder(pending)) {
+      _alertedOfferIds.add(pending.id);
+      _presentIncoming(pending);
+    }
     _socket.onRideTaken = (orderId, {String? reason}) {
       if (!mounted) return;
       final wasIncoming = _incoming?.id == orderId;
@@ -509,7 +514,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
 
   void _startPolling() {
     _pollTimer?.cancel();
-    _pollTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+    _pollTimer = Timer.periodic(const Duration(seconds: 2), (_) {
       if (_isOnline && mounted) _refreshAll(silent: true);
     });
   }

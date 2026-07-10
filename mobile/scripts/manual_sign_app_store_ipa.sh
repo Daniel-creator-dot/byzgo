@@ -83,11 +83,8 @@ if ! grep -q 'com.apple.developer.applesignin' "$ENT_TMP" 2>/dev/null; then
   echo "  2. Profiles → App Store profile → Edit → Save (regenerate) → Xcode downloads it"
   echo "  3. Re-run this script. IPA may fail App Review for Apple login until then."
 fi
-# Prefer Runner.Release.entitlements when profile already includes the same keys.
-if grep -q 'com.apple.developer.applesignin' "$ENT" 2>/dev/null \
-   && grep -q 'com.apple.developer.applesignin' "$ENT_TMP" 2>/dev/null; then
-  cp "$ENT" "$ENT_TMP"
-fi
+# Sign with provisioning-profile entitlements only (never merge Runner.Release.entitlements —
+# extra keys like time-sensitive break App Store Connect validation).
 
 sign_item() {
   local target="$1"

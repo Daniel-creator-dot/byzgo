@@ -2,26 +2,11 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>application-identifier</key>
-	<string>MHTN5HYAHW.com.bytzgo.bytzgoMobile</string>
 	<key>aps-environment</key>
 	<string>production</string>
-	<key>beta-reports-active</key>
-	<true/>
-	<key>com.apple.developer.team-identifier</key>
-	<string>MHTN5HYAHW</string>
-	<key>get-task-allow</key>
-	<false/>
-	<key>keychain-access-groups</key>
-	<array>
-		<string>MHTN5HYAHW.*</string>
-		<string>com.apple.token</string>
-	</array>
 	<key>com.apple.developer.applesignin</key>
 	<array>
 		<string>Default</string>
 	</array>
-	<key>com.apple.developer.usernotifications.time-sensitive</key>
-	<true/>
 </dict>
 </plist>

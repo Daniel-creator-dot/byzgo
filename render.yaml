@@ -1,7 +1,8 @@
 # BytzGo — Web Service blueprint (API + admin at /admin).
 #
-# Production today: Render service "byzgoback" (srv-d8a8j34m0tmc739suuqg) owns
-# www.bytzgo.net / bytzgo.net. Static site "byzgo" is frontend-only — do not attach API domains to it.
+# Production today: Render service "byzgoback-eu" (srv-d98738e7r5hc73cjogv0, Frankfurt) owns
+# www.bytzgo.net / bytzgo.net. Legacy "byzgoback" (Oregon) is suspended.
+# Static site "byzgo" is frontend-only — do not attach API domains to it.
 # Verify:  .\scripts\verify-render-api.ps1 -Url https://www.bytzgo.net
 #
 # Apply: https://dashboard.render.com/blueprint/new?repo=https://github.com/Daniel-creator-dot/byzgo
@@ -24,6 +25,8 @@ services:
         value: "true"
       - key: DATABASE_URL
         sync: false
+      - key: PG_POOL_MAX
+        value: "10"
       - key: JWT_SECRET
         sync: false
       - key: GOOGLE_MAPS_API_KEY

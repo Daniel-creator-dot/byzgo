@@ -225,6 +225,10 @@ app.get('/api/health', async (_req, res) => {
     client: 'flutter',
     fcm: firebaseAdminHasCredentials,
     firebaseProject: FIREBASE_PROJECT_ID,
+    database: {
+      ...dbConnectionDiagnostics(),
+      poolMax: (pool as any).options?.max ?? null,
+    },
     push: {
       iosRequiresApnsKeyInFirebase: true,
       testEndpoint: '/api/push/test-incoming-ride',
@@ -508,8 +512,57 @@ function dedupeVendorList<T extends { id: string; name?: string; email?: string 
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_URL?.includes('supabase.com') ? { rejectUnauthorized: false } : false
+  ssl: process.env.DATABASE_URL?.includes('supabase.com') ? { rejectUnauthorized: false } : false,
+  max: Math.min(20, Math.max(2, Number(process.env.PG_POOL_MAX) || 10)),
+  idleTimeoutMillis: Number(process.env.PG_IDLE_TIMEOUT_MS) || 30_000,
+  connectionTimeoutMillis: Number(process.env.PG_CONNECT_TIMEOUT_MS) || 10_000,
 });
+
+function dbConnectionDiagnostics(): {
+  pooler: boolean;
+  port: string | null;
+  supabaseRegion: string | null;
+  renderRegion: string | null;
+  regionAligned: boolean | null;
+  useTransactionPooler: boolean;
+} {
+  const raw = process.env.DATABASE_URL || '';
+  let host = '';
+  let port = '';
+  try {
+    const u = new URL(raw.replace(/^postgresql:\/\//, 'postgres://'));
+    host = u.hostname;
+    port = u.port || '5432';
+  } catch {
+    return {
+      pooler: false,
+      port: null,
+      supabaseRegion: null,
+      renderRegion: process.env.RENDER_REGION || null,
+      regionAligned: null,
+      useTransactionPooler: false,
+    };
+  }
+  const pooler = host.includes('pooler.supabase.com');
+  const supabaseRegion = host.match(/aws-\d+-([a-z]+-[a-z]+-\d+)/)?.[1] ?? null;
+  const renderRegion = process.env.RENDER_REGION || null;
+  let regionAligned: boolean | null = null;
+  if (renderRegion && supabaseRegion) {
+    const renderIsUs = ['oregon', 'ohio', 'virginia'].includes(renderRegion);
+    const renderIsEu = renderRegion === 'frankfurt';
+    const dbIsUs = supabaseRegion.startsWith('us-');
+    const dbIsEu = supabaseRegion.startsWith('eu-');
+    regionAligned = (renderIsUs && dbIsUs) || (renderIsEu && dbIsEu);
+  }
+  return {
+    pooler,
+    port,
+    supabaseRegion,
+    renderRegion,
+    regionAligned,
+    useTransactionPooler: pooler && port === '6543',
+  };
+}
 
 async function fetchRiderDocuments(userId: string, options?: { adminReview?: boolean }) {
   const result = await pool.query(
@@ -1430,6 +1483,16 @@ const initDb = async () => {
         PRIMARY KEY (order_id, rider_id)
       );
 
+      CREATE INDEX IF NOT EXISTS idx_dispatch_offers_order_status
+        ON order_dispatch_offers (order_id, status, expires_at);
+
+      CREATE INDEX IF NOT EXISTS idx_users_rider_online
+        ON users (id)
+        WHERE role = 'rider' AND status = 'active' AND is_online = true;
+
+      CREATE INDEX IF NOT EXISTS idx_rider_locations_updated
+        ON rider_locations (updated_at DESC);
+
       DO $$ BEGIN
         ALTER TABLE orders ADD COLUMN IF NOT EXISTS dispatch_wave INTEGER;
         ALTER TABLE orders ADD COLUMN IF NOT EXISTS offer_expires_at TIMESTAMP WITH TIME ZONE;
@@ -2210,7 +2273,10 @@ async function settleOrderPayment(order: any) {
 }
 
 /** Seconds a rider can accept after push/socket (aligned with app UI countdown). */
-const OFFER_TTL_SEC = 30;
+const OFFER_TTL_SEC = Math.min(
+  120,
+  Math.max(15, Number(process.env.DISPATCH_OFFER_TTL_SEC) || 30)
+);
 /** Offer 2 nearest riders on early waves for faster matching. */
 function ridersPerWave(wave: number): number {
   return wave <= 3 ? 2 : 1;
@@ -2435,16 +2501,15 @@ async function getNearestActiveRiders(
 }
 
 async function emitOffersToRiders(order: any, candidates: NearbyRider[], wave: number) {
-  const eligibleIds = await filterIncomingRideRecipientIds(
-    candidates.map((c) => c.id),
-    order?.customer_id ?? null
-  );
-  const eligible = candidates.filter((c) => eligibleIds.includes(c.id));
+  const customerId = order?.customer_id ?? null;
+  // Candidates already come from online+active rider SQL — only exclude the customer.
+  const eligible = candidates.filter((c) => !customerId || c.id !== customerId);
   if (!eligible.length) return 0;
 
   const expiresAt = new Date(Date.now() + OFFER_TTL_SEC * 1000);
   const orderPayload = { ...order };
   const expiresIso = expiresAt.toISOString();
+  const dispatchStarted = Date.now();
 
   // Persist offers before push/socket so decline/accept never races an empty row.
   await Promise.all(
@@ -2488,7 +2553,7 @@ async function emitOffersToRiders(order: any, candidates: NearbyRider[], wave: n
 
   const next = eligible[0];
   console.info(
-    `[dispatch] order ${order.id} step ${wave}: offered to ${eligible.length} rider(s), first ${next.id.slice(0, 8)}… (${next.distanceKm.toFixed(1)} km)`,
+    `[dispatch] order ${order.id} step ${wave}: offered to ${eligible.length} rider(s), first ${next.id.slice(0, 8)}… (${next.distanceKm.toFixed(1)} km) in ${Date.now() - dispatchStarted}ms`,
   );
 
   clearDispatchTimer(order.id);
@@ -2526,8 +2591,10 @@ async function advanceDispatchWave(order: any, wave: number) {
   if (wave > MAX_DISPATCH_WAVES) return;
 
   const serviceType = normalizeRideServiceType(order.service_type);
-  const exclude = await getOfferedRiderIds(order.id);
-  const pickup = await getPickupPoint(order);
+  const [exclude, pickup] = await Promise.all([
+    getOfferedRiderIds(order.id),
+    getPickupPoint(order),
+  ]);
   const radiusKm = dispatchRadiusKm(wave);
   const limit = ridersPerWave(wave);
 
@@ -8469,4 +8536,13 @@ const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
 httpServer.listen(PORT, HOST, () => {
   console.log(`Server running on http://${HOST}:${PORT}`);
+  console.log(`[dispatch] offer TTL ${OFFER_TTL_SEC}s, early waves offer ${ridersPerWave(1)} rider(s)`);
+  void activateDueScheduledOrders().catch((err) =>
+    console.warn('[dispatch] scheduled order activation failed:', err)
+  );
+  setInterval(() => {
+    void activateDueScheduledOrders().catch((err) =>
+      console.warn('[dispatch] scheduled order activation failed:', err)
+    );
+  }, 60_000);
 });

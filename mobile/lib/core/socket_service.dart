@@ -53,7 +53,16 @@ class SocketService {
   final List<VendorPromoHandler> _vendorPromoListeners = [];
   final List<PricingUpdatedHandler> _pricingUpdatedListeners = [];
 
+  Order? _pendingIncomingRide;
+
   bool get isConnected => _socket?.connected ?? false;
+
+  /// Deliver a ride offer that arrived before the rider UI registered handlers.
+  Order? consumePendingIncomingRide() {
+    final pending = _pendingIncomingRide;
+    _pendingIncomingRide = null;
+    return pending;
+  }
 
   /// Keeps a socket open for public `pricing:updated` pushes (works before login too).
   void ensurePricingFeedConnected() {
@@ -176,7 +185,12 @@ class SocketService {
         // Keep offer if timestamp is malformed (parity with isOfferableOrder).
       }
     }
-    onRideIncoming?.call(order);
+    final handler = onRideIncoming;
+    if (handler == null) {
+      _pendingIncomingRide = order;
+      return;
+    }
+    handler(order);
   }
 
   void _onRideTaken(dynamic data) {

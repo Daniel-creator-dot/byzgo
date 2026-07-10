@@ -448,7 +448,7 @@ function MainApp() {
     if (showDeviceSetup || user?.role !== 'rider' || user.status !== 'active' || !user.is_online || !token) return;
     const poll = setInterval(() => {
       axios.get<Order[]>('/api/orders').then((res) => setOrders(res.data)).catch(() => {});
-    }, 6000);
+    }, 3000);
     return () => clearInterval(poll);
   }, [user?.role, user?.status, user?.is_online, token, showDeviceSetup]);
 
