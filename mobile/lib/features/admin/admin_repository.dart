@@ -174,12 +174,19 @@ class AdminRepository {
         .toList();
   }
 
-  Future<AdminRidePromotion> createRidePromotion(AdminRidePromotion promo) async {
+  Future<AdminRidePromotion> createRidePromotion(
+    AdminRidePromotion promo, {
+    bool announceSms = true,
+  }) async {
     final res = await _api.dio.post<Map<String, dynamic>>(
       '/api/admin/promotions',
-      data: promo.toBody(),
+      data: {...promo.toBody(), 'announce_sms': announceSms},
     );
     return AdminRidePromotion.fromJson(Map<String, dynamic>.from(res.data ?? {}));
+  }
+
+  Future<void> announceRidePromotion(String id) async {
+    await _api.dio.post<Map<String, dynamic>>('/api/admin/promotions/$id/announce');
   }
 
   Future<AdminRidePromotion> updateRidePromotion(

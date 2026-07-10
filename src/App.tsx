@@ -3671,6 +3671,7 @@ function AdminView({
     target_region: '',
     enabled: true,
     max_redemptions: '',
+    announce_sms: true,
   });
   const [promoSaving, setPromoSaving] = useState(false);
 
@@ -4535,6 +4536,7 @@ function AdminView({
                        max_redemptions: promoForm.max_redemptions ? Number(promoForm.max_redemptions) : null,
                        target_region: promoForm.target_region || null,
                        code: promoForm.code || null,
+                       announce_sms: promoForm.announce_sms,
                      });
                      addNotification('Promotion created', 'success');
                      setShowPromoForm(false);
@@ -4548,6 +4550,7 @@ function AdminView({
                        target_region: '',
                        enabled: true,
                        max_redemptions: '',
+                       announce_sms: true,
                      });
                      const res = await axios.get('/api/admin/promotions');
                      setPromotions(res.data || []);
@@ -4568,6 +4571,14 @@ function AdminView({
                  </div>
                  <DarkInput label="Target region (blank = all)" value={promoForm.target_region} onChange={(e) => setPromoForm({ ...promoForm, target_region: e.target.value })} />
                  <DarkInput label="Max redemptions" type="number" value={promoForm.max_redemptions} onChange={(e) => setPromoForm({ ...promoForm, max_redemptions: e.target.value })} />
+                 <label className="flex items-center gap-2 text-xs text-slate-300">
+                   <input
+                     type="checkbox"
+                     checked={promoForm.announce_sms}
+                     onChange={(e) => setPromoForm({ ...promoForm, announce_sms: e.target.checked })}
+                   />
+                   Send SMS announcement to customers (riders too if bonus is set)
+                 </label>
                  <div className="flex gap-2">
                    <DarkButton type="submit" disabled={promoSaving || !promoForm.name.trim()}>{promoSaving ? 'Saving…' : 'Create'}</DarkButton>
                    <button type="button" onClick={() => setShowPromoForm(false)} className="px-4 py-2 text-slate-400 text-xs font-bold uppercase">Cancel</button>
@@ -4598,6 +4609,20 @@ function AdminView({
                      </p>
                    </div>
                    <div className="flex gap-2">
+                     <button
+                       type="button"
+                       onClick={async () => {
+                         try {
+                           const res = await axios.post(`/api/admin/promotions/${p.id}/announce`);
+                           addNotification(res.data?.message || 'Promotion SMS sent', 'success');
+                         } catch (err) {
+                           addNotification(getApiError(err, 'SMS announce failed'), 'warning');
+                         }
+                       }}
+                       className="px-3 py-2 bg-brand-green/20 text-brand-green rounded-lg text-[10px] font-black uppercase"
+                     >
+                       SMS blast
+                     </button>
                      <button
                        type="button"
                        onClick={async () => {

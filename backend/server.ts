@@ -503,6 +503,7 @@ type RidePromotionRow = {
   ends_at: string | null;
   redemption_count: number;
   max_redemptions: number | null;
+  announced_at?: string | null;
 };
 
 let ridePromotionsSchemaReady = false;
@@ -530,6 +531,7 @@ async function ensureRidePromotionsSchema() {
     ALTER TABLE orders ADD COLUMN IF NOT EXISTS promotion_id UUID;
     ALTER TABLE orders ADD COLUMN IF NOT EXISTS promotion_discount DECIMAL(10,2) NOT NULL DEFAULT 0;
     ALTER TABLE orders ADD COLUMN IF NOT EXISTS rider_bonus_amount DECIMAL(10,2) NOT NULL DEFAULT 0;
+    ALTER TABLE ride_promotions ADD COLUMN IF NOT EXISTS announced_at TIMESTAMPTZ;
   `);
   ridePromotionsSchemaReady = true;
 }
@@ -626,6 +628,7 @@ function ridePromotionForClient(promo: RidePromotionRow | null) {
     ends_at: promo.ends_at,
     redemption_count: promo.redemption_count,
     max_redemptions: promo.max_redemptions,
+    announced_at: promo.announced_at ?? null,
   };
 }
 
@@ -3533,6 +3536,152 @@ async function sendSMS(phone: string, message: string) {
   }
 }
 
+const smsPause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+type ApprovalSmsKind = 'rider' | 'vendor' | 'owner' | 'product';
+
+function approvalSmsBody(kind: ApprovalSmsKind, extra?: { productName?: string }): string {
+  switch (kind) {
+    case 'rider':
+      return 'BytzGo: Your rider account is approved! Open the app, go online, and start accepting trips.';
+    case 'vendor':
+      return 'BytzGo: Your store is approved! Log in to the vendor app to add menu items and receive orders.';
+    case 'owner':
+      return 'BytzGo: Your fleet owner account is approved. Log in to manage vehicles and drivers.';
+    case 'product':
+      return `BytzGo: Your menu item "${extra?.productName || 'item'}" is approved and is now live for customers.`;
+    default:
+      return 'BytzGo: Your account is approved. Open the app to get started.';
+  }
+}
+
+function roleToApprovalKind(role: string): ApprovalSmsKind | null {
+  if (role === 'rider') return 'rider';
+  if (role === 'vendor') return 'vendor';
+  if (role === 'owner') return 'owner';
+  return null;
+}
+
+/** Text user when admin approves their account or menu item. Best-effort; never throws. */
+async function notifyApprovalSms(
+  userId: string,
+  kind: ApprovalSmsKind,
+  extra?: { productName?: string }
+): Promise<void> {
+  if (process.env.APPROVAL_SMS === 'false') return;
+  try {
+    const userRes = await pool.query('SELECT phone FROM users WHERE id = $1', [userId]);
+    const phone = userRes.rows[0]?.phone;
+    if (!phone || !isValidGhanaPhone(phone)) {
+      console.warn(`[approval-sms] No valid phone for user ${userId}`);
+      return;
+    }
+    await sendSMS(phone, approvalSmsBody(kind, extra));
+    console.info(`[approval-sms] Sent ${kind} approval SMS to user ${userId}`);
+  } catch (err: any) {
+    console.warn(`[approval-sms] Failed for user ${userId}:`, err?.message || err);
+  }
+}
+
+function buildPromotionCustomerSms(promo: RidePromotionRow): string {
+  const bits = [`BytzGo promo: ${promo.name}.`];
+  const pct = Number(promo.customer_discount_percent) || 0;
+  const fixed = Number(promo.customer_discount_fixed) || 0;
+  if (pct > 0) bits.push(`${pct}% off`);
+  if (fixed > 0) bits.push(`GHS${fixed.toFixed(0)} off`);
+  const services = String(promo.service_types || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .join(', ');
+  if (services) bits.push(services);
+  if (promo.code) bits.push(`Code ${promo.code}.`);
+  if (promo.target_region) bits.push(`Valid in ${promo.target_region}.`);
+  bits.push('Book on the BytzGo app.');
+  return bits.join(' ').slice(0, 160);
+}
+
+function buildPromotionRiderSms(promo: RidePromotionRow): string {
+  const bonus = Number(promo.rider_bonus_amount) || 0;
+  if (bonus <= 0) return '';
+  const region = promo.target_region ? ` in ${promo.target_region}` : '';
+  return `BytzGo rider bonus: Earn extra GHS${bonus.toFixed(0)} per trip${region}. Open the rider app and go online.`;
+}
+
+/** Broadcast promotion SMS to customers (and riders when bonus applies). Best-effort background job. */
+async function announcePromotionSms(
+  promo: RidePromotionRow,
+  options?: { force?: boolean }
+): Promise<{ sent: number; skipped: boolean }> {
+  if (process.env.PROMO_SMS === 'false') return { sent: 0, skipped: true };
+  if (!promo.enabled || !promotionIsActiveNow(promo)) {
+    return { sent: 0, skipped: true };
+  }
+  if (!options?.force && promo.announced_at) {
+    return { sent: 0, skipped: true };
+  }
+
+  const maxRecipients = Math.min(
+    Math.max(1, parseInt(process.env.PROMO_SMS_MAX_RECIPIENTS || '500', 10) || 500),
+    2000
+  );
+  const region = promo.target_region?.trim() || null;
+  const customerBody = buildPromotionCustomerSms(promo);
+  const riderBody = buildPromotionRiderSms(promo);
+  let sent = 0;
+
+  const fetchPhones = async (role: string) => {
+    const params: unknown[] = [role];
+    let sql = `SELECT DISTINCT phone FROM users
+      WHERE role = $1 AND status = 'active' AND phone IS NOT NULL AND TRIM(phone) <> ''`;
+    if (region) {
+      sql += ` AND LOWER(TRIM(region)) = LOWER(TRIM($2))`;
+      params.push(region);
+    }
+    sql += ` LIMIT $${params.length + 1}`;
+    params.push(maxRecipients);
+    return pool.query(sql, params);
+  };
+
+  try {
+    const customers = await fetchPhones('customer');
+    for (const row of customers.rows) {
+      if (!isValidGhanaPhone(row.phone)) continue;
+      try {
+        await sendSMS(row.phone, customerBody);
+        sent++;
+        await smsPause(120);
+      } catch (err: any) {
+        console.warn('[promo-sms] customer send failed:', err?.message || err);
+      }
+    }
+
+    if (riderBody) {
+      const riders = await fetchPhones('rider');
+      for (const row of riders.rows) {
+        if (!isValidGhanaPhone(row.phone)) continue;
+        try {
+          await sendSMS(row.phone, riderBody);
+          sent++;
+          await smsPause(120);
+        } catch (err: any) {
+          console.warn('[promo-sms] rider send failed:', err?.message || err);
+        }
+      }
+    }
+
+    await pool.query(
+      `UPDATE ride_promotions SET announced_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
+      [promo.id]
+    );
+    console.info(`[promo-sms] Announced promotion ${promo.id} (${promo.name}) to ${sent} phones`);
+    return { sent, skipped: false };
+  } catch (err: any) {
+    console.warn('[promo-sms] Broadcast failed:', err?.message || err);
+    return { sent, skipped: false };
+  }
+}
+
 function generateOtp(): string {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
@@ -6056,6 +6205,7 @@ app.patch('/api/admin/riders/:id/approve', authenticateToken, async (req: any, r
     );
     res.json(result.rows[0]);
     io.to(id).emit('status:updated', { status: 'active', is_online: false });
+    void notifyApprovalSms(id, 'rider');
   } catch (err) {
     console.error('Approve rider error:', err);
     res.status(500).json({ message: 'Failed to approve rider' });
@@ -6123,6 +6273,7 @@ app.patch('/api/admin/owners/:id/approve', authenticateToken, async (req: any, r
     );
     res.json(result.rows[0]);
     io.to(id).emit('status:updated', { status: 'active' });
+    void notifyApprovalSms(id, 'owner');
   } catch (err) {
     console.error('Approve owner error:', err);
     res.status(500).json({ message: 'Failed to approve fleet owner' });
@@ -6696,6 +6847,7 @@ app.patch('/api/admin/users/:id/status', authenticateToken, async (req: any, res
   const { status } = req.body;
   const { id } = req.params;
   try {
+    const before = await pool.query('SELECT status, role FROM users WHERE id = $1', [id]);
     const isRiderActivate = status === 'active';
     const result = await pool.query(
       `UPDATE users SET status = $1,
@@ -6715,6 +6867,10 @@ app.patch('/api/admin/users/:id/status', authenticateToken, async (req: any, res
       }
       res.json(row);
       io.to(id).emit('status:updated', { status, is_online: row.is_online });
+      if (status === 'active' && before.rows[0]?.status !== 'active') {
+        const kind = roleToApprovalKind(row.role);
+        if (kind) void notifyApprovalSms(id, kind);
+      }
     } else {
       res.status(404).json({ message: 'User not found' });
     }
@@ -8139,11 +8295,15 @@ app.patch('/api/admin/products/:id/approve', authenticateToken, async (req: any,
   if (req.user.role !== 'admin') return res.status(403).json({ message: 'Unauthorized' });
   try {
     const result = await pool.query(
-      'UPDATE products SET is_approved = true WHERE id = $1 RETURNING *',
+      'UPDATE products SET is_approved = true WHERE id = $1 RETURNING id, name, vendor_id',
       [req.params.id]
     );
     if (!result.rows[0]) return res.status(404).json({ message: 'Product not found' });
-    res.json(result.rows[0]);
+    const product = result.rows[0];
+    res.json(product);
+    if (product.vendor_id) {
+      void notifyApprovalSms(product.vendor_id, 'product', { productName: product.name });
+    }
   } catch (err) {
     res.status(500).json({ message: 'Failed to approve product' });
   }
@@ -8411,6 +8571,7 @@ app.post('/api/admin/promotions', authenticateToken, async (req: any, res) => {
     starts_at,
     ends_at,
     max_redemptions,
+    announce_sms,
   } = req.body;
   if (!String(name || '').trim()) {
     return res.status(400).json({ message: 'Promotion name is required' });
@@ -8439,7 +8600,12 @@ app.post('/api/admin/promotions', authenticateToken, async (req: any, res) => {
           : null,
       ]
     );
-    res.status(201).json(ridePromotionForClient(result.rows[0] as RidePromotionRow));
+    const promo = result.rows[0] as RidePromotionRow;
+    res.status(201).json(ridePromotionForClient(promo));
+    const shouldAnnounce = announce_sms !== false && promo.enabled !== false;
+    if (shouldAnnounce) {
+      void announcePromotionSms(promo, { force: true });
+    }
   } catch (err) {
     res.status(500).json({ message: 'Failed to create promotion' });
   }
@@ -8493,14 +8659,50 @@ app.patch('/api/admin/promotions/:id', authenticateToken, async (req: any, res) 
   values.push(id);
   try {
     await ensureRidePromotionsSchema();
+    const prev = await pool.query('SELECT * FROM ride_promotions WHERE id = $1', [id]);
     const result = await pool.query(
       `UPDATE ride_promotions SET ${updates.join(', ')} WHERE id = $${idx} RETURNING *`,
       values
     );
     if (!result.rows[0]) return res.status(404).json({ message: 'Promotion not found' });
-    res.json(ridePromotionForClient(result.rows[0] as RidePromotionRow));
+    const promo = result.rows[0] as RidePromotionRow;
+    res.json(ridePromotionForClient(promo));
+    const enabledNow = promo.enabled === true;
+    const wasEnabled = prev.rows[0]?.enabled === true;
+    const shouldAnnounce =
+      req.body.announce_sms === true || (req.body.enabled === true && !wasEnabled && enabledNow);
+    if (shouldAnnounce) {
+      void announcePromotionSms(promo, { force: req.body.announce_sms === true });
+    }
   } catch (err) {
     res.status(500).json({ message: 'Failed to update promotion' });
+  }
+});
+
+app.post('/api/admin/promotions/:id/announce', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ message: 'Unauthorized' });
+  try {
+    await ensureRidePromotionsSchema();
+    const result = await pool.query('SELECT * FROM ride_promotions WHERE id = $1', [req.params.id]);
+    if (!result.rows[0]) return res.status(404).json({ message: 'Promotion not found' });
+    const promo = result.rows[0] as RidePromotionRow;
+    if (!promo.enabled) {
+      return res.status(400).json({ message: 'Enable the promotion before sending SMS' });
+    }
+    const outcome = await announcePromotionSms(promo, { force: true });
+    res.json({
+      success: true,
+      sent: outcome.sent,
+      skipped: outcome.skipped,
+      message:
+        outcome.sent > 0
+          ? `Promotion SMS sent to ${outcome.sent} phone(s)`
+          : outcome.skipped
+            ? 'SMS already announced for this promotion (use force via re-enable)'
+            : 'No matching phone numbers found',
+    });
+  } catch (err: any) {
+    res.status(502).json({ message: err?.message || 'Failed to announce promotion' });
   }
 });
 

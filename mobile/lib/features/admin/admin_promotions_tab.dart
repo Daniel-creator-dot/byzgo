@@ -68,6 +68,7 @@ class _AdminPromotionsTabState extends State<AdminPromotionsTab> {
     var package =
         (existing?.serviceTypes ?? 'okada,keke,package').contains('package');
     var enabled = existing?.enabled ?? true;
+    var announceSms = existing == null;
 
     final saved = await showModalBottomSheet<bool>(
       context: context,
@@ -135,6 +136,17 @@ class _AdminPromotionsTabState extends State<AdminPromotionsTab> {
                       title: const Text('Enabled', style: TextStyle(color: Colors.white)),
                       activeThumbColor: BytzGoTheme.accent,
                     ),
+                    if (existing == null)
+                      SwitchListTile(
+                        value: announceSms,
+                        onChanged: (v) => setSheetState(() => announceSms = v),
+                        title: const Text('SMS announcement', style: TextStyle(color: Colors.white)),
+                        subtitle: const Text(
+                          'Text customers in target region (riders if bonus set)',
+                          style: TextStyle(color: Colors.white54, fontSize: 11),
+                        ),
+                        activeThumbColor: BytzGoTheme.accent,
+                      ),
                     const SizedBox(height: 12),
                     FilledButton(
                       onPressed: () => Navigator.pop(ctx, true),
@@ -193,7 +205,7 @@ class _AdminPromotionsTabState extends State<AdminPromotionsTab> {
             : int.tryParse(maxCtrl.text.trim()),
       );
       if (existing == null) {
-        await context.read<AdminRepository>().createRidePromotion(body);
+        await context.read<AdminRepository>().createRidePromotion(body, announceSms: announceSms);
       } else {
         await context.read<AdminRepository>().updateRidePromotion(
               existing.id,
@@ -321,7 +333,11 @@ class _AdminPromotionsTabState extends State<AdminPromotionsTab> {
         ),
         trailing: PopupMenuButton<String>(
           onSelected: (action) async {
-            if (action == 'edit') {
+            if (action == 'announce') {
+              await context.read<AdminRepository>().announceRidePromotion(p.id);
+              await _load();
+              if (mounted) _snack('Promotion SMS blast started', success: true);
+            } else if (action == 'edit') {
               await _openEditor(p);
             } else if (action == 'toggle') {
               await context.read<AdminRepository>().updateRidePromotion(
@@ -335,6 +351,7 @@ class _AdminPromotionsTabState extends State<AdminPromotionsTab> {
             }
           },
           itemBuilder: (_) => [
+            const PopupMenuItem(value: 'announce', child: Text('SMS blast')),
             const PopupMenuItem(value: 'edit', child: Text('Edit')),
             PopupMenuItem(
               value: 'toggle',
