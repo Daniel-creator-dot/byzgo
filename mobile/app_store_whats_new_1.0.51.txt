@@ -1,0 +1,5 @@
+• Faster ride dispatch — riders get offers sooner with improved matching
+• Real-time ride updates load more reliably in the background
+• Commission and wallet improvements for drivers
+• API performance upgrades for Ghana and West Africa
+• Bug fixes and stability improvements

@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
-# One command: build v1.0.50 (69) IPA and open Transporter.
-# Run on your Mac in Terminal:
-#   cd /path/to/byzgo/mobile && ./scripts/upload_now.sh
+# One command: build signed IPA and open Transporter for App Store Connect.
 set -euo pipefail
 
 MOBILE_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -12,39 +10,36 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   exit 1
 fi
 
+export RUBYOPT="${RUBYOPT:--r logger}"
+export PATH="${HOME}/.gem/ruby/2.6.0/bin:${HOME}/development/flutter/bin:${PATH}"
+
+VER="$(grep '^version:' pubspec.yaml | awk '{print $2}')"
+BUILD="${VER#*+}"
+MARKETING="${VER%%+*}"
+
 echo "=========================================="
 echo "  BytzGo iOS → App Store Connect"
-echo "  Version: $(grep '^version:' pubspec.yaml)"
+echo "  Version: $VER"
 echo "=========================================="
 
-"$MOBILE_ROOT/scripts/build_app_store_ipa.sh"
+"$MOBILE_ROOT/scripts/manual_sign_app_store_ipa.sh"
 
-IPA="$(ls -1 "$MOBILE_ROOT/build/ios/ipa"/*.ipa 2>/dev/null | head -1)"
-if [[ -z "$IPA" ]]; then
-  echo "No IPA found. Try: ./scripts/build_app_store_ipa.sh --open-xcode"
-  exit 1
-fi
+IPA="$MOBILE_ROOT/build/ios/ipa/BytzGo.ipa"
+[[ -f "$IPA" ]] || { echo "Missing IPA: $IPA"; exit 1; }
 
 echo ""
 echo "IPA ready: $IPA"
-echo ""
-echo "Opening Transporter — drag the IPA if it does not auto-load."
-echo "After upload, App Store Connect → build 69 → version 1.0.50"
-echo "Release notes: mobile/app_store_whats_new_1.0.50.txt"
+echo "App Store Connect → attach build $BUILD to version $MARKETING"
+echo "Release notes: mobile/app_store_whats_new_${MARKETING}.txt"
 echo ""
 
 if [[ -d /Applications/Transporter.app ]]; then
   open -a Transporter "$IPA"
 else
-  echo "Install Transporter from the Mac App Store, then open:"
-  echo "  $IPA"
+  echo "Install Transporter from the Mac App Store, then open: $IPA"
 fi
 
-# Optional auto-upload if app-specific password is in repo-root .env.local
 REPO_ROOT="$(cd "$MOBILE_ROOT/.." && pwd)"
 if [[ -f "$REPO_ROOT/.env.local" ]] && grep -q 'APPLE_APP_SPECIFIC_PASSWORD' "$REPO_ROOT/.env.local" 2>/dev/null; then
-  read -r -p "Upload automatically with altool? [y/N] " ans
-  if [[ "${ans,,}" == "y" ]]; then
-    "$MOBILE_ROOT/scripts/upload_app_store_ipa.sh"
-  fi
+  echo "APPLE_APP_SPECIFIC_PASSWORD found — run: ./scripts/upload_app_store_ipa.sh"
 fi

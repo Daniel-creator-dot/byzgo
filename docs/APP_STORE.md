@@ -6,7 +6,7 @@
 |--------|--------|
 | App name | BytzGo |
 | Bundle ID | `com.bytzgo.bytzgoMobile` |
-| Version | From `mobile/pubspec.yaml` (current **1.0.50+69** → marketing **1.0.50**, build **69**) |
+| Version | From `mobile/pubspec.yaml` (current **1.0.51+71** → marketing **1.0.51**, build **71**) |
 
 ## One-time Mac setup
 
@@ -51,14 +51,29 @@ This writes `ios/Runner/MapsConfig.plist` and `lib/core/maps_key.dart`. Restrict
 
 If archive fails on push: enable **Push Notifications** on the App ID at [developer.apple.com](https://developer.apple.com/account/resources/identifiers), then let Xcode refresh profiles (or download a new **App Store** profile and set Manual signing).
 
-### CLI (optional)
+### CLI (recommended on this Mac)
 
 ```bash
 cd mobile
-./scripts/build_app_store_ipa.sh
+./scripts/manual_sign_app_store_ipa.sh
+# or
+./scripts/upload_now.sh
 ```
 
-Requires the same Apple ID in Xcode (automatic signing). Output: `build/ios/ipa/*.ipa` — upload with **Transporter** or Organizer.
+Uses local Distribution cert + App Store profile (no Apple ID in Xcode required). Output: `build/ios/ipa/BytzGo.ipa` — upload with **Transporter**.
+
+Auto-upload (optional): set `APPLE_ID` + `APPLE_APP_SPECIFIC_PASSWORD` in repo-root `.env.local`, then `./scripts/upload_app_store_ipa.sh`.
+
+## What's New (App Store Connect — v1.0.51)
+
+Copy from `mobile/app_store_whats_new_1.0.51.txt` when submitting build **71**.
+
+Highlights:
+
+- **Faster dispatch** — riders receive ride offers sooner
+- **Improved real-time updates** when the app is in the background
+- **Driver wallet / commission** improvements
+- **API performance** for Ghana (EU-hosted backend)
 
 ## What's New (App Store Connect — v1.0.50)
 
