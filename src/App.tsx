@@ -2,7 +2,7 @@
 import { BrowserRouter, Routes, Route, useLocation, useNavigate } from 'react-router-dom';
 import { socket } from './lib/socket';
 import { Role, Order, OrderStatus } from './types.ts';
-import { Layout, User as UserIcon, Store, Bike, Shield, ShoppingBag, MapPin, CreditCard, ChevronRight, CheckCircle2, Clock, Send, Navigation, Lock, Mail, Eye, EyeOff, LogOut, Package, Phone, Edit3, Save, X, Star, Home, Users, BarChart3, AlertCircle, AlertTriangle, Check, LocateFixed, Upload, Trash2, Settings, Tag } from 'lucide-react';
+import { Layout, User as UserIcon, Store, Bike, Shield, ShoppingBag, MapPin, CreditCard, ChevronRight, CheckCircle2, Clock, Send, Navigation, Lock, Mail, Eye, EyeOff, LogOut, Package, Phone, Edit3, Save, X, Star, Home, Users, BarChart3, AlertCircle, AlertTriangle, Check, LocateFixed, Upload, Trash2, Settings, Tag, MessageSquare } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import axios from 'axios';
 import { clsx, type ClassValue } from 'clsx';
@@ -1099,6 +1099,7 @@ function MainApp() {
                 { id: 'revenue', label: 'Revenue', icon: BarChart3 },
                 { id: 'promotions', label: 'Promos', icon: Tag },
                 { id: 'zones', label: 'Zones', icon: MapPin },
+                { id: 'sms', label: 'SMS', icon: MessageSquare },
                 { id: 'settings', label: 'Settings', icon: Settings },
               ] as NavItem[])
         }
@@ -1409,19 +1410,16 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
             <motion.div className="mt-4 mx-auto max-w-sm p-3 rounded-2xl bg-black/50 backdrop-blur-md text-left border border-white/10">
               <p className="text-[10px] font-black uppercase tracking-widest text-red-400 mb-1">Admin sign-in</p>
               <p className="text-xs text-slate-200 leading-relaxed">
-                Use an <strong className="text-white">admin</strong> account only. Run{' '}
-                <code className="text-[10px] bg-black/40 px-1 rounded">npm run create:admin</code> for a local account, or Join with your invite code.
+                Use an <strong className="text-white">admin</strong> account only. Contact the platform owner if you need access.
               </p>
-              <p className="text-[10px] text-slate-400 mt-2 font-mono">Default: admin@bytzgo.net / Admin@2026</p>
             </motion.div>
           )}
           {forcedRole === 'rider' && (
             <motion.div className="mt-4 mx-auto max-w-sm p-3 rounded-2xl bg-black/50 backdrop-blur-md text-left border border-white/10">
               <p className="text-[10px] font-black uppercase tracking-widest text-brand-green mb-1">Rider sign-in</p>
               <p className="text-xs text-slate-200 leading-relaxed">
-                Use a <strong className="text-white">rider</strong> account here. A Google account registered as customer must use the home app, or tap Join to register as rider.
+                Use a <strong className="text-white">rider</strong> account here. Tap Join to register as a driver, or sign in with your phone or email.
               </p>
-              <p className="text-[10px] text-slate-400 mt-2 font-mono">Demo: rider@bytzgo.net / Rider@2026</p>
             </motion.div>
           )}
         </motion.div>
@@ -3654,6 +3652,13 @@ function AdminView({
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [smsTestPhone, setSmsTestPhone] = useState('');
   const [smsTestLoading, setSmsTestLoading] = useState(false);
+  const [smsAudience, setSmsAudience] = useState<Record<string, number>>({});
+  const [smsAudienceRegion, setSmsAudienceRegion] = useState('');
+  const [smsBlastAudience, setSmsBlastAudience] = useState('riders_online');
+  const [smsBlastMessage, setSmsBlastMessage] = useState('');
+  const [smsCustomPhones, setSmsCustomPhones] = useState('');
+  const [smsBlastLoading, setSmsBlastLoading] = useState(false);
+  const [smsBlastResult, setSmsBlastResult] = useState<any>(null);
   const [editingZone, setEditingZone] = useState<any | null>(null);
   const [zoneForm, setZoneForm] = useState({ name: '', region: '', base_price: '10', price_per_km: '2', min_price: '5', max_price: '' });
   const [showZoneForm, setShowZoneForm] = useState(false);
@@ -3751,7 +3756,13 @@ function AdminView({
         .catch(() => addNotification('Failed to load driver applications', 'warning'))
         .finally(() => setRidersLoading(false));
     }
-  }, [activeTab]);
+    if (activeTab === 'sms') {
+      const q = smsAudienceRegion.trim() ? `?region=${encodeURIComponent(smsAudienceRegion.trim())}` : '';
+      axios.get(`/api/admin/sms/audience${q}`)
+        .then((res) => setSmsAudience(res.data?.counts || {}))
+        .catch(() => addNotification('Failed to load SMS audience counts', 'warning'));
+    }
+  }, [activeTab, smsAudienceRegion]);
 
   const refreshPendingRiders = async () => {
     const res = await axios.get('/api/admin/pending-riders');
@@ -3824,6 +3835,7 @@ function AdminView({
              <button onClick={() => setActiveTab('revenue')} className={cn("px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all", activeTab === 'revenue' ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500")}>Revenue</button>
              <button onClick={() => setActiveTab('promotions')} className={cn("px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all", activeTab === 'promotions' ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500")}>Promos</button>
              <button onClick={() => setActiveTab('zones')} className={cn("px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all", activeTab === 'zones' ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500")}>Zones</button>
+             <button onClick={() => setActiveTab('sms')} className={cn("px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all", activeTab === 'sms' ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500")}>SMS</button>
              <button onClick={() => setActiveTab('settings')} className={cn("px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all", activeTab === 'settings' ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500")}>Settings</button>
           </div>
        </header>
@@ -4658,6 +4670,171 @@ function AdminView({
                ))}
              </div>
            )}
+       ) : activeTab === 'sms' ? (
+         <div className="space-y-6 max-w-2xl">
+           <DarkCard>
+             <h3 className="text-lg font-black text-white uppercase italic tracking-tighter mb-1">SMS blast</h3>
+             <p className="text-[10px] text-slate-500 font-bold mb-4">
+               Send promotions and announcements to customers, riders, vendors, or custom numbers via INTEK SMS.
+             </p>
+
+             <div className="mb-4">
+               <label className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2 block">Filter by region (optional)</label>
+               <select
+                 value={smsAudienceRegion}
+                 onChange={(e) => setSmsAudienceRegion(e.target.value)}
+                 className="w-full bg-slate-900 border border-slate-700 rounded-xl py-3 px-4 text-sm font-bold text-white"
+               >
+                 <option value="">All Ghana</option>
+                 {GHANA_REGIONS.map((r) => (
+                   <option key={r} value={r}>{r}</option>
+                 ))}
+               </select>
+             </div>
+
+             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-6">
+               {[
+                 ['customers', 'Customers'],
+                 ['riders', 'All riders'],
+                 ['riders_active', 'Active riders'],
+                 ['riders_online', 'Online riders'],
+                 ['vendors', 'Vendors'],
+                 ['owners', 'Fleet owners'],
+                 ['all', 'Everyone'],
+               ].map(([key, label]) => (
+                 <div key={key} className="bg-slate-900/80 border border-slate-700 rounded-xl p-3 text-center">
+                   <p className="text-[9px] font-black uppercase tracking-widest text-slate-500">{label}</p>
+                   <p className="text-xl font-black text-brand-green mt-1">{smsAudience[key] ?? '—'}</p>
+                 </div>
+               ))}
+             </div>
+
+             <form
+               onSubmit={async (e) => {
+                 e.preventDefault();
+                 if (!smsBlastMessage.trim()) {
+                   addNotification('Enter a message', 'warning');
+                   return;
+                 }
+                 setSmsBlastLoading(true);
+                 setSmsBlastResult(null);
+                 try {
+                   const phones = smsBlastAudience === 'custom'
+                     ? smsCustomPhones.split(/[\n,;]+/).map((p) => p.trim()).filter(Boolean)
+                     : undefined;
+                   const res = await axios.post('/api/admin/sms/blast', {
+                     audience: smsBlastAudience,
+                     message: smsBlastMessage.trim(),
+                     region: smsAudienceRegion.trim() || null,
+                     phones,
+                   });
+                   setSmsBlastResult(res.data);
+                   addNotification(`SMS sent to ${res.data?.sent ?? 0} recipient(s)`, 'success');
+                 } catch (err) {
+                   addNotification(getApiError(err, 'SMS blast failed'), 'warning');
+                 } finally {
+                   setSmsBlastLoading(false);
+                 }
+               }}
+               className="space-y-4"
+             >
+               <div>
+                 <label className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2 block">Audience</label>
+                 <select
+                   value={smsBlastAudience}
+                   onChange={(e) => setSmsBlastAudience(e.target.value)}
+                   className="w-full bg-slate-900 border border-slate-700 rounded-xl py-3 px-4 text-sm font-bold text-white"
+                 >
+                   <option value="customers">Customers ({smsAudience.customers ?? 0})</option>
+                   <option value="riders">All riders ({smsAudience.riders ?? 0})</option>
+                   <option value="riders_active">Active riders ({smsAudience.riders_active ?? 0})</option>
+                   <option value="riders_online">Online riders now ({smsAudience.riders_online ?? 0})</option>
+                   <option value="vendors">Vendors ({smsAudience.vendors ?? 0})</option>
+                   <option value="owners">Fleet owners ({smsAudience.owners ?? 0})</option>
+                   <option value="all">Everyone with phone ({smsAudience.all ?? 0})</option>
+                   <option value="custom">Custom phone list</option>
+                 </select>
+               </div>
+
+               {smsBlastAudience === 'custom' && (
+                 <div>
+                   <label className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2 block">Phone numbers</label>
+                   <textarea
+                     value={smsCustomPhones}
+                     onChange={(e) => setSmsCustomPhones(e.target.value)}
+                     placeholder="024XXXXXXX, 055XXXXXXX — one per line or comma-separated"
+                     rows={4}
+                     className="w-full bg-slate-900 border border-slate-700 rounded-xl py-3 px-4 text-sm font-bold text-white"
+                   />
+                 </div>
+               )}
+
+               <div>
+                 <label className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2 block">Message</label>
+                 <textarea
+                   value={smsBlastMessage}
+                   onChange={(e) => setSmsBlastMessage(e.target.value)}
+                   placeholder="e.g. BytzGo weekend promo — Okada rides from ₵3.5/km. Download: bytzgo.net/download/android"
+                   rows={5}
+                   maxLength={480}
+                   className="w-full bg-slate-900 border border-slate-700 rounded-xl py-3 px-4 text-sm font-bold text-white"
+                 />
+                 <p className="text-[10px] text-slate-500 mt-1 font-bold">{smsBlastMessage.length}/480 characters</p>
+               </div>
+
+               <DarkButton type="submit" disabled={smsBlastLoading} className="w-full">
+                 {smsBlastLoading ? 'Sending…' : 'Send SMS blast'}
+               </DarkButton>
+             </form>
+
+             {smsBlastResult && (
+               <div className="mt-4 p-4 rounded-xl bg-slate-900 border border-slate-700">
+                 <p className="text-sm font-bold text-white">
+                   Sent {smsBlastResult.sent} / {smsBlastResult.total}
+                   {smsBlastResult.failed > 0 ? ` · ${smsBlastResult.failed} failed` : ''}
+                 </p>
+                 {Array.isArray(smsBlastResult.results) && smsBlastResult.results.some((r: any) => !r.ok) && (
+                   <ul className="mt-2 text-[10px] text-red-400 font-bold space-y-1 max-h-32 overflow-y-auto">
+                     {smsBlastResult.results.filter((r: any) => !r.ok).map((r: any) => (
+                       <li key={r.phone}>{r.phone}: {r.error}</li>
+                     ))}
+                   </ul>
+                 )}
+               </div>
+             )}
+           </DarkCard>
+
+           <DarkCard>
+             <h4 className="text-sm font-bold text-white mb-1">Test single SMS</h4>
+             <p className="text-[10px] text-slate-500 font-bold mb-3">Verify INTEK gateway before a large blast. API key is configured under Settings.</p>
+             <div className="flex gap-2">
+               <input
+                 type="tel"
+                 value={smsTestPhone}
+                 onChange={(e) => setSmsTestPhone(e.target.value)}
+                 placeholder="024XXXXXXX"
+                 className="flex-1 bg-slate-900 border border-slate-700 rounded-xl py-3 px-4 text-sm font-bold text-white"
+               />
+               <button
+                 type="button"
+                 disabled={smsTestLoading || !smsTestPhone}
+                 onClick={async () => {
+                   setSmsTestLoading(true);
+                   try {
+                     const res = await axios.post('/api/admin/sms-test', { phone: smsTestPhone });
+                     addNotification(res.data?.message || 'Test SMS sent', 'success');
+                   } catch (err) {
+                     addNotification(getApiError(err, 'SMS test failed'), 'warning');
+                   } finally {
+                     setSmsTestLoading(false);
+                   }
+                 }}
+                 className="px-4 py-3 bg-brand-green text-slate-950 rounded-xl text-[10px] font-black uppercase disabled:opacity-50"
+               >
+                 {smsTestLoading ? '…' : 'Test'}
+               </button>
+             </div>
+           </DarkCard>
          </div>
        ) : activeTab === 'zones' ? (
          <div className="space-y-6">
