@@ -2209,17 +2209,21 @@ async function settleOrderPayment(order: any) {
   }
 }
 
-/** Seconds a rider can accept after push/socket (must allow time to unlock phone). */
-const OFFER_TTL_SEC = 90;
-/** Bolt-style: ping one nearest rider at a time. */
-const RIDERS_PER_WAVE = 1;
+/** Seconds a rider can accept after push/socket (aligned with app UI countdown). */
+const OFFER_TTL_SEC = 30;
+/** Offer 2 nearest riders on early waves for faster matching. */
+function ridersPerWave(wave: number): number {
+  return wave <= 3 ? 2 : 1;
+}
 /** Max sequential offers before giving up (each step = next nearest rider). */
 const MAX_DISPATCH_WAVES = 15;
 /** Max age for rider GPS row; profile lat/lng still used when socket GPS is stale. */
 const LOCATION_MAX_AGE_MIN = 45;
 /** Expanding pickup radius (km) as dispatch steps progress. */
-const DISPATCH_RADIUS_KM_TIERS = [4, 8, 15] as const;
+const DISPATCH_RADIUS_KM_TIERS = [6, 12, 25] as const;
 const NEARBY_RIDERS_MAX_KM = 6;
+/** Start offering any online rider after this wave if nobody nearby. */
+const EARLY_GLOBAL_FALLBACK_WAVE = 2;
 
 function dispatchRadiusKm(wave: number): number {
   if (wave <= 5) return DISPATCH_RADIUS_KM_TIERS[0];
@@ -2284,6 +2288,25 @@ async function seedRiderLocationFromProfile(riderId: string) {
      ON CONFLICT (rider_id) DO UPDATE SET lat = $2, lng = $3, updated_at = CURRENT_TIMESTAMP`,
     [riderId, lat, lng]
   );
+}
+
+async function getAvailableOnlineRiders(
+  riderIds: string[],
+  limit: number
+): Promise<NearbyRider[]> {
+  if (!riderIds.length || limit <= 0) return [];
+  const res = await pool.query(
+    `SELECT u.id FROM users u
+     WHERE u.id = ANY($1::uuid[])
+     AND NOT EXISTS (
+       SELECT 1 FROM orders busy
+       WHERE busy.rider_id = u.id
+       AND busy.status IN ('ready', 'picked_up', 'arrived')
+     )
+     LIMIT $2`,
+    [riderIds, limit]
+  );
+  return res.rows.map((row: { id: string }) => ({ id: row.id, distanceKm: 0 }));
 }
 
 async function getPickupPoint(order: any): Promise<{ lat: number; lng: number } | null> {
@@ -2423,7 +2446,27 @@ async function emitOffersToRiders(order: any, candidates: NearbyRider[], wave: n
   const orderPayload = { ...order };
   const expiresIso = expiresAt.toISOString();
 
-  // FCM first (lock-screen alarm), then socket (in-app ring) — never block on DB.
+  // Persist offers before push/socket so decline/accept never races an empty row.
+  await Promise.all(
+    eligible.map(({ id: riderId }) =>
+      pool.query(
+        `INSERT INTO order_dispatch_offers (order_id, rider_id, wave, status, offered_at, expires_at)
+         VALUES ($1, $2, $3, 'offered', CURRENT_TIMESTAMP, $4)
+         ON CONFLICT (order_id, rider_id) DO UPDATE SET
+           wave = EXCLUDED.wave,
+           status = 'offered',
+           offered_at = CURRENT_TIMESTAMP,
+           expires_at = EXCLUDED.expires_at`,
+        [order.id, riderId, wave, expiresAt]
+      )
+    )
+  );
+
+  await pool.query(
+    `UPDATE orders SET dispatch_wave = $1, offer_expires_at = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3`,
+    [wave, expiresAt, order.id]
+  );
+
   void sendPushToRiders(order, eligible, { skipRecipientFilter: true }).catch((err) =>
     console.warn('[push] incoming ride send failed:', err)
   );
@@ -2445,27 +2488,7 @@ async function emitOffersToRiders(order: any, candidates: NearbyRider[], wave: n
 
   const next = eligible[0];
   console.info(
-    `[dispatch] order ${order.id} step ${wave}: offered to ${next.id.slice(0, 8)}… (${next.distanceKm.toFixed(1)} km)`,
-  );
-
-  await Promise.all(
-    eligible.map(({ id: riderId }) =>
-      pool.query(
-        `INSERT INTO order_dispatch_offers (order_id, rider_id, wave, status, offered_at, expires_at)
-         VALUES ($1, $2, $3, 'offered', CURRENT_TIMESTAMP, $4)
-         ON CONFLICT (order_id, rider_id) DO UPDATE SET
-           wave = EXCLUDED.wave,
-           status = 'offered',
-           offered_at = CURRENT_TIMESTAMP,
-           expires_at = EXCLUDED.expires_at`,
-        [order.id, riderId, wave, expiresAt]
-      )
-    )
-  );
-
-  await pool.query(
-    `UPDATE orders SET dispatch_wave = $1, offer_expires_at = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3`,
-    [wave, expiresAt, order.id]
+    `[dispatch] order ${order.id} step ${wave}: offered to ${eligible.length} rider(s), first ${next.id.slice(0, 8)}… (${next.distanceKm.toFixed(1)} km)`,
   );
 
   clearDispatchTimer(order.id);
@@ -2506,6 +2529,7 @@ async function advanceDispatchWave(order: any, wave: number) {
   const exclude = await getOfferedRiderIds(order.id);
   const pickup = await getPickupPoint(order);
   const radiusKm = dispatchRadiusKm(wave);
+  const limit = ridersPerWave(wave);
 
   const widestRadiusKm = DISPATCH_RADIUS_KM_TIERS[DISPATCH_RADIUS_KM_TIERS.length - 1];
 
@@ -2517,31 +2541,25 @@ async function advanceDispatchWave(order: any, wave: number) {
       pickup,
       order.region,
       exclude,
-      RIDERS_PER_WAVE,
+      limit,
       radiusKm,
       serviceType
     );
-    // Centralized fallback: once we've widened to the largest radius and still
-    // find nobody nearby, offer the job to ANY online rider (region first, then
-    // global) regardless of distance / location freshness. This guarantees a
-    // request reaches available riders across platforms even when the rider's
-    // GPS is stale, missing, or far from the pickup.
-    if (candidates.length === 0 && radiusKm >= widestRadiusKm) {
+    if (
+      candidates.length === 0 &&
+      (wave >= EARLY_GLOBAL_FALLBACK_WAVE || radiusKm >= widestRadiusKm)
+    ) {
       const fallbackIds = (await getActiveRiderIds(order.region, serviceType)).filter(
         (id) => !exclude.includes(id)
       );
-      candidates = fallbackIds
-        .slice(0, RIDERS_PER_WAVE)
-        .map((id) => ({ id, distanceKm: 0 }));
+      candidates = await getAvailableOnlineRiders(fallbackIds, limit);
       usedGlobalFallback = candidates.length > 0;
     }
   } else {
     const fallback = (await getActiveRiderIds(order.region, serviceType)).filter(
       (id) => !exclude.includes(id)
     );
-    candidates = fallback
-      .slice(0, RIDERS_PER_WAVE)
-      .map((id) => ({ id, distanceKm: 0 }));
+    candidates = await getAvailableOnlineRiders(fallback, limit);
   }
 
   if (candidates.length === 0) {
@@ -2579,17 +2597,18 @@ async function startOrderDispatch(order: any) {
 }
 
 async function recordRiderDecline(orderId: string, riderId: string) {
-  await pool.query(
-    `UPDATE order_dispatch_offers SET status = 'declined'
-     WHERE order_id = $1 AND rider_id = $2`,
-    [orderId, riderId]
-  );
-
-  const fresh = await pool.query('SELECT * FROM orders WHERE id = $1', [orderId]);
-  const order = fresh.rows[0];
+  const orderRes = await pool.query('SELECT * FROM orders WHERE id = $1', [orderId]);
+  const order = orderRes.rows[0];
   if (!order || !isOfferableOrder(order)) return;
 
   const wave = order.dispatch_wave || 1;
+  await pool.query(
+    `INSERT INTO order_dispatch_offers (order_id, rider_id, wave, status, offered_at, expires_at)
+     VALUES ($1, $2, $3, 'declined', CURRENT_TIMESTAMP, NOW())
+     ON CONFLICT (order_id, rider_id) DO UPDATE SET status = 'declined'`,
+    [orderId, riderId, wave]
+  );
+
   const open = await pool.query(
     `SELECT COUNT(*)::int AS c FROM order_dispatch_offers
      WHERE order_id = $1 AND wave = $2 AND status = 'offered'`,
@@ -2598,7 +2617,6 @@ async function recordRiderDecline(orderId: string, riderId: string) {
 
   if (open.rows[0].c === 0) {
     clearDispatchTimer(orderId);
-    // Sequential Bolt flow: try next nearest rider after decline.
     await advanceDispatchWave(order, wave + 1);
   }
 }
@@ -6725,15 +6743,20 @@ app.post('/api/orders/:id/decline', authenticateToken, async (req: any, res) => 
   }
   const orderId = req.params.id;
   try {
-    const userRes = await pool.query('SELECT status FROM users WHERE id = $1', [req.user.id]);
-    if (userRes.rows[0]?.status !== 'active') {
+    const userRes = await pool.query(
+      'SELECT status, is_online FROM users WHERE id = $1',
+      [req.user.id]
+    );
+    const account = userRes.rows[0];
+    if (account?.status !== 'active') {
       return res.status(403).json({ message: 'Go online to respond to ride offers.' });
     }
     await recordRiderDecline(orderId, req.user.id);
     res.json({ ok: true });
   } catch (err) {
     console.error('[dispatch] decline failed:', err);
-    res.status(500).json({ message: 'Server error' });
+    // Idempotent — rider already dismissed UI; don't surface a scary error.
+    res.json({ ok: true, note: 'offer_closed' });
   }
 });
 

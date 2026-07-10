@@ -345,9 +345,13 @@ class OrdersRepository {
 
 
   Future<void> declineOrder(String orderId) async {
-
-    await _api.dio.post('/api/orders/$orderId/decline');
-
+    try {
+      await _api.dio.post('/api/orders/$orderId/decline');
+    } on DioException catch (e) {
+      final status = e.response?.statusCode;
+      if (status == 403 || status == 404 || status == 409) return;
+      rethrow;
+    }
   }
 
   /// Release an accepted trip before pickup so dispatch can re-offer it.

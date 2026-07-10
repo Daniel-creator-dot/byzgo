@@ -712,12 +712,11 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
     final order = _incoming;
     if (order == null) return;
     unawaited(IncomingRideAlert.dismiss(orderId: order.id));
+    if (mounted) setState(() => _incoming = null);
     try {
       await _ordersRepo.declineOrder(order.id);
-      if (!mounted) return;
-      setState(() => _incoming = null);
-    } catch (e) {
-      _snack(OrdersRepository.errorMessage(e));
+    } catch (_) {
+      // UI already dismissed — offer may have expired or been reassigned.
     }
   }
 
