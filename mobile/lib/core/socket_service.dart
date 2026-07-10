@@ -88,21 +88,25 @@ class SocketService {
       ..on('pricing:updated', _onPricingUpdated);
   }
 
-  Future<void> connect({required String userId}) async {
+  Future<void> connect({required String userId, String? token}) async {
     if (_userId == userId && isConnected) return;
     disconnect(clearCallbacks: false);
     _userId = userId;
 
+    final options = io.OptionBuilder()
+        .setTransports(['websocket', 'polling'])
+        .enableAutoConnect()
+        .enableReconnection()
+        .setReconnectionAttempts(999)
+        .setReconnectionDelay(400)
+        .setReconnectionDelayMax(3000);
+    if (token != null && token.isNotEmpty) {
+      options.setAuth({'token': token});
+    }
+
     _socket = io.io(
       Env.apiBaseUrl,
-      io.OptionBuilder()
-          .setTransports(['websocket', 'polling'])
-          .enableAutoConnect()
-          .enableReconnection()
-          .setReconnectionAttempts(999)
-          .setReconnectionDelay(400)
-          .setReconnectionDelayMax(3000)
-          .build(),
+      options.build(),
     );
 
     _socket!

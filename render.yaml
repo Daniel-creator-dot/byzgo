@@ -9,9 +9,9 @@
 
 services:
   - type: web
-    name: byzgo
+    name: byzgoback-eu
     runtime: node
-    plan: free
+    plan: starter
     region: frankfurt
     buildCommand: npm ci && npm run build:render
     startCommand: npm --prefix backend run start
@@ -23,12 +23,22 @@ services:
         value: "true"
       - key: SERVE_ADMIN_WEB_ONLY
         value: "true"
+      - key: HOST
+        value: "0.0.0.0"
       - key: DATABASE_URL
         sync: false
       - key: PG_POOL_MAX
         value: "10"
+      - key: PG_IDLE_TIMEOUT_MS
+        value: "30000"
+      - key: PG_CONNECT_TIMEOUT_MS
+        value: "10000"
+      - key: PG_SSL
+        value: "true"
       - key: JWT_SECRET
         sync: false
+      - key: CORS_ORIGINS
+        value: "https://www.bytzgo.net,https://bytzgo.net"
       - key: GOOGLE_MAPS_API_KEY
         sync: false
       - key: VITE_GOOGLE_MAPS_API_KEY
@@ -39,6 +49,8 @@ services:
         sync: false
       - key: FIREBASE_PROJECT_ID
         value: bytzgo-9bd89
+      - key: FIREBASE_SERVICE_ACCOUNT_JSON
+        sync: false
       - key: GOOGLE_WEB_CLIENT_ID
         value: 645977332644-4gjjf08268b3irafs4bh8b7guct1i1jb.apps.googleusercontent.com
       - key: VITE_GOOGLE_CLIENT_ID
@@ -49,6 +61,8 @@ services:
         value: "true"
       - key: PAYSTACK_CALLBACK_URL
         value: https://www.bytzgo.net
+      - key: DISPATCH_OFFER_TTL_SEC
+        value: "30"
       - key: SMS_API_KEY
         sync: false
       - key: SMS_BASE_URL
@@ -61,3 +75,5 @@ services:
         sync: false
       - key: SUPABASE_STORAGE_BUCKET
         value: pictures
+      - key: ADMIN_INVITE_SECRET
+        sync: false

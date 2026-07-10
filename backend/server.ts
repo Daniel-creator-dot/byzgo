@@ -540,12 +540,56 @@ function dedupeVendorList<T extends { id: string; name?: string; email?: string 
   return [...rest, keeper];
 }
 
+/** Transaction pooler (6543) needs pgbouncer=true so node-pg avoids prepared statements. */
+function normalizeDatabaseUrl(raw: string | undefined): string {
+  if (!raw?.trim()) return '';
+  const url = raw.trim();
+  try {
+    const parsed = new URL(url.replace(/^postgresql:\/\//i, 'postgres://'));
+    const port = parsed.port || '5432';
+    if (port === '6543' && !parsed.searchParams.has('pgbouncer')) {
+      parsed.searchParams.set('pgbouncer', 'true');
+      return parsed.toString().replace(/^postgres:\/\//i, 'postgresql://');
+    }
+  } catch {
+    /* keep original */
+  }
+  return url;
+}
+
+function resolveDbSsl(): false | { rejectUnauthorized: boolean } {
+  const url = process.env.DATABASE_URL || '';
+  if (process.env.PG_SSL === 'false') return false;
+  if (process.env.PG_SSL === 'true' || url.includes('supabase.com')) {
+    return { rejectUnauthorized: false };
+  }
+  return false;
+}
+
+function assertProductionConfig() {
+  if (process.env.NODE_ENV !== 'production') return;
+  const missing: string[] = [];
+  if (!process.env.JWT_SECRET?.trim()) missing.push('JWT_SECRET');
+  if (!process.env.DATABASE_URL?.trim()) missing.push('DATABASE_URL');
+  if (missing.length) {
+    console.error(`FATAL: missing required production env: ${missing.join(', ')}`);
+    process.exit(1);
+  }
+  if ((process.env.JWT_SECRET?.length ?? 0) < 24) {
+    console.warn('[config] JWT_SECRET is short — use a long random value in production');
+  }
+}
+
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_URL?.includes('supabase.com') ? { rejectUnauthorized: false } : false,
+  connectionString: normalizeDatabaseUrl(process.env.DATABASE_URL),
+  ssl: resolveDbSsl(),
   max: Math.min(20, Math.max(2, Number(process.env.PG_POOL_MAX) || 10)),
   idleTimeoutMillis: Number(process.env.PG_IDLE_TIMEOUT_MS) || 30_000,
   connectionTimeoutMillis: Number(process.env.PG_CONNECT_TIMEOUT_MS) || 10_000,
+});
+
+pool.on('error', (err) => {
+  console.error('[pg] unexpected pool error:', err.message);
 });
 
 function dbConnectionDiagnostics(): {
@@ -3121,6 +3165,10 @@ ensureVapidKeys().catch((err) => console.error('[push] VAPID setup failed:', err
 const AUTH_STATUS_CACHE_MS = 60_000;
 const authStatusCache = new Map<string, { ok: boolean; expires: number }>();
 
+function invalidateAuthStatus(userId: string) {
+  authStatusCache.delete(String(userId));
+}
+
 const authenticateToken = (req: any, res: any, next: any) => {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
@@ -3213,7 +3261,7 @@ async function getSmsConfig() {
   const dbBase = await getSetting('sms_base_url');
   const dbSender = await getSetting('sms_sender_id');
   return {
-    apiKey: envKey || dbKey || DEFAULT_SMS_API_KEY,
+    apiKey: envKey || dbKey || (process.env.NODE_ENV === 'production' ? '' : DEFAULT_SMS_API_KEY),
     baseUrl: envBase || dbBase || 'https://www.inteksms.top/api/v1',
     senderId: envSender || dbSender || 'bytzee',
     source: envKey ? 'env' : dbKey ? 'database' : 'default',
@@ -4071,6 +4119,7 @@ app.patch('/api/auth/status', authenticateToken, async (req: any, res) => {
       [status, req.user.id]
     );
     const user = result.rows[0];
+    invalidateAuthStatus(user.id);
     const token = signAuthToken(user);
     res.json({ user: await userForAuthResponse(user), token });
     io.to(String(user.id)).emit('status:updated', { status });
@@ -5821,6 +5870,7 @@ app.patch('/api/admin/riders/:id/approve', authenticateToken, async (req: any, r
        RETURNING id, name, email, role, status, is_online, phone, region`,
       [id]
     );
+    invalidateAuthStatus(id);
     await pool.query(
       `UPDATE rider_documents SET review_status = 'approved', rejection_reason = NULL,
         reviewed_by = $2, reviewed_at = CURRENT_TIMESTAMP
@@ -5849,6 +5899,7 @@ app.patch('/api/admin/riders/:id/reject', authenticateToken, async (req: any, re
        RETURNING id, name, email, role, status, is_online, phone, region`,
       [id]
     );
+    invalidateAuthStatus(id);
     await pool.query(
       `UPDATE rider_documents SET review_status = 'rejected', rejection_reason = $2,
         reviewed_by = $3, reviewed_at = CURRENT_TIMESTAMP
@@ -6477,6 +6528,7 @@ app.patch('/api/admin/users/:id/status', authenticateToken, async (req: any, res
     );
     if (result.rows[0]) {
       const row = result.rows[0];
+      invalidateAuthStatus(id);
       if (row.role === 'rider' && status === 'active') {
         await pool.query(
           `UPDATE rider_documents SET review_status = 'approved', rejection_reason = NULL,
@@ -8451,19 +8503,50 @@ app.delete('/api/push/subscribe', authenticateToken, async (req: any, res) => {
 });
 
 // Socket.io Connection
+function socketTokenFromHandshake(socket: any): string | null {
+  const authToken = socket.handshake?.auth?.token;
+  if (typeof authToken === 'string' && authToken.trim()) return authToken.trim();
+  const header = socket.handshake?.headers?.authorization;
+  if (typeof header === 'string' && header.startsWith('Bearer ')) {
+    return header.slice(7).trim();
+  }
+  return null;
+}
+
+io.use((socket, next) => {
+  const token = socketTokenFromHandshake(socket);
+  if (!token) {
+    (socket as any).data = { user: null };
+    return next();
+  }
+  jwt.verify(token, process.env.JWT_SECRET as string, (err: any, user: any) => {
+    (socket as any).data = { user: err ? null : user };
+    next();
+  });
+});
+
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
 
   socket.on('join', (userId) => {
     if (!userId) return;
+    const user = (socket as any).data?.user;
     const room = String(userId).trim();
+    if (user && String(user.id) !== room) {
+      console.warn(`[socket] join rejected for ${socket.id}: room ${room} != user ${user.id}`);
+      return;
+    }
     socket.join(room);
     console.log(`User ${room} joined their room`);
   });
 
   socket.on('location:update', async ({ userId, lat, lng }) => {
     if (!userId || lat == null || lng == null) return;
+    const user = (socket as any).data?.user;
     const riderId = String(userId).trim();
+    if (user) {
+      if (String(user.id) !== riderId || user.role !== 'rider') return;
+    }
     try {
       await pool.query(
         'INSERT INTO rider_locations (rider_id, lat, lng, updated_at) VALUES ($1, $2, $3, CURRENT_TIMESTAMP) ON CONFLICT (rider_id) DO UPDATE SET lat = $2, lng = $3, updated_at = CURRENT_TIMESTAMP',
@@ -8629,8 +8712,42 @@ function attachWebApp() {
 
 attachWebApp();
 
+app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  if (err?.message === 'Not allowed by CORS') {
+    return res.status(403).json({ message: 'Origin not allowed' });
+  }
+  console.error('Unhandled route error:', err);
+  if (!res.headersSent) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+assertProductionConfig();
+
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
+
+function shutdown(signal: string) {
+  console.log(`[shutdown] ${signal} — closing HTTP server and DB pool`);
+  httpServer.close(() => {
+    pool
+      .end()
+      .then(() => process.exit(0))
+      .catch(() => process.exit(1));
+  });
+  setTimeout(() => process.exit(1), 10_000).unref();
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('unhandledRejection', (reason) => {
+  console.error('[process] unhandledRejection:', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[process] uncaughtException:', err);
+  shutdown('uncaughtException');
+});
+
 httpServer.listen(PORT, HOST, () => {
   console.log(`Server running on http://${HOST}:${PORT}`);
   console.log(`[dispatch] offer TTL ${OFFER_TTL_SEC}s, early waves offer ${ridersPerWave(1)} rider(s)`);

@@ -7,7 +7,7 @@
 | **Render API** | `byzgoback-eu` (`srv-d98738e7r5hc73cjogv0`) — **Frankfurt** (EU), Starter plan |
 | **Legacy (suspended)** | `byzgoback` (`srv-d8a8j34m0tmc739suuqg`) — Oregon — do not use |
 | **Supabase Postgres** | `ypmiurbtmfiyzmrygonh` — **EU Central** (`aws-1-eu-central-1`) |
-| **DATABASE_URL** | Uses **pooler** ✅ — `...pooler.supabase.com:5432` (session mode) |
+| **DATABASE_URL** | Uses **transaction pooler** ✅ — `...pooler.supabase.com:6543?pgbouncer=true` |
 | **Supabase Storage** | Same project — `pictures` bucket |
 | **Firebase** | `bytzgo-9bd89` — push only (FCM), **not** the database |
 

@@ -628,7 +628,10 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
       });
       if (online) {
         _alertedOfferIds.clear();
-        await _socket.connect(userId: _user.id);
+        await _socket.connect(
+          userId: _user.id,
+          token: context.read<Session>().token,
+        );
         await PushNotificationService.instance.ensureRegistered(
           api: context.read<ApiClient>(),
           session: context.read<Session>(),

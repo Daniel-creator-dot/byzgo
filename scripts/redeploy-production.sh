@@ -3,14 +3,14 @@
 # Requires RENDER_API_KEY in the environment.
 set -euo pipefail
 
-SERVICE_ID="${1:-srv-d8a8j34m0tmc739suuqg}"
+SERVICE_ID="${1:-srv-d98738e7r5hc73cjogv0}"
 
 if [[ -z "${RENDER_API_KEY:-}" ]]; then
   echo "Set RENDER_API_KEY first (Render Dashboard → Account Settings → API Keys)." >&2
   exit 1
 fi
 
-echo "Triggering deploy for ${SERVICE_ID} (byzgoback)..."
+echo "Triggering deploy for ${SERVICE_ID} (byzgoback-eu)..."
 response="$(curl -fsS -X POST \
   -H "Authorization: Bearer ${RENDER_API_KEY}" \
   -H "Accept: application/json" \

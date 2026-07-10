@@ -7,7 +7,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$health = "$($Url.TrimEnd('/'))/api/health"
+$health = "$($Url.TrimEnd('/'))/api/health?deep=1"
 
 Write-Host "GET $health"
 try {

@@ -6,10 +6,9 @@
 #   .\scripts\setup-supabase-storage.ps1 -ServiceRoleKey '<key>'
 param(
   [string]$ServiceRoleKey = $env:SUPABASE_SERVICE_ROLE_KEY,
-  [string]$ProductionServiceId = 'srv-d8a8j34m0tmc739suuqg',  # byzgoback (www.bytzgo.net)
+  [string]$ProductionServiceId = 'srv-d98738e7r5hc73cjogv0',  # byzgoback-eu (www.bytzgo.net)
   [string[]]$RenderServiceIds = @(
-    'srv-d8a8j34m0tmc739suuqg',  # byzgoback - production API + custom domains
-    'srv-d86e8qv7f7vs7395kgrg'   # byzgo-api - staging / direct onrender URL
+    'srv-d98738e7r5hc73cjogv0'  # byzgoback-eu - production API + custom domains
   )
 )
 

@@ -123,6 +123,6 @@ class Session extends ChangeNotifier {
   Future<void> _connectSocket() async {
     final id = _user?.id;
     if (id == null) return;
-    await _socket.connect(userId: id);
+    await _socket.connect(userId: id, token: _token);
   }
 }
