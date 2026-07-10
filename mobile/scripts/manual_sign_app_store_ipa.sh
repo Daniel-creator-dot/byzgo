@@ -50,6 +50,10 @@ pod_cmd() {
     export GEM_PATH="$GEM_HOME"
     export PATH="$GEM_HOME/bin:$PATH"
     POD_BIN="$vendor_pod"
+  elif [[ -x "$HOME/.gem/ruby/2.6.0/bin/pod" ]]; then
+    export PATH="$HOME/.gem/ruby/2.6.0/bin:$PATH"
+    export RUBYOPT="${RUBYOPT:--r logger}"
+    POD_BIN="$HOME/.gem/ruby/2.6.0/bin/pod"
   else
     POD_BIN="pod"
   fi
