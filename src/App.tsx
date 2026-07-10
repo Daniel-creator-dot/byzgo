@@ -191,6 +191,24 @@ export default function App() {
   );
 }
 
+function shouldForceLogout(error: unknown): boolean {
+  const e = error as {
+    response?: { status?: number; data?: { message?: string; error?: string } };
+  };
+  const status = e.response?.status;
+  const msg = String(e.response?.data?.message || e.response?.data?.error || '').toLowerCase();
+  if (status === 401) return true;
+  if (status === 403) {
+    return (
+      msg.includes('session expired') ||
+      msg.includes('sign in required') ||
+      msg.includes('invalid token') ||
+      msg.includes('account disabled')
+    );
+  }
+  return false;
+}
+
 function MainApp() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -207,12 +225,31 @@ function MainApp() {
   const [user, setUser] = useState<AuthUser | null>(() => {
     try {
       const saved = localStorage.getItem('user');
-      return saved ? JSON.parse(saved) : null;
+      if (!saved) return null;
+      const parsed = JSON.parse(saved) as AuthUser;
+      // /admin must never reuse a rider/customer/vendor session from the mobile app
+      if (window.location.pathname.startsWith('/admin') && parsed.role !== 'admin') {
+        localStorage.removeItem('user');
+        localStorage.removeItem('token');
+        return null;
+      }
+      return parsed;
     } catch (e) {
       return null;
     }
   });
-  const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
+  const [token, setToken] = useState<string | null>(() => {
+    try {
+      if (window.location.pathname.startsWith('/admin')) {
+        const saved = localStorage.getItem('user');
+        const parsed = saved ? (JSON.parse(saved) as AuthUser) : null;
+        if (!parsed || parsed.role !== 'admin') return null;
+      }
+      return localStorage.getItem('token');
+    } catch {
+      return null;
+    }
+  });
   const [vendors, setVendors] = useState<any[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [products, setProducts] = useState<any[]>([]);
@@ -490,8 +527,7 @@ function MainApp() {
           url.includes('/api/auth/google');
         if (
           !isAuthAttempt &&
-          error.response &&
-          (error.response.status === 401 || error.response.status === 403)
+          shouldForceLogout(error)
         ) {
           console.warn('Session expired or unauthorized. Logging out.');
           handleLogout();
@@ -517,8 +553,12 @@ function MainApp() {
 
   // Fetch initial data and setup sockets
   useEffect(() => {
-    // Handle Google Redirect Result
+    // Handle Google Redirect Result (skip on admin — email/password only)
     const initAuth = async () => {
+      if (location.pathname.startsWith('/admin')) {
+        setLoading(false);
+        return;
+      }
       try {
         // 1. Check Supabase Auth redirect session
         const { data: { session } } = await supabase.auth.getSession();
@@ -582,7 +622,7 @@ function MainApp() {
         joinSocketRoom();
       } catch (err: any) {
         console.error('Initialization failed', err);
-        if (err.response && (err.response.status === 401 || err.response.status === 403)) {
+        if (shouldForceLogout(err)) {
           handleLogout();
         }
       } finally {
@@ -752,6 +792,7 @@ function MainApp() {
     localStorage.setItem('user', JSON.stringify(userData));
     localStorage.setItem('token', authToken);
     axios.defaults.headers.common['Authorization'] = `Bearer ${authToken}`;
+    setLoading(false);
     if (needsDeviceSetup(userData.role)) {
       setShowDeviceSetup(true);
     }
@@ -764,6 +805,8 @@ function MainApp() {
     localStorage.removeItem('user');
     localStorage.removeItem('token');
     localStorage.removeItem('bytzgo_cart');
+    delete axios.defaults.headers.common['Authorization'];
+    setLoading(false);
   };
 
   const updateOrderStatus = async (orderId: string, status: OrderStatus, extra = {}) => {
