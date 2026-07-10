@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Upload BytzGo.ipa to App Store Connect via iTMSTransporter.
+# Upload BytzGo.ipa to App Store Connect via xcrun altool (Xcode).
 #
 # Requires an app-specific password (not your Apple ID password):
 #   https://account.apple.com → Sign-In and Security → App-Specific Passwords
@@ -33,14 +33,12 @@ APPLE_APP_SPECIFIC_PASSWORD="${APPLE_APP_SPECIFIC_PASSWORD:-$(read_env APPLE_APP
   exit 1
 }
 
-TRANSPORTER="/Applications/Transporter.app/Contents/itms/bin/iTMSTransporter"
-[[ -x "$TRANSPORTER" ]] || { echo "Install Transporter from the Mac App Store."; exit 1; }
 
 echo "→ Validating $IPA"
 xcrun altool --validate-app -f "$IPA" -t ios -u "$APPLE_ID" -p "$APPLE_APP_SPECIFIC_PASSWORD" 2>&1 | tail -15
 
-echo "→ Uploading to App Store Connect"
-"$TRANSPORTER" -m upload -assetFile "$IPA" -u "$APPLE_ID" -p "$APPLE_APP_SPECIFIC_PASSWORD" 2>&1 | tail -20
+echo "→ Uploading to App Store Connect (altool)"
+xcrun altool --upload-app -f "$IPA" -t ios -u "$APPLE_ID" -p "$APPLE_APP_SPECIFIC_PASSWORD" 2>&1 | tail -20
 
 echo ""
 echo "Done. In App Store Connect, attach build $(grep '^version:' "$MOBILE_ROOT/pubspec.yaml" | awk '{print $2}' | cut -d+ -f2) to marketing version $(grep '^version:' "$MOBILE_ROOT/pubspec.yaml" | awk '{print $2}' | cut -d+ -f1)."
