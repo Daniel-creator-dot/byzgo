@@ -1,7 +1,7 @@
-# Redeploy the production API (byzgoback — hosts www.bytzgo.net / bytzgo.net).
+# Redeploy the production API (byzgoback-eu — Frankfurt, hosts www.bytzgo.net / bytzgo.net).
 # Requires RENDER_API_KEY in the environment.
 param(
-  [string]$ServiceId = 'srv-d8a8j34m0tmc739suuqg'
+  [string]$ServiceId = 'srv-d98738e7r5hc73cjogv0'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -15,7 +15,7 @@ $headers = @{
   Accept        = 'application/json'
 }
 
-Write-Host "Triggering deploy for $ServiceId (byzgoback)..." -ForegroundColor Cyan
+Write-Host "Triggering deploy for $ServiceId (byzgoback-eu)..." -ForegroundColor Cyan
 $r = Invoke-WebRequest -Method Post -Uri "https://api.render.com/v1/services/$ServiceId/deploys" -Headers $headers -UseBasicParsing
 $deploy = $r.Content | ConvertFrom-Json
 Write-Host "Deploy $($deploy.id) status=$($deploy.status)" -ForegroundColor Green
