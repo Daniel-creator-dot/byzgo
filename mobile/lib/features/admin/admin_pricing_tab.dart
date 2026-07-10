@@ -6,6 +6,7 @@ import '../../models/admin_pricing_settings.dart';
 import '../../shared/format.dart';
 import '../../shared/theme.dart';
 import 'admin_repository.dart';
+import 'admin_promotions_tab.dart';
 import 'admin_zones_tab.dart';
 import 'widgets/admin_hero_header.dart';
 
@@ -24,6 +25,10 @@ class _AdminPricingTabState extends State<AdminPricingTab>
   final _rateCtrl = TextEditingController();
   final _minFeeCtrl = TextEditingController();
   final _maxFeeCtrl = TextEditingController();
+  final _okadaRateCtrl = TextEditingController();
+  final _okadaMinCtrl = TextEditingController();
+  final _kekeRateCtrl = TextEditingController();
+  final _kekeMinCtrl = TextEditingController();
   final _commissionCtrl = TextEditingController();
   final _insuranceCtrl = TextEditingController();
   final _platformCtrl = TextEditingController();
@@ -41,7 +46,7 @@ class _AdminPricingTabState extends State<AdminPricingTab>
   @override
   void initState() {
     super.initState();
-    _tabs = TabController(length: 2, vsync: this);
+    _tabs = TabController(length: 4, vsync: this);
     WidgetsBinding.instance.addPostFrameCallback((_) => _load());
   }
 
@@ -51,6 +56,10 @@ class _AdminPricingTabState extends State<AdminPricingTab>
     _rateCtrl.dispose();
     _minFeeCtrl.dispose();
     _maxFeeCtrl.dispose();
+    _okadaRateCtrl.dispose();
+    _okadaMinCtrl.dispose();
+    _kekeRateCtrl.dispose();
+    _kekeMinCtrl.dispose();
     _commissionCtrl.dispose();
     _insuranceCtrl.dispose();
     _platformCtrl.dispose();
@@ -72,6 +81,10 @@ class _AdminPricingTabState extends State<AdminPricingTab>
         _rateCtrl.text = s.deliveryPricePerKm;
         _minFeeCtrl.text = s.deliveryMinFee;
         _maxFeeCtrl.text = s.deliveryMaxFee;
+        _okadaRateCtrl.text = s.okadaPricePerKm;
+        _okadaMinCtrl.text = s.okadaMinFee;
+        _kekeRateCtrl.text = s.kekePricePerKm;
+        _kekeMinCtrl.text = s.kekeMinFee;
         _commissionCtrl.text = s.commissionPercent;
         _insuranceCtrl.text = s.commissionInsurancePercent;
         _platformCtrl.text = s.commissionPlatformPercent;
@@ -118,6 +131,22 @@ class _AdminPricingTabState extends State<AdminPricingTab>
         return;
       }
     }
+    final okadaRate = double.tryParse(_okadaRateCtrl.text.trim());
+    final kekeRate = double.tryParse(_kekeRateCtrl.text.trim());
+    if (okadaRate == null || okadaRate <= 0) {
+      _snack('Enter a valid Okada price per km');
+      return;
+    }
+    if (kekeRate == null || kekeRate <= 0) {
+      _snack('Enter a valid Keke price per km');
+      return;
+    }
+    final okadaMin = double.tryParse(_okadaMinCtrl.text.trim()) ?? 0;
+    final kekeMin = double.tryParse(_kekeMinCtrl.text.trim()) ?? 0;
+    if (okadaMin < 0 || kekeMin < 0) {
+      _snack('Okada/Keke minimum fees must be zero or positive');
+      return;
+    }
     final mult = double.tryParse(_multCtrl.text.trim());
     if (mult == null || mult < 1) {
       _snack('Surge multiplier must be at least 1.0');
@@ -149,6 +178,10 @@ class _AdminPricingTabState extends State<AdminPricingTab>
         deliveryPricePerKm: rate.toString(),
         deliveryMinFee: minRaw,
         deliveryMaxFee: maxRaw,
+        okadaPricePerKm: okadaRate.toString(),
+        okadaMinFee: okadaMin.toString(),
+        kekePricePerKm: kekeRate.toString(),
+        kekeMinFee: kekeMin.toString(),
         commissionPercent: commPct.toString(),
         commissionInsurancePercent: insPct.toString(),
         commissionPlatformPercent: platPct.toString(),
@@ -249,8 +282,10 @@ class _AdminPricingTabState extends State<AdminPricingTab>
           unselectedLabelColor: Colors.white54,
           indicatorColor: BytzGoTheme.accent,
           tabs: const [
-            Tab(text: 'GLOBAL RATE'),
-            Tab(text: 'ZONE MIN/MAX'),
+            Tab(text: 'PACKAGE'),
+            Tab(text: 'OKADA & KEKE'),
+            Tab(text: 'PROMOS'),
+            Tab(text: 'ZONES'),
           ],
         ),
         Expanded(
@@ -258,6 +293,8 @@ class _AdminPricingTabState extends State<AdminPricingTab>
             controller: _tabs,
             children: [
               _globalTab(),
+              _okadaKekeTab(),
+              const AdminPromotionsTab(),
               const AdminZonesTab(),
             ],
           ),
@@ -273,12 +310,12 @@ class _AdminPricingTabState extends State<AdminPricingTab>
         _sectionTitle('Rate per kilometre'),
         _field(
           controller: _rateCtrl,
-          label: 'Price (₵ / km)',
+          label: 'Package price (₵ / km)',
           hint: '4.00',
           suffix: '₵/km',
         ),
         Text(
-          'All trips: fee = distance (km) × this rate, then min/max caps apply.',
+          'Package delivery: fee = distance (km) × this rate, then min/max caps apply.',
           style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 11),
         ),
         const SizedBox(height: 16),
@@ -417,6 +454,39 @@ class _AdminPricingTabState extends State<AdminPricingTab>
           ),
           child: Text(
             _saving ? 'Saving…' : 'Save global pricing',
+            style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _okadaKekeTab() {
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+      children: [
+        _sectionTitle('Okada (motorcycle)'),
+        _field(controller: _okadaRateCtrl, label: 'Price (₵ / km)', hint: '3.50', suffix: '₵/km'),
+        _field(controller: _okadaMinCtrl, label: 'Minimum fee (₵)', hint: '6'),
+        const SizedBox(height: 16),
+        _sectionTitle('Keke (tricycle)'),
+        _field(controller: _kekeRateCtrl, label: 'Price (₵ / km)', hint: '2.50', suffix: '₵/km'),
+        _field(controller: _kekeMinCtrl, label: 'Minimum fee (₵)', hint: '5'),
+        Text(
+          'Okada and Keke use their own rates. Surge and zone caps still apply.',
+          style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 11),
+        ),
+        const SizedBox(height: 24),
+        FilledButton(
+          onPressed: _saving ? null : _save,
+          style: FilledButton.styleFrom(
+            backgroundColor: BytzGoTheme.accent,
+            foregroundColor: BytzGoTheme.sheetText,
+            minimumSize: const Size.fromHeight(52),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          ),
+          child: Text(
+            _saving ? 'Saving…' : 'Save ride pricing',
             style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15),
           ),
         ),

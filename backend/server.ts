@@ -489,6 +489,146 @@ async function getRideServiceMinFee(service: RideServiceType): Promise<number> {
   return Math.max(0, Number.isFinite(parsed) && parsed >= 0 ? parsed : meta.defaultMin);
 }
 
+type RidePromotionRow = {
+  id: string;
+  name: string;
+  code: string | null;
+  service_types: string;
+  customer_discount_percent: number;
+  customer_discount_fixed: number;
+  rider_bonus_amount: number;
+  target_region: string | null;
+  enabled: boolean;
+  starts_at: string | null;
+  ends_at: string | null;
+  redemption_count: number;
+  max_redemptions: number | null;
+};
+
+let ridePromotionsSchemaReady = false;
+
+async function ensureRidePromotionsSchema() {
+  if (ridePromotionsSchemaReady) return;
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ride_promotions (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name VARCHAR(120) NOT NULL,
+      code VARCHAR(40),
+      service_types TEXT NOT NULL DEFAULT 'okada,keke,package',
+      customer_discount_percent DECIMAL(5,2) NOT NULL DEFAULT 0,
+      customer_discount_fixed DECIMAL(10,2) NOT NULL DEFAULT 0,
+      rider_bonus_amount DECIMAL(10,2) NOT NULL DEFAULT 0,
+      target_region VARCHAR(120),
+      enabled BOOLEAN NOT NULL DEFAULT true,
+      starts_at TIMESTAMPTZ,
+      ends_at TIMESTAMPTZ,
+      redemption_count INT NOT NULL DEFAULT 0,
+      max_redemptions INT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    ALTER TABLE orders ADD COLUMN IF NOT EXISTS promotion_id UUID;
+    ALTER TABLE orders ADD COLUMN IF NOT EXISTS promotion_discount DECIMAL(10,2) NOT NULL DEFAULT 0;
+    ALTER TABLE orders ADD COLUMN IF NOT EXISTS rider_bonus_amount DECIMAL(10,2) NOT NULL DEFAULT 0;
+  `);
+  ridePromotionsSchemaReady = true;
+}
+
+function promotionCoversService(promo: RidePromotionRow, service: RideServiceType): boolean {
+  const types = String(promo.service_types || '')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  return types.length === 0 || types.includes(service);
+}
+
+function promotionCoversRegion(promo: RidePromotionRow, region?: string | null): boolean {
+  const target = String(promo.target_region || '').trim();
+  if (!target) return true;
+  return String(region || '').trim().toLowerCase() === target.toLowerCase();
+}
+
+function promotionIsActiveNow(promo: RidePromotionRow, now = new Date()): boolean {
+  if (!promo.enabled) return false;
+  if (promo.max_redemptions != null && promo.redemption_count >= promo.max_redemptions) return false;
+  if (promo.starts_at) {
+    const start = new Date(promo.starts_at);
+    if (!Number.isNaN(start.getTime()) && now < start) return false;
+  }
+  if (promo.ends_at) {
+    const end = new Date(promo.ends_at);
+    if (!Number.isNaN(end.getTime()) && now > end) return false;
+  }
+  return true;
+}
+
+async function findActiveRidePromotion(options: {
+  service: RideServiceType;
+  region?: string | null;
+  code?: string | null;
+}): Promise<RidePromotionRow | null> {
+  await ensureRidePromotionsSchema();
+  const code = String(options.code || '').trim().toUpperCase();
+  if (code) {
+    const byCode = await pool.query(
+      `SELECT * FROM ride_promotions WHERE UPPER(COALESCE(code, '')) = $1 LIMIT 1`,
+      [code]
+    );
+    const promo = byCode.rows[0] as RidePromotionRow | undefined;
+    if (
+      promo &&
+      promotionIsActiveNow(promo) &&
+      promotionCoversService(promo, options.service) &&
+      promotionCoversRegion(promo, options.region)
+    ) {
+      return promo;
+    }
+    return null;
+  }
+  const result = await pool.query(
+    `SELECT * FROM ride_promotions WHERE enabled = true ORDER BY updated_at DESC LIMIT 50`
+  );
+  for (const row of result.rows as RidePromotionRow[]) {
+    if (
+      promotionIsActiveNow(row) &&
+      promotionCoversService(row, options.service) &&
+      promotionCoversRegion(row, options.region)
+    ) {
+      return row;
+    }
+  }
+  return null;
+}
+
+function applyPromotionToFee(fee: number, promo: RidePromotionRow): { fee: number; discount: number } {
+  let next = fee;
+  const pct = Math.max(0, Math.min(100, Number(promo.customer_discount_percent) || 0));
+  const fixed = Math.max(0, Number(promo.customer_discount_fixed) || 0);
+  if (pct > 0) next = next * (1 - pct / 100);
+  if (fixed > 0) next = Math.max(0, next - fixed);
+  next = Math.round(next * 100) / 100;
+  return { fee: next, discount: Math.round((fee - next) * 100) / 100 };
+}
+
+function ridePromotionForClient(promo: RidePromotionRow | null) {
+  if (!promo) return null;
+  return {
+    id: promo.id,
+    name: promo.name,
+    code: promo.code,
+    service_types: promo.service_types,
+    customer_discount_percent: Number(promo.customer_discount_percent) || 0,
+    customer_discount_fixed: Number(promo.customer_discount_fixed) || 0,
+    rider_bonus_amount: Number(promo.rider_bonus_amount) || 0,
+    target_region: promo.target_region,
+    enabled: promo.enabled,
+    starts_at: promo.starts_at,
+    ends_at: promo.ends_at,
+    redemption_count: promo.redemption_count,
+    max_redemptions: promo.max_redemptions,
+  };
+}
+
 function normalizeVehicleStatus(value: unknown): string | null {
   if (value == null || value === '') return null;
   const s = String(value).trim().toLowerCase();
@@ -1135,7 +1275,8 @@ async function calculateDeliveryFeeFromCoords(
   destLng: number,
   pickupRegion?: string | null,
   destinationRegion?: string | null,
-  serviceType: RideServiceType = 'package'
+  serviceType: RideServiceType = 'package',
+  options?: { promo_code?: string | null; region?: string | null }
 ): Promise<{
   distance_km: number;
   delivery_fee: number;
@@ -1145,6 +1286,10 @@ async function calculateDeliveryFeeFromCoords(
   surge_active: boolean;
   surge_multiplier: number;
   service_type: RideServiceType;
+  promotion_id: string | null;
+  promotion_discount: number;
+  rider_bonus_amount: number;
+  promotion: ReturnType<typeof ridePromotionForClient>;
 }> {
   const distance_km = haversineDistanceKm(pickupLat, pickupLng, destLat, destLng);
   const globalRate = await getRideServiceRate(serviceType);
@@ -1186,9 +1331,17 @@ async function calculateDeliveryFeeFromCoords(
       ? Number(zone.max_price)
       : globalBounds.max;
 
+  const region = options?.region ?? destinationRegion ?? pickupRegion ?? null;
+  const promo = await findActiveRidePromotion({
+    service: serviceType,
+    region,
+    code: options?.promo_code,
+  });
+  const discounted = promo ? applyPromotionToFee(fee, promo) : { fee, discount: 0 };
+
   return {
     distance_km,
-    delivery_fee: fee,
+    delivery_fee: discounted.fee,
     price_per_km: effectiveRate,
     zone: zone?.name ?? null,
     base_delivery_fee: base,
@@ -1198,6 +1351,10 @@ async function calculateDeliveryFeeFromCoords(
     surge_active: surge.surge_active,
     surge_multiplier: surge.multiplier,
     service_type: serviceType,
+    promotion_id: promo?.id ?? null,
+    promotion_discount: discounted.discount,
+    rider_bonus_amount: promo ? Number(promo.rider_bonus_amount) || 0 : 0,
+    promotion: ridePromotionForClient(promo),
   };
 }
 
@@ -1722,6 +1879,14 @@ const initDb = async () => {
       INSERT INTO system_settings (key, value) VALUES ('surge_start_time', '17:00')
       ON CONFLICT (key) DO NOTHING;
       INSERT INTO system_settings (key, value) VALUES ('surge_end_time', '21:00')
+      ON CONFLICT (key) DO NOTHING;
+      INSERT INTO system_settings (key, value) VALUES ('okada_price_per_km', '3.5')
+      ON CONFLICT (key) DO NOTHING;
+      INSERT INTO system_settings (key, value) VALUES ('okada_min_fee', '6')
+      ON CONFLICT (key) DO NOTHING;
+      INSERT INTO system_settings (key, value) VALUES ('keke_price_per_km', '2.5')
+      ON CONFLICT (key) DO NOTHING;
+      INSERT INTO system_settings (key, value) VALUES ('keke_min_fee', '5')
       ON CONFLICT (key) DO NOTHING;
     `);
     // Fix existing courier orders that were mislabeled as food
@@ -2339,14 +2504,22 @@ async function settleOrderPayment(order: any) {
         order.delivery_fee && Number(order.delivery_fee) > 0
           ? Number(order.delivery_fee)
           : moneyRound((total * settings.totalPercent) / 100);
+      const bonus = Number(order.rider_bonus_amount) || 0;
+      const totalRiderCredit = moneyRound(riderAmount + bonus);
       const rRes = await pool.query(
         'UPDATE users SET balance = balance + $1 WHERE id = $2 RETURNING balance',
-        [riderAmount, order.rider_id]
+        [totalRiderCredit, order.rider_id]
       );
       await pool.query(
         'INSERT INTO wallet_transactions (user_id, amount, type, reference) VALUES ($1, $2, $3, $4)',
         [order.rider_id, riderAmount, 'payment', `Order #${order.id.slice(0, 8)} delivery fee`]
       );
+      if (bonus > 0) {
+        await pool.query(
+          'INSERT INTO wallet_transactions (user_id, amount, type, reference) VALUES ($1, $2, $3, $4)',
+          [order.rider_id, bonus, 'bonus', `Promo bonus · Order #${order.id.slice(0, 8)}`]
+        );
+      }
       await emitWalletUpdated(order.rider_id, 'rider');
     }
     await recordTripCommission(order);
@@ -6750,6 +6923,9 @@ app.post('/api/orders', authenticateToken, async (req: any, res) => {
     }
 
     let finalDeliveryFee = Number(delivery_fee) || 0;
+    let orderPromotionId: string | null = null;
+    let orderPromotionDiscount = 0;
+    let orderRiderBonus = 0;
     if (
       pickupLat != null &&
       pickupLng != null &&
@@ -6779,9 +6955,13 @@ app.post('/api/orders', authenticateToken, async (req: any, res) => {
         Number(lng),
         finalRegion,
         finalRegion,
-        finalServiceType
+        finalServiceType,
+        { promo_code: req.body.promo_code ?? req.body.promoCode, region: finalRegion }
       );
       finalDeliveryFee = quote.delivery_fee;
+      orderPromotionId = quote.promotion_id;
+      orderPromotionDiscount = quote.promotion_discount;
+      orderRiderBonus = quote.rider_bonus_amount;
       const itemsSubtotal = Array.isArray(items)
         ? items.reduce(
             (sum: number, it: any) =>
@@ -6822,8 +7002,8 @@ app.post('/api/orders', authenticateToken, async (req: any, res) => {
       `INSERT INTO orders (
         customer_id, vendor_id, items, total, status, address, pickup_address, order_type,
         scheduled_time, lat, lng, pickup_lat, pickup_lng, region, payment_status, payment_method,
-        delivery_fee, service_type, passenger_count
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19) RETURNING *`,
+        delivery_fee, service_type, passenger_count, promotion_id, promotion_discount, rider_bonus_amount
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22) RETURNING *`,
       [
         req.user.id,
         vendorId,
@@ -6844,9 +7024,20 @@ app.post('/api/orders', authenticateToken, async (req: any, res) => {
         finalDeliveryFee,
         finalServiceType,
         finalServiceType === 'package' ? 0 : finalPassengerCount,
+        orderPromotionId,
+        orderPromotionDiscount,
+        orderRiderBonus,
       ]
     );
     const order = result.rows[0];
+    if (orderPromotionId) {
+      await pool.query(
+        `UPDATE ride_promotions
+         SET redemption_count = redemption_count + 1, updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1`,
+        [orderPromotionId]
+      );
+    }
     res.json(order);
     io.emit('order:new', order); // Notify vendors/admin
     if (order.customer_id) {
@@ -7998,6 +8189,10 @@ app.get('/api/admin/settings', authenticateToken, async (req: any, res) => {
       delivery_price_per_km: pricePerKm || '4',
       delivery_min_fee: minFee ?? '',
       delivery_max_fee: maxFee ?? '',
+      okada_price_per_km: (await getSetting('okada_price_per_km')) || '3.5',
+      okada_min_fee: (await getSetting('okada_min_fee')) || '6',
+      keke_price_per_km: (await getSetting('keke_price_per_km')) || '2.5',
+      keke_min_fee: (await getSetting('keke_min_fee')) || '5',
       surge_enabled: surge.enabled ? 'true' : 'false',
       surge_multiplier: String(surge.multiplier),
       surge_start_time: surge.start_time,
@@ -8027,6 +8222,10 @@ app.patch('/api/admin/settings', authenticateToken, async (req: any, res) => {
     delivery_price_per_km,
     delivery_min_fee,
     delivery_max_fee,
+    okada_price_per_km,
+    okada_min_fee,
+    keke_price_per_km,
+    keke_min_fee,
     surge_enabled,
     surge_multiplier,
     surge_start_time,
@@ -8039,6 +8238,10 @@ app.patch('/api/admin/settings', authenticateToken, async (req: any, res) => {
     delivery_price_per_km != null ||
     delivery_min_fee != null ||
     delivery_max_fee != null ||
+    okada_price_per_km != null ||
+    okada_min_fee != null ||
+    keke_price_per_km != null ||
+    keke_min_fee != null ||
     surge_enabled != null ||
     surge_multiplier != null ||
     surge_start_time != null ||
@@ -8103,6 +8306,22 @@ app.patch('/api/admin/settings', authenticateToken, async (req: any, res) => {
         await setSetting('delivery_max_fee', String(max));
       }
     }
+    if (okada_price_per_km != null) {
+      const rate = Math.max(0.01, parseFloat(String(okada_price_per_km)) || 3.5);
+      await setSetting('okada_price_per_km', String(rate));
+    }
+    if (okada_min_fee != null) {
+      const min = Math.max(0, parseFloat(String(okada_min_fee)) || 0);
+      await setSetting('okada_min_fee', String(min));
+    }
+    if (keke_price_per_km != null) {
+      const rate = Math.max(0.01, parseFloat(String(keke_price_per_km)) || 2.5);
+      await setSetting('keke_price_per_km', String(rate));
+    }
+    if (keke_min_fee != null) {
+      const min = Math.max(0, parseFloat(String(keke_min_fee)) || 0);
+      await setSetting('keke_min_fee', String(min));
+    }
     if (surge_enabled != null) {
       const on =
         surge_enabled === true ||
@@ -8158,6 +8377,140 @@ app.patch('/api/admin/settings', authenticateToken, async (req: any, res) => {
     res.json({ success: true, message: 'Settings updated', pricing });
   } catch (err) {
     res.status(500).json({ message: 'Failed to update settings' });
+  }
+});
+
+app.get('/api/admin/promotions', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ message: 'Unauthorized' });
+  try {
+    await ensureRidePromotionsSchema();
+    const result = await pool.query(
+      `SELECT * FROM ride_promotions ORDER BY updated_at DESC, created_at DESC`
+    );
+    res.json(result.rows.map((row) => ridePromotionForClient(row as RidePromotionRow)));
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to load promotions' });
+  }
+});
+
+app.post('/api/admin/promotions', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ message: 'Unauthorized' });
+  const {
+    name,
+    code,
+    service_types,
+    customer_discount_percent,
+    customer_discount_fixed,
+    rider_bonus_amount,
+    target_region,
+    enabled,
+    starts_at,
+    ends_at,
+    max_redemptions,
+  } = req.body;
+  if (!String(name || '').trim()) {
+    return res.status(400).json({ message: 'Promotion name is required' });
+  }
+  try {
+    await ensureRidePromotionsSchema();
+    const result = await pool.query(
+      `INSERT INTO ride_promotions (
+        name, code, service_types, customer_discount_percent, customer_discount_fixed,
+        rider_bonus_amount, target_region, enabled, starts_at, ends_at, max_redemptions
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      RETURNING *`,
+      [
+        String(name).trim(),
+        code ? String(code).trim().toUpperCase() : null,
+        String(service_types || 'okada,keke,package').trim(),
+        Math.max(0, Math.min(100, parseFloat(String(customer_discount_percent)) || 0)),
+        Math.max(0, parseFloat(String(customer_discount_fixed)) || 0),
+        Math.max(0, parseFloat(String(rider_bonus_amount)) || 0),
+        target_region ? String(target_region).trim() : null,
+        enabled !== false,
+        starts_at || null,
+        ends_at || null,
+        max_redemptions != null && max_redemptions !== ''
+          ? Math.max(1, parseInt(String(max_redemptions), 10) || 0)
+          : null,
+      ]
+    );
+    res.status(201).json(ridePromotionForClient(result.rows[0] as RidePromotionRow));
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to create promotion' });
+  }
+});
+
+app.patch('/api/admin/promotions/:id', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ message: 'Unauthorized' });
+  const { id } = req.params;
+  const fields = [
+    'name',
+    'code',
+    'service_types',
+    'customer_discount_percent',
+    'customer_discount_fixed',
+    'rider_bonus_amount',
+    'target_region',
+    'enabled',
+    'starts_at',
+    'ends_at',
+    'max_redemptions',
+  ] as const;
+  const updates: string[] = [];
+  const values: unknown[] = [];
+  let idx = 1;
+  for (const key of fields) {
+    if (req.body[key] === undefined) continue;
+    let val = req.body[key];
+    if (key === 'code') val = val ? String(val).trim().toUpperCase() : null;
+    else if (key === 'name') val = String(val).trim();
+    else if (key === 'service_types') val = String(val).trim();
+    else if (key === 'target_region') val = val ? String(val).trim() : null;
+    else if (key === 'enabled') val = val === true || val === 'true' || val === 1 || val === '1';
+    else if (key === 'customer_discount_percent') {
+      val = Math.max(0, Math.min(100, parseFloat(String(val)) || 0));
+    } else if (
+      key === 'customer_discount_fixed' ||
+      key === 'rider_bonus_amount'
+    ) {
+      val = Math.max(0, parseFloat(String(val)) || 0);
+    } else if (key === 'max_redemptions') {
+      val =
+        val != null && val !== ''
+          ? Math.max(1, parseInt(String(val), 10) || 0)
+          : null;
+    }
+    updates.push(`${key} = $${idx++}`);
+    values.push(val);
+  }
+  if (!updates.length) return res.status(400).json({ message: 'No fields to update' });
+  updates.push('updated_at = CURRENT_TIMESTAMP');
+  values.push(id);
+  try {
+    await ensureRidePromotionsSchema();
+    const result = await pool.query(
+      `UPDATE ride_promotions SET ${updates.join(', ')} WHERE id = $${idx} RETURNING *`,
+      values
+    );
+    if (!result.rows[0]) return res.status(404).json({ message: 'Promotion not found' });
+    res.json(ridePromotionForClient(result.rows[0] as RidePromotionRow));
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to update promotion' });
+  }
+});
+
+app.delete('/api/admin/promotions/:id', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ message: 'Unauthorized' });
+  try {
+    await ensureRidePromotionsSchema();
+    const result = await pool.query('DELETE FROM ride_promotions WHERE id = $1 RETURNING id', [
+      req.params.id,
+    ]);
+    if (!result.rows[0]) return res.status(404).json({ message: 'Promotion not found' });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to delete promotion' });
   }
 });
 
@@ -8312,6 +8665,8 @@ app.post('/api/delivery/calculate', authenticateToken, async (req: any, res) => 
     destination_region,
     service_type,
     serviceType,
+    promo_code,
+    promoCode,
   } = req.body;
   const pLat = Number(pickup_lat);
   const pLng = Number(pickup_lng);
@@ -8329,7 +8684,8 @@ app.post('/api/delivery/calculate', authenticateToken, async (req: any, res) => 
       dLng,
       pickup_region,
       destination_region,
-      rideService
+      rideService,
+      { promo_code: promo_code ?? promoCode, region: destination_region ?? pickup_region }
     );
     const meta = RIDE_SERVICE_META[rideService];
     res.json({
@@ -8751,6 +9107,9 @@ process.on('uncaughtException', (err) => {
 httpServer.listen(PORT, HOST, () => {
   console.log(`Server running on http://${HOST}:${PORT}`);
   console.log(`[dispatch] offer TTL ${OFFER_TTL_SEC}s, early waves offer ${ridersPerWave(1)} rider(s)`);
+  void ensureRidePromotionsSchema().catch((err) =>
+    console.warn('[promotions] schema init failed:', err)
+  );
   void activateDueScheduledOrders().catch((err) =>
     console.warn('[dispatch] scheduled order activation failed:', err)
   );

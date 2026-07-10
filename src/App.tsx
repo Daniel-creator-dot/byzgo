@@ -2,7 +2,7 @@
 import { BrowserRouter, Routes, Route, useLocation, useNavigate } from 'react-router-dom';
 import { socket } from './lib/socket';
 import { Role, Order, OrderStatus } from './types.ts';
-import { Layout, User as UserIcon, Store, Bike, Shield, ShoppingBag, MapPin, CreditCard, ChevronRight, CheckCircle2, Clock, Send, Navigation, Lock, Mail, Eye, EyeOff, LogOut, Package, Phone, Edit3, Save, X, Star, Home, Users, BarChart3, AlertCircle, AlertTriangle, Check, LocateFixed, Upload, Trash2, Settings } from 'lucide-react';
+import { Layout, User as UserIcon, Store, Bike, Shield, ShoppingBag, MapPin, CreditCard, ChevronRight, CheckCircle2, Clock, Send, Navigation, Lock, Mail, Eye, EyeOff, LogOut, Package, Phone, Edit3, Save, X, Star, Home, Users, BarChart3, AlertCircle, AlertTriangle, Check, LocateFixed, Upload, Trash2, Settings, Tag } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import axios from 'axios';
 import { clsx, type ClassValue } from 'clsx';
@@ -1032,6 +1032,7 @@ function MainApp() {
                 { id: 'drivers', label: 'Drivers', icon: Bike, badge: adminPendingRiderCount },
                 { id: 'products', label: 'Approve', icon: Package, badge: adminPendingCount },
                 { id: 'revenue', label: 'Revenue', icon: BarChart3 },
+                { id: 'promotions', label: 'Promos', icon: Tag },
                 { id: 'zones', label: 'Zones', icon: MapPin },
                 { id: 'settings', label: 'Settings', icon: Settings },
               ] as NavItem[])
@@ -3562,6 +3563,12 @@ function AdminView({
     paystack_secret_key: '',
     platform_fee_percent: '10',
     delivery_price_per_km: '4',
+    delivery_min_fee: '',
+    delivery_max_fee: '',
+    okada_price_per_km: '3.5',
+    okada_min_fee: '6',
+    keke_price_per_km: '2.5',
+    keke_min_fee: '5',
     surge_enabled: false,
     surge_multiplier: '1.5',
     surge_start_time: '17:00',
@@ -3580,6 +3587,21 @@ function AdminView({
   const [zoneForm, setZoneForm] = useState({ name: '', region: '', base_price: '10', price_per_km: '2', min_price: '5', max_price: '' });
   const [showZoneForm, setShowZoneForm] = useState(false);
   const [zoneToDelete, setZoneToDelete] = useState<any | null>(null);
+  const [promotions, setPromotions] = useState<any[]>([]);
+  const [promoLoading, setPromoLoading] = useState(false);
+  const [showPromoForm, setShowPromoForm] = useState(false);
+  const [promoForm, setPromoForm] = useState({
+    name: '',
+    code: '',
+    service_types: 'okada,keke,package',
+    customer_discount_percent: '0',
+    customer_discount_fixed: '0',
+    rider_bonus_amount: '0',
+    target_region: '',
+    enabled: true,
+    max_redemptions: '',
+  });
+  const [promoSaving, setPromoSaving] = useState(false);
 
   useEffect(() => {
     axios.get('/api/admin/users').then((res) => setAllUsers(res.data)).catch(() => addNotification('Failed to load users', 'warning'));
@@ -3615,6 +3637,12 @@ function AdminView({
         paystack_secret_key: '',
         platform_fee_percent: res.data.platform_fee_percent || '10',
         delivery_price_per_km: res.data.delivery_price_per_km || '4',
+        delivery_min_fee: res.data.delivery_min_fee || '',
+        delivery_max_fee: res.data.delivery_max_fee || '',
+        okada_price_per_km: res.data.okada_price_per_km || '3.5',
+        okada_min_fee: res.data.okada_min_fee || '6',
+        keke_price_per_km: res.data.keke_price_per_km || '2.5',
+        keke_min_fee: res.data.keke_min_fee || '5',
         surge_enabled: res.data.surge_enabled === 'true' || res.data.surge_enabled === true,
         surge_multiplier: res.data.surge_multiplier || '1.5',
         surge_start_time: res.data.surge_start_time || '17:00',
@@ -3626,6 +3654,13 @@ function AdminView({
         sms_sender_id: res.data.sms_sender_id || 'bytzee',
         sms_config_source: res.data.sms_config_source || '',
       })).catch(() => addNotification('Failed to load settings', 'warning'));
+    }
+    if (activeTab === 'promotions') {
+      setPromoLoading(true);
+      axios.get('/api/admin/promotions')
+        .then((res) => setPromotions(res.data || []))
+        .catch(() => addNotification('Failed to load promotions', 'warning'))
+        .finally(() => setPromoLoading(false));
     }
     if (activeTab === 'stores') {
       setVendorsLoading(true);
@@ -3715,6 +3750,7 @@ function AdminView({
              <button onClick={() => setActiveTab('drivers')} className={cn("px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all", activeTab === 'drivers' ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500")}>Drivers {pendingRiders.length > 0 && <span className="ml-1 bg-red-500 text-white px-1.5 py-0.5 rounded-full text-[8px]">{pendingRiders.length}</span>}</button>
              <button onClick={() => setActiveTab('products')} className={cn("px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all", activeTab === 'products' ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500")}>Approval {pendingProducts.length > 0 && <span className="ml-1 bg-red-500 text-white px-1.5 py-0.5 rounded-full text-[8px]">{pendingProducts.length}</span>}</button>
              <button onClick={() => setActiveTab('revenue')} className={cn("px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all", activeTab === 'revenue' ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500")}>Revenue</button>
+             <button onClick={() => setActiveTab('promotions')} className={cn("px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all", activeTab === 'promotions' ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500")}>Promos</button>
              <button onClick={() => setActiveTab('zones')} className={cn("px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all", activeTab === 'zones' ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500")}>Zones</button>
              <button onClick={() => setActiveTab('settings')} className={cn("px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all", activeTab === 'settings' ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500")}>Settings</button>
           </div>
@@ -4253,7 +4289,7 @@ function AdminView({
              <DarkInput label="Paystack secret key" type="password" value={settings.paystack_secret_key} onChange={(e) => setSettings({ ...settings, paystack_secret_key: e.target.value })} placeholder="sk_test_... (leave blank to keep)" />
              <DarkInput label="Platform fee %" value={settings.platform_fee_percent} onChange={(e) => setSettings({ ...settings, platform_fee_percent: e.target.value })} />
              <DarkInput
-               label="Delivery price per km (₵)"
+               label="Package delivery price per km (₵)"
                type="number"
                step="0.01"
                min="0.01"
@@ -4262,8 +4298,49 @@ function AdminView({
                placeholder="4.00"
              />
              <p className="text-[10px] text-slate-500 font-bold">
-               Courier and food delivery fees = distance (km) × this rate. Zone min/max caps still apply when set.
+               Package courier fees = distance (km) × this rate. Zone min/max caps still apply when set.
              </p>
+
+             <div className="pt-4 border-t border-slate-700 space-y-3">
+               <h4 className="text-sm font-bold text-white">Okada & Keke pricing</h4>
+               <div className="grid grid-cols-2 gap-3">
+                 <DarkInput
+                   label="Okada ₵/km"
+                   type="number"
+                   step="0.01"
+                   min="0.01"
+                   value={settings.okada_price_per_km}
+                   onChange={(e) => setSettings({ ...settings, okada_price_per_km: e.target.value })}
+                 />
+                 <DarkInput
+                   label="Okada min fee (₵)"
+                   type="number"
+                   step="0.01"
+                   min="0"
+                   value={settings.okada_min_fee}
+                   onChange={(e) => setSettings({ ...settings, okada_min_fee: e.target.value })}
+                 />
+                 <DarkInput
+                   label="Keke ₵/km"
+                   type="number"
+                   step="0.01"
+                   min="0.01"
+                   value={settings.keke_price_per_km}
+                   onChange={(e) => setSettings({ ...settings, keke_price_per_km: e.target.value })}
+                 />
+                 <DarkInput
+                   label="Keke min fee (₵)"
+                   type="number"
+                   step="0.01"
+                   min="0"
+                   value={settings.keke_min_fee}
+                   onChange={(e) => setSettings({ ...settings, keke_min_fee: e.target.value })}
+                 />
+               </div>
+               <p className="text-[10px] text-slate-500 font-bold">
+                 Motorcycle (Okada) and tricycle (Keke) rides use separate rates. Surge still applies during peak hours.
+               </p>
+             </div>
 
              <div className="pt-4 border-t border-slate-700 space-y-3">
                <div className="flex items-center justify-between gap-3">
@@ -4353,6 +4430,139 @@ function AdminView({
              <DarkButton type="submit" disabled={settingsSaving} className="w-full">{settingsSaving ? 'Saving…' : 'Save settings'}</DarkButton>
            </form>
          </DarkCard>
+       ) : activeTab === 'promotions' ? (
+         <div className="space-y-6">
+           <div className="flex justify-between items-center gap-4">
+             <div>
+               <h3 className="text-lg font-bold text-slate-800">Ride promotions</h3>
+               <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">
+                 Customer discounts + rider bonuses (Uber/Yango style)
+               </p>
+             </div>
+             <button
+               type="button"
+               onClick={() => setShowPromoForm(true)}
+               className="px-4 py-2 bg-slate-900 text-white rounded-xl text-[10px] font-black uppercase"
+             >
+               New promo
+             </button>
+           </div>
+           {showPromoForm && (
+             <DarkCard className="max-w-2xl">
+               <h4 className="text-white font-bold mb-4">Create promotion</h4>
+               <form
+                 className="space-y-3"
+                 onSubmit={async (e) => {
+                   e.preventDefault();
+                   setPromoSaving(true);
+                   try {
+                     await axios.post('/api/admin/promotions', {
+                       ...promoForm,
+                       customer_discount_percent: Number(promoForm.customer_discount_percent) || 0,
+                       customer_discount_fixed: Number(promoForm.customer_discount_fixed) || 0,
+                       rider_bonus_amount: Number(promoForm.rider_bonus_amount) || 0,
+                       max_redemptions: promoForm.max_redemptions ? Number(promoForm.max_redemptions) : null,
+                       target_region: promoForm.target_region || null,
+                       code: promoForm.code || null,
+                     });
+                     addNotification('Promotion created', 'success');
+                     setShowPromoForm(false);
+                     setPromoForm({
+                       name: '',
+                       code: '',
+                       service_types: 'okada,keke,package',
+                       customer_discount_percent: '0',
+                       customer_discount_fixed: '0',
+                       rider_bonus_amount: '0',
+                       target_region: '',
+                       enabled: true,
+                       max_redemptions: '',
+                     });
+                     const res = await axios.get('/api/admin/promotions');
+                     setPromotions(res.data || []);
+                   } catch (err) {
+                     addNotification(getApiError(err, 'Failed to create promotion'), 'warning');
+                   } finally {
+                     setPromoSaving(false);
+                   }
+                 }}
+               >
+                 <DarkInput label="Name" value={promoForm.name} onChange={(e) => setPromoForm({ ...promoForm, name: e.target.value })} />
+                 <DarkInput label="Promo code (optional)" value={promoForm.code} onChange={(e) => setPromoForm({ ...promoForm, code: e.target.value.toUpperCase() })} />
+                 <DarkInput label="Services (comma-separated)" value={promoForm.service_types} onChange={(e) => setPromoForm({ ...promoForm, service_types: e.target.value })} placeholder="okada,keke,package" />
+                 <div className="grid grid-cols-3 gap-3">
+                   <DarkInput label="Customer % off" type="number" value={promoForm.customer_discount_percent} onChange={(e) => setPromoForm({ ...promoForm, customer_discount_percent: e.target.value })} />
+                   <DarkInput label="Customer ₵ off" type="number" value={promoForm.customer_discount_fixed} onChange={(e) => setPromoForm({ ...promoForm, customer_discount_fixed: e.target.value })} />
+                   <DarkInput label="Rider bonus ₵" type="number" value={promoForm.rider_bonus_amount} onChange={(e) => setPromoForm({ ...promoForm, rider_bonus_amount: e.target.value })} />
+                 </div>
+                 <DarkInput label="Target region (blank = all)" value={promoForm.target_region} onChange={(e) => setPromoForm({ ...promoForm, target_region: e.target.value })} />
+                 <DarkInput label="Max redemptions" type="number" value={promoForm.max_redemptions} onChange={(e) => setPromoForm({ ...promoForm, max_redemptions: e.target.value })} />
+                 <div className="flex gap-2">
+                   <DarkButton type="submit" disabled={promoSaving || !promoForm.name.trim()}>{promoSaving ? 'Saving…' : 'Create'}</DarkButton>
+                   <button type="button" onClick={() => setShowPromoForm(false)} className="px-4 py-2 text-slate-400 text-xs font-bold uppercase">Cancel</button>
+                 </div>
+               </form>
+             </DarkCard>
+           )}
+           {promoLoading ? (
+             <LoadingIndicator />
+           ) : promotions.length === 0 ? (
+             <EmptyState title="No promotions" description="Create a promo to discount rides or pay rider bonuses." />
+           ) : (
+             <div className="grid gap-3">
+               {promotions.map((p: any) => (
+                 <div key={p.id} className="bg-white rounded-2xl border border-slate-100 p-5 flex flex-wrap justify-between gap-4 items-start">
+                   <div>
+                     <div className="flex items-center gap-2">
+                       <span className="font-black text-slate-800">{p.name}</span>
+                       {!p.enabled && <span className="text-[9px] font-black uppercase bg-slate-200 text-slate-600 px-2 py-0.5 rounded">Disabled</span>}
+                     </div>
+                     <p className="text-[11px] text-slate-500 font-bold mt-1">
+                       {p.code ? `Code ${p.code} · ` : ''}{p.service_types}
+                       {p.customer_discount_percent > 0 ? ` · ${p.customer_discount_percent}% off` : ''}
+                       {p.customer_discount_fixed > 0 ? ` · ₵${p.customer_discount_fixed} off` : ''}
+                       {p.rider_bonus_amount > 0 ? ` · Rider +₵${p.rider_bonus_amount}` : ''}
+                       {p.target_region ? ` · ${p.target_region}` : ''}
+                       {` · ${p.redemption_count}${p.max_redemptions ? `/${p.max_redemptions}` : ''} used`}
+                     </p>
+                   </div>
+                   <div className="flex gap-2">
+                     <button
+                       type="button"
+                       onClick={async () => {
+                         try {
+                           await axios.patch(`/api/admin/promotions/${p.id}`, { enabled: !p.enabled });
+                           const res = await axios.get('/api/admin/promotions');
+                           setPromotions(res.data || []);
+                         } catch (err) {
+                           addNotification(getApiError(err, 'Failed to update'), 'warning');
+                         }
+                       }}
+                       className="px-3 py-2 bg-slate-100 rounded-lg text-[10px] font-black uppercase"
+                     >
+                       {p.enabled ? 'Disable' : 'Enable'}
+                     </button>
+                     <button
+                       type="button"
+                       onClick={async () => {
+                         if (!confirm('Delete this promotion?')) return;
+                         try {
+                           await axios.delete(`/api/admin/promotions/${p.id}`);
+                           setPromotions((prev) => prev.filter((x) => x.id !== p.id));
+                         } catch (err) {
+                           addNotification(getApiError(err, 'Failed to delete'), 'warning');
+                         }
+                       }}
+                       className="px-3 py-2 bg-red-50 text-red-600 rounded-lg text-[10px] font-black uppercase"
+                     >
+                       Delete
+                     </button>
+                   </div>
+                 </div>
+               ))}
+             </div>
+           )}
+         </div>
        ) : activeTab === 'zones' ? (
          <div className="space-y-6">
            {/* Zone Form Modal */}

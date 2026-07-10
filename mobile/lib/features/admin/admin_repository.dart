@@ -6,7 +6,7 @@ import '../../models/admin_pricing_settings.dart';
 import '../../models/delivery_zone.dart';
 import '../../models/admin_pending_product.dart';
 import '../../models/admin_vendor.dart';
-import '../../models/rider_document.dart';
+import '../../models/admin_ride_promotion.dart';
 
 class AdminRepository {
   AdminRepository(this._api);
@@ -163,6 +163,38 @@ class AdminRepository {
       data: {'status': status},
     );
     return AdminVendor.fromJson(Map<String, dynamic>.from(res.data ?? {}));
+  }
+
+  Future<List<AdminRidePromotion>> fetchRidePromotions() async {
+    final res = await _api.dio.get<List<dynamic>>('/api/admin/promotions');
+    final data = res.data ?? [];
+    return data
+        .whereType<Map>()
+        .map((e) => AdminRidePromotion.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
+  }
+
+  Future<AdminRidePromotion> createRidePromotion(AdminRidePromotion promo) async {
+    final res = await _api.dio.post<Map<String, dynamic>>(
+      '/api/admin/promotions',
+      data: promo.toBody(),
+    );
+    return AdminRidePromotion.fromJson(Map<String, dynamic>.from(res.data ?? {}));
+  }
+
+  Future<AdminRidePromotion> updateRidePromotion(
+    String id,
+    Map<String, dynamic> body,
+  ) async {
+    final res = await _api.dio.patch<Map<String, dynamic>>(
+      '/api/admin/promotions/$id',
+      data: body,
+    );
+    return AdminRidePromotion.fromJson(Map<String, dynamic>.from(res.data ?? {}));
+  }
+
+  Future<void> deleteRidePromotion(String id) async {
+    await _api.dio.delete<Map<String, dynamic>>('/api/admin/promotions/$id');
   }
 
   static String errorMessage(Object err) {

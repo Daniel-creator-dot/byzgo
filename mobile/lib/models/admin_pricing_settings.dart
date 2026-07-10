@@ -5,6 +5,10 @@ class AdminPricingSettings {
     required this.deliveryPricePerKm,
     required this.deliveryMinFee,
     required this.deliveryMaxFee,
+    required this.okadaPricePerKm,
+    required this.okadaMinFee,
+    required this.kekePricePerKm,
+    required this.kekeMinFee,
     required this.surgeEnabled,
     required this.surgeMultiplier,
     required this.surgeStartTime,
@@ -19,6 +23,10 @@ class AdminPricingSettings {
   final String deliveryPricePerKm;
   final String deliveryMinFee;
   final String deliveryMaxFee;
+  final String okadaPricePerKm;
+  final String okadaMinFee;
+  final String kekePricePerKm;
+  final String kekeMinFee;
   final String commissionPercent;
   final String commissionInsurancePercent;
   final String commissionPlatformPercent;
@@ -40,6 +48,10 @@ class AdminPricingSettings {
           json['delivery_price_per_km']?.toString() ?? '4',
       deliveryMinFee: json['delivery_min_fee']?.toString() ?? '',
       deliveryMaxFee: json['delivery_max_fee']?.toString() ?? '',
+      okadaPricePerKm: json['okada_price_per_km']?.toString() ?? '3.5',
+      okadaMinFee: json['okada_min_fee']?.toString() ?? '6',
+      kekePricePerKm: json['keke_price_per_km']?.toString() ?? '2.5',
+      kekeMinFee: json['keke_min_fee']?.toString() ?? '5',
       commissionPercent: json['commission_percent']?.toString() ?? '10',
       commissionInsurancePercent:
           json['commission_insurance_percent']?.toString() ?? '3',
@@ -58,6 +70,10 @@ class AdminPricingSettings {
         'delivery_price_per_km': deliveryPricePerKm,
         'delivery_min_fee': deliveryMinFee.trim(),
         'delivery_max_fee': deliveryMaxFee.trim(),
+        'okada_price_per_km': okadaPricePerKm,
+        'okada_min_fee': okadaMinFee,
+        'keke_price_per_km': kekePricePerKm,
+        'keke_min_fee': kekeMinFee,
         'commission_percent': commissionPercent,
         'commission_insurance_percent': commissionInsurancePercent,
         'commission_platform_percent': commissionPlatformPercent,
