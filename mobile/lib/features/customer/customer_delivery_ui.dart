@@ -523,11 +523,15 @@ class DeliveryQuoteCard extends StatelessWidget {
                     ),
                   ),
                   Text(
-                    formatCedis(fee),
-                    style: const TextStyle(
+                    loading
+                        ? 'Calculating…'
+                        : formatCedis(fee),
+                    style: TextStyle(
                       fontWeight: FontWeight.w900,
-                      fontSize: 20,
-                      color: BytzGoTheme.accentDark,
+                      fontSize: loading ? 16 : 20,
+                      color: loading
+                          ? BytzGoTheme.sheetMuted
+                          : BytzGoTheme.accentDark,
                     ),
                   ),
                 ],

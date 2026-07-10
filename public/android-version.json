@@ -1,6 +1,6 @@
 {
-  "version": "1.0.51+72",
-  "updated_at": "2026-07-10T05:20:16.613Z",
-  "size_bytes": 68730941,
+  "version": "1.0.52+73",
+  "updated_at": "2026-07-10T05:58:01.215Z",
+  "size_bytes": 68730945,
   "install_note": "Uninstall any older BytzGo app first, then install this APK. Includes schedule delivery, stuck PIN fix, and rider commission. If Google sign-in fails, use phone or email login."
 }

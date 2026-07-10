@@ -180,38 +180,58 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
     setState(() {
       _pricePerKm = _pricingConfig?.pricePerKm ?? defaultDeliveryPricePerKm;
       _quotedFee = null;
+      _quoteDistanceKm = null;
+      _quoteError = null;
       _surgeActive = _pricingConfig?.surgeActive ?? false;
     });
-    if (_pickup != null && _destination != null) {
-      _scheduleDeliveryQuote();
+    if (_hasRoutableCoords) {
+      _beginQuoteRefresh();
     }
   }
 
-  double get _deliveryFee {
-    if (_quotedFee != null) return _quotedFee!;
-    if (_quoteError != null) return 0;
-    if (_pickup == null || _destination == null) return 0;
-    if (!_pickup!.hasCoords || !_destination!.hasCoords) return 0;
-    final bounds = _pricingConfig?.boundsForRegion(_session.user?.region);
-    return courierFeeBetween(
-      _pickup!,
-      _destination!,
-      _pricePerKm,
-      minFee: bounds?.min,
-      maxFee: bounds?.max,
-    );
+  bool get _hasRoutableCoords =>
+      _pickup != null &&
+      _destination != null &&
+      _pickup!.hasCoords &&
+      _destination!.hasCoords;
+
+  bool get _quoteReady => _quotedFee != null && _quotedFee! > 0;
+
+  bool get _showQuoteCard => _hasRoutableCoords && (_quoteLoading || _quoteReady);
+
+  VoidCallback? get _requestButtonHandler {
+    if (_booking || _quoteLoading) return null;
+    if (_hasRoutableCoords && !_quoteReady) return null;
+    return _requestDelivery;
   }
+
+  String _requestButtonLabel() {
+    final service =
+        rideServiceRequestLabel(widget.vendorMode ? RideServiceType.package : _rideService);
+    final fee = _quotedFee;
+    if (fee != null && fee > 0) {
+      final price = formatCedis(fee);
+      return _scheduleLater ? 'Schedule $service · $price' : '$service · $price';
+    }
+    if (_quoteLoading && _hasRoutableCoords) return 'Calculating…';
+    return _scheduleLater ? 'Schedule $service' : service;
+  }
+
+  void _beginQuoteRefresh() {
+    setState(() {
+      _quotedFee = null;
+      _quoteDistanceKm = null;
+      _quoteError = null;
+      _quoteLoading = true;
+    });
+    _scheduleDeliveryQuote();
+  }
+
+  double get _deliveryFee => _quotedFee ?? 0;
 
   double get _routeDistanceKm {
     if (_quoteDistanceKm != null && _quoteDistanceKm! > 0) return _quoteDistanceKm!;
-    if (_pickup == null || _destination == null) return 0;
-    if (!_pickup!.hasCoords || !_destination!.hasCoords) return 0;
-    return haversineDistanceKm(
-      _pickup!.lat,
-      _pickup!.lng,
-      _destination!.lat,
-      _destination!.lng,
-    );
+    return 0;
   }
 
   String get _packageType => _itemCtrl.text.trim().isEmpty ? 'Package' : _itemCtrl.text.trim();
@@ -618,6 +638,19 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
     } catch (_) {}
   }
 
+  void _onRouteChanged() {
+    if (_hasRoutableCoords) {
+      _beginQuoteRefresh();
+    } else if (mounted) {
+      setState(() {
+        _quotedFee = null;
+        _quoteDistanceKm = null;
+        _quoteError = null;
+        _quoteLoading = false;
+      });
+    }
+  }
+
   void _scheduleDeliveryQuote() {
     _quoteDebounce?.cancel();
     _quoteDebounce = Timer(const Duration(milliseconds: 450), _refreshDeliveryQuote);
@@ -649,6 +682,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
         destLng: _destination!.lng,
         pickupRegion: region,
         destinationRegion: region,
+        serviceType: widget.vendorMode ? RideServiceType.package : _rideService,
       );
       if (!mounted) return;
       setState(() {
@@ -1223,7 +1257,15 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
         _resolvingDropoff = false;
       }
     });
-    _scheduleDeliveryQuote();
+    if (_hasRoutableCoords) {
+      _beginQuoteRefresh();
+    } else {
+      setState(() {
+        _quotedFee = null;
+        _quoteDistanceKm = null;
+        _quoteLoading = false;
+      });
+    }
   }
 
   Future<void> _loadOrders() async {
@@ -1294,7 +1336,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
         _pickupCtrl.text = point.address;
         _pickMode = MapPickMode.pickup;
       });
-      _scheduleDeliveryQuote();
+      _onRouteChanged();
       return;
     }
     setState(() {
@@ -1314,7 +1356,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
       _pickupCtrl.text = label;
       _resolvingPickup = false;
     });
-    _scheduleDeliveryQuote();
+    _onRouteChanged();
   }
 
   Future<void> _onDropoffLocation(LocationPoint point) async {
@@ -1324,7 +1366,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
         _dropoffCtrl.text = point.address;
         _pickMode = MapPickMode.destination;
       });
-      _scheduleDeliveryQuote();
+      _onRouteChanged();
       return;
     }
     setState(() {
@@ -1344,7 +1386,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
       _dropoffCtrl.text = label;
       _resolvingDropoff = false;
     });
-    _scheduleDeliveryQuote();
+    _onRouteChanged();
   }
 
   void _onAddressEdited({required bool isPickup, required String text}) {
@@ -1358,6 +1400,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
         _destination = draft;
       }
     });
+    _onRouteChanged();
   }
 
   double? _expectedTotalFromOrderError(Object err) {
@@ -1645,11 +1688,11 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
                         trip,
                         embedded: widget.embedded,
                       ))
-            : (widget.embedded ? (fee > 0 ? 0.64 : 0.58) : (fee > 0 ? 0.78 : 0.72)),
+            : (widget.embedded ? (_showQuoteCard ? 0.64 : 0.58) : (_showQuoteCard ? 0.78 : 0.72)),
         bottomInset: widget.embedded ? 12 : 0,
         padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
         footerPadding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
-        scrollBottomPadding: !tracking && fee > 0 ? 12 : 0,
+        scrollBottomPadding: !tracking && _showQuoteCard ? 12 : 0,
         footer: tracking
             ? null
             : Column(
@@ -1657,12 +1700,12 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             RideAnimatedReveal(
-              visible: fee > 0,
+              visible: _showQuoteCard,
               child: Padding(
                 padding: const EdgeInsets.only(bottom: 10),
                 child: DeliveryQuoteCard(
-                  key: ValueKey('fee-$fee-$_surgeActive'),
-                  fee: fee,
+                  key: ValueKey('fee-${_quotedFee ?? 0}-$_surgeActive-$_quoteLoading'),
+                  fee: _deliveryFee,
                   distanceKm: _routeDistanceKm,
                   surgeActive: _surgeActive,
                   loading: _quoteLoading,
@@ -1670,16 +1713,10 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
               ),
             ),
             RidePrimaryButton(
-              label: fee > 0
-                  ? (_scheduleLater
-                      ? 'Schedule ${rideServiceRequestLabel(widget.vendorMode ? RideServiceType.package : _rideService)} · ${formatCedis(fee)}'
-                      : '${rideServiceRequestLabel(widget.vendorMode ? RideServiceType.package : _rideService)} · ${formatCedis(fee)}')
-                  : (_scheduleLater
-                      ? 'Schedule ${rideServiceRequestLabel(widget.vendorMode ? RideServiceType.package : _rideService)}'
-                      : rideServiceRequestLabel(widget.vendorMode ? RideServiceType.package : _rideService)),
+              label: _requestButtonLabel(),
               icon: (widget.vendorMode ? RideServiceType.package : _rideService).icon,
-              loading: _booking,
-              onPressed: _requestDelivery,
+              loading: _booking || (_quoteLoading && _hasRoutableCoords),
+              onPressed: _requestButtonHandler,
             ),
           ],
         ),
@@ -1763,7 +1800,9 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
                         _passengerCount = 2;
                       }
                     });
-                    _scheduleDeliveryQuote();
+                    if (_hasRoutableCoords) {
+                      _beginQuoteRefresh();
+                    }
                   },
                 ),
                 if (_rideService.isPassengerRide) ...[
