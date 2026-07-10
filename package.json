@@ -38,7 +38,7 @@
     "play:validate": "powershell -ExecutionPolicy Bypass -File mobile/scripts/validate_play_release.ps1",
     "setup:firebase:android": "npm --prefix backend run setup:firebase:android",
     "copy:legal": "node scripts/copy-legal-to-public.mjs",
-    "build:render": "npm ci && npm run copy:legal && node scripts/sync-apk-for-render.mjs && npm install --prefix backend --omit=dev",
+    "build:render": "npm ci && npm run copy:legal && npm run build && node scripts/sync-apk-for-render.mjs && npm install --prefix backend --omit=dev",
     "redeploy:production:sh": "bash scripts/redeploy-production.sh",
     "start:render": "npm --prefix backend run start",
     "start": "vite",
@@ -56,6 +56,7 @@
   },
   "dependencies": {
     "@google/genai": "^1.29.0",
+    "@react-oauth/google": "^0.12.2",
     "@supabase/supabase-js": "^2.106.0",
     "@tailwindcss/vite": "^4.1.14",
     "@vis.gl/react-google-maps": "^1.8.3",

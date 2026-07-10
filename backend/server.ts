@@ -5828,6 +5828,199 @@ app.post('/api/admin/sms-test', authenticateToken, async (req: any, res) => {
   }
 });
 
+const SMS_BLAST_MAX_RECIPIENTS = 300;
+const SMS_BLAST_MAX_LENGTH = 480;
+
+type SmsBlastAudience =
+  | 'customers'
+  | 'riders'
+  | 'riders_active'
+  | 'riders_online'
+  | 'vendors'
+  | 'owners'
+  | 'all'
+  | 'custom';
+
+function normalizeSmsAudience(value: unknown): SmsBlastAudience | null {
+  const s = String(value ?? '').trim().toLowerCase();
+  const allowed: SmsBlastAudience[] = [
+    'customers',
+    'riders',
+    'riders_active',
+    'riders_online',
+    'vendors',
+    'owners',
+    'all',
+    'custom',
+  ];
+  return (allowed as string[]).includes(s) ? (s as SmsBlastAudience) : null;
+}
+
+async function countSmsAudience(audience: SmsBlastAudience, region?: string | null): Promise<number> {
+  const phones = await resolveSmsAudiencePhones(audience, { region });
+  return phones.length;
+}
+
+async function resolveSmsAudiencePhones(
+  audience: SmsBlastAudience,
+  opts: { phones?: string[]; region?: string | null } = {}
+): Promise<string[]> {
+  const region = opts.region?.trim() || null;
+  const regionClause = region
+    ? `AND LOWER(TRIM(COALESCE(region, ''))) = LOWER($1)`
+    : '';
+  const regionParam = region ? [region] : [];
+
+  if (audience === 'custom') {
+    const raw = Array.isArray(opts.phones) ? opts.phones : [];
+    const set = new Set<string>();
+    for (const p of raw) {
+      if (typeof p !== 'string' || !p.trim()) continue;
+      if (!isValidGhanaPhone(p)) continue;
+      set.add(formatGhanaPhone(p));
+    }
+    return [...set];
+  }
+
+  let roleFilter = '';
+  let statusFilter = '';
+  if (audience === 'customers') roleFilter = `role = 'customer'`;
+  else if (audience === 'riders') roleFilter = `role = 'rider'`;
+  else if (audience === 'riders_active') {
+    roleFilter = `role = 'rider'`;
+    statusFilter = `AND status = 'active'`;
+  } else if (audience === 'riders_online') {
+    roleFilter = `role = 'rider'`;
+    statusFilter = `AND status = 'active' AND is_online = true`;
+  } else if (audience === 'vendors') roleFilter = `role = 'vendor'`;
+  else if (audience === 'owners') roleFilter = `role = 'owner'`;
+  else if (audience === 'all') roleFilter = `role IN ('customer', 'rider', 'vendor', 'owner', 'admin')`;
+  else return [];
+
+  const result = await pool.query(
+    `SELECT DISTINCT phone FROM users
+     WHERE phone IS NOT NULL AND TRIM(phone) <> ''
+     AND ${roleFilter}
+     ${statusFilter}
+     ${regionClause}`,
+    regionParam
+  );
+
+  const set = new Set<string>();
+  for (const row of result.rows) {
+    const phone = row.phone?.toString().trim();
+    if (!phone || !isValidGhanaPhone(phone)) continue;
+    set.add(formatGhanaPhone(phone));
+  }
+  return [...set];
+}
+
+/** Audience counts for admin SMS blast UI. */
+app.get('/api/admin/sms/audience', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'admin') return res.sendStatus(403);
+  const region = typeof req.query.region === 'string' ? req.query.region.trim() : null;
+  try {
+    const audiences: SmsBlastAudience[] = [
+      'customers',
+      'riders',
+      'riders_active',
+      'riders_online',
+      'vendors',
+      'owners',
+      'all',
+    ];
+    const counts: Record<string, number> = {};
+    for (const a of audiences) {
+      counts[a] = await countSmsAudience(a, region);
+    }
+    const cfg = await getSmsConfig();
+    res.json({
+      counts,
+      region: region || null,
+      sms_configured: Boolean(cfg.apiKey && cfg.apiKey.length > 8),
+      sender_id: cfg.senderId,
+      max_recipients: SMS_BLAST_MAX_RECIPIENTS,
+      max_message_length: SMS_BLAST_MAX_LENGTH,
+    });
+  } catch (err: any) {
+    console.error('[admin/sms/audience]', err);
+    res.status(500).json({ message: 'Failed to load SMS audience' });
+  }
+});
+
+/** Promotional / ops SMS blast to customers, riders, vendors, or custom numbers. */
+app.post('/api/admin/sms/blast', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'admin') return res.sendStatus(403);
+
+  const audience = normalizeSmsAudience(req.body?.audience);
+  const message = String(req.body?.message ?? '').trim();
+  const region =
+    typeof req.body?.region === 'string' && req.body.region.trim()
+      ? req.body.region.trim()
+      : null;
+  const customPhones = Array.isArray(req.body?.phones) ? req.body.phones : [];
+
+  if (!audience) {
+    return res.status(400).json({
+      message:
+        'Choose audience: customers, riders, riders_active, riders_online, vendors, owners, all, or custom.',
+    });
+  }
+  if (!message || message.length < 3) {
+    return res.status(400).json({ message: 'Enter a message (at least 3 characters).' });
+  }
+  if (message.length > SMS_BLAST_MAX_LENGTH) {
+    return res.status(400).json({
+      message: `Message too long (max ${SMS_BLAST_MAX_LENGTH} characters).`,
+    });
+  }
+
+  try {
+    let phones = await resolveSmsAudiencePhones(audience, { phones: customPhones, region });
+    if (!phones.length) {
+      return res.status(400).json({ message: 'No valid phone numbers found for this audience.' });
+    }
+    if (phones.length > SMS_BLAST_MAX_RECIPIENTS) {
+      phones = phones.slice(0, SMS_BLAST_MAX_RECIPIENTS);
+    }
+
+    const results: { phone: string; ok: boolean; error?: string }[] = [];
+    let sent = 0;
+    let failed = 0;
+
+    for (const phone of phones) {
+      try {
+        await sendSMS(phone, message);
+        sent += 1;
+        results.push({ phone, ok: true });
+      } catch (err: any) {
+        failed += 1;
+        results.push({ phone, ok: false, error: err?.message || 'Send failed' });
+      }
+      // Gentle throttle for INTEK gateway
+      await new Promise((r) => setTimeout(r, 120));
+    }
+
+    console.info(
+      `[admin/sms/blast] admin=${req.user.id} audience=${audience} sent=${sent} failed=${failed}`,
+    );
+
+    res.json({
+      success: failed === 0,
+      audience,
+      region,
+      message_preview: message.slice(0, 80) + (message.length > 80 ? '…' : ''),
+      total: phones.length,
+      sent,
+      failed,
+      results: results.slice(0, 50),
+    });
+  } catch (err: any) {
+    console.error('[admin/sms/blast]', err);
+    res.status(502).json({ message: err.message || 'SMS blast failed' });
+  }
+});
+
 /** Live fleet + ops counters for admin control tower. */
 app.get('/api/admin/overview', authenticateToken, async (req: any, res) => {
   if (req.user.role !== 'admin') return res.sendStatus(403);
