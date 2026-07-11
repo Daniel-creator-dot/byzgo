@@ -186,10 +186,11 @@ class _CustomerShopCheckoutScreenState extends State<CustomerShopCheckoutScreen>
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            'Order placed — see Activity tab (${widget.vendor.name}, ${quote.distanceKm.toStringAsFixed(1)} km)',
+            'Order sent to ${widget.vendor.name} — they will confirm your medicines, then a rider delivers to you',
           ),
           behavior: SnackBarBehavior.floating,
           backgroundColor: BytzGoTheme.accentDark,
+          duration: const Duration(seconds: 5),
         ),
       );
     } catch (e) {

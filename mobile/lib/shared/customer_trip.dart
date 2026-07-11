@@ -25,7 +25,18 @@ bool customerCanShowDeliveryPin(Order order) {
 bool customerIsSearchingBiker(Order order) {
   if (['cancelled', 'delivered'].contains(order.status)) return false;
   if (customerOrderHasActiveRider(order)) return false;
+  // Pharmacy: rider dispatch starts only after the vendor marks the order ready.
+  if (customerOrderHasShopPickup(order)) {
+    return order.status == 'ready';
+  }
   return const {'pending', 'ready', 'preparing'}.contains(order.status);
+}
+
+/// Pharmacy order waiting for vendor to confirm items before rider dispatch.
+bool customerPharmacyAwaitingConfirm(Order order) {
+  return customerOrderHasShopPickup(order) &&
+      !customerOrderHasActiveRider(order) &&
+      const {'pending', 'preparing'}.contains(order.status);
 }
 
 /// Assigned rider is shown on map / contact cards only while the trip is active.
@@ -153,19 +164,19 @@ String customerTripHeadline(Order order) {
       return shop ? 'Picked up — on the way' : 'On the way to you';
     case 'ready':
       if (order.riderId != null) {
-        return shop ? 'Rider heading to shop' : 'Biker en route to pickup';
+        return shop ? 'Rider heading to pharmacy' : 'Biker en route to pickup';
       }
-      return shop ? 'Finding a rider for your shop order…' : 'Finding a biker nearby…';
+      return shop ? 'Finding a rider for your order…' : 'Finding a biker nearby…';
     case 'preparing':
-      if (order.riderId != null && shop) return 'Rider heading to shop';
-      return order.riderId != null ? 'Biker found' : 'Preparing';
+      if (order.riderId != null && shop) return 'Rider heading to pharmacy';
+      return shop ? 'Pharmacy preparing your order' : (order.riderId != null ? 'Biker found' : 'Preparing');
     case 'scheduled':
       return 'Scheduled delivery';
     case 'pending':
       if (order.riderId != null) {
-        return shop ? 'Rider heading to shop' : 'Biker found';
+        return shop ? 'Rider heading to pharmacy' : 'Biker found';
       }
-      return shop ? 'Finding a rider for your shop order…' : 'Finding a biker nearby…';
+      return shop ? 'Waiting for pharmacy confirmation' : 'Finding a biker nearby…';
     case 'cancelled':
       return 'Trip cancelled';
     default:
@@ -230,8 +241,16 @@ String customerTripSubline(Order order, {String? etaPhrase}) {
         return 'Your biker is heading to the pickup point';
       }
       return customerOrderHasShopPickup(order)
-          ? 'We\'re matching a rider to collect from the shop'
+          ? 'Pharmacy confirmed — matching a rider now'
           : 'We\'re matching you with the nearest biker';
+    case 'preparing':
+      if (customerOrderHasShopPickup(order)) {
+        return order.riderId != null
+            ? 'Your rider is going to $shopLabel'
+            : '$shopLabel is preparing your medicines';
+      }
+      if (order.riderId != null) return 'Biker assigned — waiting at pickup';
+      return 'Your order is being prepared';
     case 'pending':
       if (order.riderId != null) {
         if (customerOrderHasShopPickup(order)) {
@@ -240,7 +259,7 @@ String customerTripSubline(Order order, {String? etaPhrase}) {
         return 'Biker assigned — waiting at pickup';
       }
       return customerOrderHasShopPickup(order)
-          ? 'We\'re matching a rider to collect from the shop'
+          ? '$shopLabel is checking item availability — rider dispatches after confirmation'
           : 'We\'re matching you with the nearest biker';
     default:
       return '';
@@ -249,12 +268,28 @@ String customerTripSubline(Order order, {String? etaPhrase}) {
 
 int _tripProgressIndex(Order order) {
   if (order.status == 'cancelled') return -1;
+  if (customerOrderHasShopPickup(order)) {
+    switch (order.status) {
+      case 'delivered':
+        return 5;
+      case 'arrived':
+        return 4;
+      case 'picked_up':
+        return 3;
+      case 'ready':
+      case 'preparing':
+        return customerOrderHasActiveRider(order) ? 2 : 1;
+      case 'pending':
+      default:
+        return 0;
+    }
+  }
   if (order.status == 'delivered') return 5;
   if (order.status == 'arrived') return 4;
   if (order.status == 'picked_up') return 3;
   if (order.riderId != null &&
       ['ready', 'preparing', 'pending'].contains(order.status)) {
-    return customerOrderHasShopPickup(order) ? 2 : 1;
+    return 1;
   }
   if (order.riderId != null) return 1;
   return 0;
@@ -268,14 +303,23 @@ List<CustomerTripStep> customerTripSteps(Order order) {
   }
   final idx = _tripProgressIndex(order);
   final shop = customerOrderHasShopPickup(order);
-  final labels = [
-    'Requested',
-    'Rider found',
-    shop ? 'At shop' : 'At pickup',
-    'On the way',
-    'Arrived',
-    'Delivered',
-  ];
+  final labels = shop
+      ? const [
+          'Order placed',
+          'Pharmacy confirmed',
+          'Rider assigned',
+          'Picked up',
+          'Arrived',
+          'Delivered',
+        ]
+      : const [
+          'Requested',
+          'Rider found',
+          'At pickup',
+          'On the way',
+          'Arrived',
+          'Delivered',
+        ];
   return List.generate(labels.length, (i) {
     return CustomerTripStep(
       label: labels[i],

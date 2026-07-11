@@ -1403,7 +1403,7 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
               : forcedRole === 'rider'
                 ? 'Accept jobs, navigate trips, and get paid'
                 : forcedRole === 'vendor'
-                  ? 'Manage your shop and incoming orders'
+                  ? 'Manage your pharmacy or health store'
                   : 'Fast bike delivery — track every trip live'}
           </p>
           {forcedRole === 'admin' && (
@@ -1419,6 +1419,14 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
               <p className="text-[10px] font-black uppercase tracking-widest text-brand-green mb-1">Rider sign-in</p>
               <p className="text-xs text-slate-200 leading-relaxed">
                 Use a <strong className="text-white">rider</strong> account here. Tap Join to register as a driver, or sign in with your phone or email.
+              </p>
+            </motion.div>
+          )}
+          {forcedRole === 'vendor' && (
+            <motion.div className="mt-4 mx-auto max-w-sm p-3 rounded-2xl bg-black/50 backdrop-blur-md text-left border border-white/10">
+              <p className="text-[10px] font-black uppercase tracking-widest text-sky-400 mb-1">Pharmacy &amp; health only</p>
+              <p className="text-xs text-slate-200 leading-relaxed">
+                Register as a <strong className="text-white">licensed pharmacy</strong> or <strong className="text-white">health retailer</strong>. Restaurants and general shops are not accepted on BytzGo.
               </p>
             </motion.div>
           )}
@@ -1814,7 +1822,8 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
 
 function isPharmacyShop(vendor: { name?: string; shop_category?: string } | null) {
   if (!vendor) return false;
-  if ((vendor.shop_category || '').toLowerCase() === 'pharmacy') return true;
+  const cat = (vendor.shop_category || '').toLowerCase();
+  if (cat === 'pharmacy' || cat === 'health') return true;
   return /prime\s*care/i.test(vendor.name || '');
 }
 
@@ -1831,6 +1840,35 @@ function productFallbackImage(item: { image_url?: string; category?: string; nam
 // UPDATED TO USE REAL DATA FROM PROPS AND API
 function CustomerView({ user, orders, products, vendors, riderLocations, paystackKey, setPaystackKey, onPlaceOrder, addNotification, cart, setCart, isCartOpen, setIsCartOpen, activeTab, setActiveTab, zones, deliveryPricePerKm, subtotal, deliveryFee, total, refreshData, onUserUpdate }: { user: AuthUser, orders: Order[], products: any[], vendors: any[], riderLocations: { [key: string]: { lat: number, lng: number } }, paystackKey: string, setPaystackKey: (k: string) => void, onPlaceOrder: (items: any[], total: number, vendorId?: string, extra?: any) => void, addNotification: (m: string, t?: 'info' | 'success' | 'warning') => void, cart: any[], setCart: React.Dispatch<React.SetStateAction<any[]>>, isCartOpen: boolean, setIsCartOpen: (v: boolean) => void, activeTab: string, setActiveTab: (v: any) => void, zones: any[], deliveryPricePerKm: number, subtotal: number, deliveryFee: number, total: number, refreshData: () => Promise<void>, onUserUpdate: (user: AuthUser, token: string) => void }) {
   const [selectedVendor, setSelectedVendor] = useState<any | null>(null);
+  const [menuSearch, setMenuSearch] = useState('');
+  const [menuDrugHits, setMenuDrugHits] = useState<{ vendor: any; matches: any[] }[]>([]);
+  const [menuSearching, setMenuSearching] = useState(false);
+
+  useEffect(() => {
+    if (activeTab !== 'menu' || selectedVendor) {
+      setMenuDrugHits([]);
+      return;
+    }
+    const q = menuSearch.trim();
+    if (q.length < 2) {
+      setMenuDrugHits([]);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      setMenuSearching(true);
+      try {
+        const res = await axios.get('/api/pharmacy-search', {
+          params: { q, region: user.region || undefined },
+        });
+        setMenuDrugHits(Array.isArray(res.data) ? res.data : []);
+      } catch {
+        setMenuDrugHits([]);
+      } finally {
+        setMenuSearching(false);
+      }
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [menuSearch, activeTab, selectedVendor, user.region]);
   const [isTopUpOpen, setIsTopUpOpen] = useState(false);
   const [topUpAmount, setTopUpAmount] = useState('50');
   const [orderToCancel, setOrderToCancel] = useState<Order | null>(null);
@@ -1922,7 +1960,11 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
     ? products.filter(p => p.vendor_id === selectedVendor.id)
     : [];
 
-  const marketplace = selectedVendor ? vendorProducts : vendors;
+  const menuBrowseVendors = !selectedVendor && menuSearch.trim().length >= 2 && menuDrugHits.length > 0
+    ? menuDrugHits.map(h => ({ ...h.vendor, _drugMatches: h.matches }))
+    : vendors;
+
+  const marketplace = selectedVendor ? vendorProducts : menuBrowseVendors;
 
   const addToCart = (item: any) => {
     if (cart.length > 0 && cart[0].vendor_id !== item.vendor_id) {
@@ -2267,7 +2309,7 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
              <div>
                <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Optional</p>
                <h3 className="text-lg font-black text-white">
-                 {selectedVendor ? selectedVendor.name : 'Browse shops'}
+                 {selectedVendor ? selectedVendor.name : 'Pharmacies & health'}
                </h3>
              </div>
              {selectedVendor && (
@@ -2276,6 +2318,22 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
                </button>
              )}
            </div>
+
+           {!selectedVendor && (
+             <div className="relative">
+               <input
+                 type="search"
+                 value={menuSearch}
+                 onChange={e => setMenuSearch(e.target.value)}
+                 placeholder="Search medicine or pharmacy…"
+                 className="w-full bg-slate-900 border border-slate-800 text-white placeholder:text-slate-500 py-4 pl-12 pr-4 rounded-2xl font-bold text-sm focus:outline-none focus:border-brand-blue"
+               />
+               <Package size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" />
+               {menuSearching && (
+                 <span className="absolute right-4 top-1/2 -translate-y-1/2 text-[10px] font-black uppercase tracking-widest text-slate-500">Searching…</span>
+               )}
+             </div>
+           )}
 
             <div className={cn("grid gap-4 sm:gap-8", selectedVendor ? "grid-cols-1 sm:grid-cols-2 lg:grid-cols-4" : "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3")}>
              {selectedVendor ? (
@@ -2305,7 +2363,7 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
                  </div>
                )
              ) : (
-               vendors.map(vendor => (
+               marketplace.map(vendor => (
                  <div key={vendor.id} onClick={() => setSelectedVendor(vendor)} className="bg-slate-900/90 rounded-[2.5rem] border border-slate-800 hover:shadow-2xl hover:shadow-brand-blue/10 transition-all cursor-pointer group overflow-hidden flex flex-col">
                     <div className="h-48 bg-slate-100 relative overflow-hidden group-hover:scale-105 transition-transform">
                       <img src={vendor.cover_image || 'https://images.unsplash.com/photo-1441986300917-64674bd600d8?auto=format&fit=crop&q=80&w=600'} alt={vendor.name} className="w-full h-full object-cover" />
@@ -2318,12 +2376,27 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
                     </div>
                     <div className="p-6 flex flex-col flex-1">
                       <h4 className="font-black text-2xl text-white tracking-tight leading-tight mb-2">{vendor.name}</h4>
-                      <p className="text-slate-500 font-medium text-sm flex items-center gap-2 mb-6">
+                      <p className="text-slate-500 font-medium text-sm flex items-center gap-2 mb-3">
                         <MapPin size={14} className="text-brand-blue" />
                         {vendor.address || 'Accra, Ghana'}
                       </p>
-                      <div className="mt-auto flex items-center justify-between">
-                        <span className="text-slate-400 text-[10px] font-black uppercase tracking-widest">{vendor.email}</span>
+                      {vendor._drugMatches?.length > 0 && (
+                        <div className="flex flex-wrap gap-2 mb-4">
+                          {vendor._drugMatches.slice(0, 3).map((m: any) => (
+                            <span key={m.id} className="text-[10px] font-black uppercase tracking-wider bg-brand-blue/10 text-brand-blue px-2 py-1 rounded-lg border border-brand-blue/20">
+                              {m.name} · {formatCedis(m.price)}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      <div className="mt-auto flex items-center justify-between gap-3">
+                        {vendor.phone ? (
+                          <a href={`tel:${vendor.phone}`} onClick={e => e.stopPropagation()} className="text-brand-green text-[10px] font-black uppercase tracking-widest flex items-center gap-1">
+                            <Phone size={12} /> Call
+                          </a>
+                        ) : (
+                          <span className="text-slate-500 text-[10px] font-black uppercase tracking-widest">Pharmacy</span>
+                        )}
                         <div className="flex items-center gap-2 text-brand-blue font-black text-[10px] uppercase tracking-widest group-hover:translate-x-1 transition-transform">
                            Explore <ChevronRight size={12} />
                         </div>
@@ -2629,7 +2702,8 @@ function VendorView({
     lat: user.lat || GHANA_CENTER.lat, 
     lng: user.lng || GHANA_CENTER.lng,
     region: user.region || '',
-    shop_category: (user as { shop_category?: string }).shop_category || 'food',
+    phone: user.phone || '',
+    shop_category: (user as { shop_category?: string }).shop_category || 'pharmacy',
   });
   const storeGeoSet = useRef(false);
 
@@ -2927,8 +3001,9 @@ function VendorView({
                   </div>
 
                   <div className="flex gap-2 sm:gap-3 flex-wrap items-center">
-                     {isShopOrder && order.status === 'pending' && <button onClick={() => onUpdateStatus(order.id, 'preparing')} className="flex-1 py-3 sm:py-4 bg-brand-blue text-white rounded-xl sm:rounded-2xl font-black uppercase tracking-widest text-[10px] sm:text-xs">Start Cook</button>}
-                     {isShopOrder && order.status === 'preparing' && <button onClick={() => onUpdateStatus(order.id, 'ready')} className="flex-1 py-3 sm:py-4 bg-brand-green text-white rounded-xl sm:rounded-2xl font-black uppercase tracking-widest text-[10px] sm:text-xs">Mark Ready</button>}
+                     {isShopOrder && order.status === 'pending' && <button onClick={() => onUpdateStatus(order.id, 'preparing')} className="flex-1 py-3 sm:py-4 bg-brand-blue text-white rounded-xl sm:rounded-2xl font-black uppercase tracking-widest text-[10px] sm:text-xs">Start preparing</button>}
+                     {isShopOrder && order.status === 'preparing' && <button onClick={() => onUpdateStatus(order.id, 'ready')} className="flex-1 py-3 sm:py-4 bg-brand-green text-white rounded-xl sm:rounded-2xl font-black uppercase tracking-widest text-[10px] sm:text-xs">Confirm & dispatch rider</button>}
+                     {isShopOrder && order.status === 'pending' && <button onClick={() => onUpdateStatus(order.id, 'ready')} className="flex-1 py-3 sm:py-4 bg-brand-green text-white rounded-xl sm:rounded-2xl font-black uppercase tracking-widest text-[10px] sm:text-xs">Confirm now</button>}
                      <div className="px-3 sm:px-4 py-2 bg-slate-100 rounded-xl text-[10px] font-black uppercase tracking-widest self-center">{order.status}</div>
                      <PaymentStatusBadge order={order} />
                   </div>
@@ -3091,19 +3166,34 @@ function VendorView({
             </div>
 
             <div className="space-y-3">
-              <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Shop category (customer browse)</label>
+              <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Store type (pharmacy &amp; health only)</label>
               <select
                 required
                 value={storeForm.shop_category}
                 onChange={e => setStoreForm({ ...storeForm, shop_category: e.target.value })}
                 className="w-full bg-slate-50 border border-slate-100 rounded-2xl py-4 px-6 font-bold text-sm focus:outline-none focus:border-brand-blue transition-all"
               >
-                <option value="pharmacy">Pharmacy</option>
-                <option value="restaurant">Restaurant</option>
-                <option value="food">Food &amp; Drinks</option>
-                <option value="fashion">Fashion</option>
-                <option value="groceries">Groceries</option>
+                <option value="pharmacy">Licensed pharmacy</option>
+                <option value="health">Health retailer</option>
               </select>
+              <p className="text-[11px] text-slate-500 ml-2 leading-relaxed">
+                Restaurants and general shops are not supported on BytzGo. List medicines, OTC products, supplements, and medical supplies only.
+              </p>
+            </div>
+
+            <div className="space-y-3">
+              <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Shop phone (customers can call)</label>
+              <div className="relative">
+                <Phone size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" />
+                <input
+                  type="tel"
+                  required
+                  placeholder="e.g. 0247904675"
+                  value={storeForm.phone}
+                  onChange={e => setStoreForm({ ...storeForm, phone: e.target.value })}
+                  className="w-full bg-slate-50 border border-slate-100 rounded-2xl py-4 pl-12 pr-4 font-bold text-sm focus:outline-none focus:border-brand-blue transition-all"
+                />
+              </div>
             </div>
 
             <div className="space-y-3">

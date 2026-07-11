@@ -27,6 +27,10 @@ import '../../shared/data_url_image.dart';
 import '../../shared/system_chrome.dart';
 import '../../models/location_point.dart';
 import '../customer/customer_home_screen.dart';
+import 'vendor_store_profile_editor.dart';
+import '../shop_chat/vendor_shop_messages_panel.dart';
+import '../../shared/shop_chat_sheet.dart';
+import '../orders/orders_repository.dart';
 
 enum _VendorTab { overview, send, stock, orders, store }
 
@@ -109,8 +113,9 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
       if (order.vendorId == userId) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('New customer order'),
+            content: Text('New pharmacy order — confirm items to dispatch a rider'),
             behavior: SnackBarBehavior.floating,
+            backgroundColor: BytzGoTheme.accentDark,
           ),
         );
         unawaited(_load());
@@ -598,6 +603,8 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
         ),
       ),
       const SizedBox(height: 16),
+      const VendorShopMessagesPanel(),
+      const SizedBox(height: 16),
       _sectionTitle('Stock movement'),
       ..._dash!.recentOrders.take(5).map(_orderMovementTile),
       if (_dash!.recentOrders.isEmpty)
@@ -744,13 +751,13 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
       ),
       const SizedBox(height: 16),
       BytzHeroHeader(
-        kicker: 'Your shop',
-        title: 'Store settings',
+        kicker: 'Your store',
+        title: 'Pharmacy & health settings',
         assetPath: 'assets/branding/hero_delivery.png',
         height: 110,
       ),
       const SizedBox(height: 14),
-      _sectionTitle('Shop category (customer browse)'),
+      _sectionTitle('Store type (customer browse)'),
       const SizedBox(height: 8),
       Wrap(
         spacing: 8,
@@ -771,11 +778,13 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
         Text(_storeMsg!, style: const TextStyle(color: BytzGoTheme.accent, fontSize: 12)),
       ],
       const SizedBox(height: 16),
-      _infoRow('Region', user.region?.toString() ?? 'Not set'),
-      _infoRow('Address', user.address?.toString() ?? 'Not set'),
-      const SizedBox(height: 12),
+      VendorStoreProfileEditor(
+        user: user,
+        onSaved: (msg) => setState(() => _storeMsg = msg),
+      ),
+      const SizedBox(height: 16),
       Text(
-        'Use the Menu tab to add photos and prices. Toggle stock on/off anytime.',
+        'Use the Menu tab to add medicines and health products with photos and prices.',
         style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 11),
       ),
       const SizedBox(height: 24),
@@ -879,10 +888,57 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
     );
   }
 
+  Future<void> _updatePharmacyOrder(Order order, String nextStatus) async {
+    try {
+      await context.read<OrdersRepository>().updateOrderStatus(
+            orderId: order.id,
+            status: nextStatus,
+          );
+      if (!mounted) return;
+      final label = nextStatus == 'ready'
+          ? 'Order confirmed — finding a rider for delivery'
+          : nextStatus == 'preparing'
+              ? 'Preparing order'
+              : 'Order updated';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(label), behavior: SnackBarBehavior.floating),
+      );
+      await _load();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(OrdersRepository.errorMessage(e))),
+      );
+    }
+  }
+
+  String _pharmacyStatusLabel(String status) {
+    switch (status) {
+      case 'pending':
+        return 'Awaiting confirmation';
+      case 'preparing':
+        return 'Preparing';
+      case 'ready':
+        return 'Ready for rider';
+      case 'picked_up':
+        return 'Out for delivery';
+      case 'arrived':
+        return 'At customer';
+      case 'delivered':
+        return 'Delivered';
+      case 'cancelled':
+        return 'Cancelled';
+      default:
+        return status;
+    }
+  }
+
   Widget _orderMovementTile(Order o) {
     final items = o.items;
     final qty = items is List ? items.length : 0;
     final isPackage = o.isCourier;
+    final canChat = !isPackage && o.customerId.trim().isNotEmpty;
+    final isPharmacyOrder = !isPackage && o.vendorId.trim().isNotEmpty;
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(14),
@@ -891,70 +947,109 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: const Color(0xFF1E293B)),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: BytzGoTheme.brandBlue.withValues(alpha: 0.2),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Icon(
-              isPackage ? Icons.local_shipping_outlined : Icons.shopping_bag_outlined,
-              color: const Color(0xFF38BDF8),
-            ),
+          Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: BytzGoTheme.brandBlue.withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(
+                  isPackage ? Icons.local_shipping_outlined : Icons.medication_outlined,
+                  color: const Color(0xFF38BDF8),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '#${o.id.toString().length > 6 ? o.id.toString().substring(o.id.toString().length - 6) : o.id}',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    Text(
+                      '${isPackage ? 'Package' : 'Pharmacy order'} · ${_pharmacyStatusLabel(o.status)} · $qty items · ${formatCedis(o.total)}',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.5),
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (canChat)
+                IconButton(
+                  tooltip: 'Chat with customer',
+                  onPressed: () => openShopChatWithCustomer(
+                    context,
+                    customerId: o.customerId,
+                    customerName: o.customerName,
+                  ),
+                  icon: const Icon(Icons.chat_bubble_outline, color: Color(0xFF38BDF8)),
+                ),
+            ],
           ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+          if (isPharmacyOrder && o.status == 'pending') ...[
+            const SizedBox(height: 10),
+            Row(
               children: [
-                Text(
-                  '#${o.id.toString().length > 6 ? o.id.toString().substring(o.id.toString().length - 6) : o.id}',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w800,
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () => _updatePharmacyOrder(o, 'cancelled'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFFF87171),
+                      side: const BorderSide(color: Color(0xFF7F1D1D)),
+                    ),
+                    child: const Text('Out of stock'),
                   ),
                 ),
-                Text(
-                  '${isPackage ? 'Package' : 'Order'} · ${o.status} · $qty items · ${formatCedis(o.total)}',
-                  style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.5),
-                    fontSize: 11,
+                const SizedBox(width: 8),
+                Expanded(
+                  child: FilledButton(
+                    onPressed: () => _updatePharmacyOrder(o, 'preparing'),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: BytzGoTheme.brandBlue,
+                    ),
+                    child: const Text('Prepare'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: FilledButton(
+                    onPressed: () => _updatePharmacyOrder(o, 'ready'),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: BytzGoTheme.accent,
+                      foregroundColor: const Color(0xFF020617),
+                    ),
+                    child: const Text('Confirm'),
                   ),
                 ),
               ],
             ),
-          ),
+          ],
+          if (isPharmacyOrder && o.status == 'preparing') ...[
+            const SizedBox(height: 10),
+            FilledButton.icon(
+              onPressed: () => _updatePharmacyOrder(o, 'ready'),
+              icon: const Icon(Icons.check_circle_outline, size: 18),
+              label: const Text('Ready — dispatch rider'),
+              style: FilledButton.styleFrom(
+                backgroundColor: BytzGoTheme.accent,
+                foregroundColor: const Color(0xFF020617),
+              ),
+            ),
+          ],
         ],
       ),
     );
   }
-
-  Widget _infoRow(String label, String value) => Padding(
-        padding: const EdgeInsets.only(bottom: 8),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(
-              width: 88,
-              child: Text(
-                label,
-                style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.45),
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
-            Expanded(
-              child: Text(
-                value,
-                style: const TextStyle(color: Colors.white, fontSize: 13),
-              ),
-            ),
-          ],
-        ),
-      );
 }

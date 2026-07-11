@@ -125,6 +125,7 @@ function TripHistoryCard({
 }) {
   const vendor = vendors.find((v) => v.id === order.vendor_id);
   const isCourier = (order as Order & { order_type?: string }).order_type === 'courier';
+  const isShop = Boolean(order.vendor_id?.trim()) && !isCourier;
   const createdAt = (order as Order & { created_at?: string }).created_at || order.createdAt;
 
   return (
@@ -199,11 +200,15 @@ function TripHistoryCard({
             )}
           />
           <TrackingStep
-            label={isCourier ? 'Rider at pickup' : 'Preparing'}
-            active={['preparing', 'ready', 'picked_up', 'arrived', 'delivered'].includes(order.status)}
+            label={isCourier ? 'Rider at pickup' : isShop ? 'Pharmacy confirmed' : 'Preparing'}
+            active={
+              isShop
+                ? ['preparing', 'ready', 'picked_up', 'arrived', 'delivered'].includes(order.status)
+                : ['preparing', 'ready', 'picked_up', 'arrived', 'delivered'].includes(order.status)
+            }
           />
           <TrackingStep
-            label="On the way"
+            label={isShop ? 'Rider delivering' : 'On the way'}
             active={['picked_up', 'arrived', 'delivered'].includes(order.status)}
           />
           <TrackingStep
@@ -211,7 +216,7 @@ function TripHistoryCard({
             active={['arrived', 'delivered'].includes(order.status)}
           />
           <TrackingStep
-            label={isCourier ? 'Delivered' : 'Enjoy your meal'}
+            label={isCourier ? 'Delivered' : isShop ? 'Delivered' : 'Enjoy your meal'}
             active={order.status === 'delivered'}
           />
         </div>

@@ -12,6 +12,7 @@ import '../../shared/format.dart';
 import '../../shared/pharmacy_display.dart';
 import '../../shared/theme.dart';
 import '../../shared/external_navigation.dart';
+import '../../shared/shop_chat_sheet.dart';
 import '../../shared/vendor_contact.dart';
 import '../../shared/vendor_pickup.dart';
 import '../../shared/widgets/product_tile_image.dart';
@@ -437,6 +438,11 @@ class _CustomerVendorMenuScreenState extends State<CustomerVendorMenuScreen>
                     label: Text(formatVendorPhone(v.phone)),
                     onPressed: () => callVendorPhone(v.phone),
                   ),
+                ActionChip(
+                  avatar: const Icon(Icons.chat_bubble_outline, size: 18, color: BytzGoTheme.accent),
+                  label: const Text('Chat'),
+                  onPressed: () => openShopChatWithVendor(context, vendor: v),
+                ),
                 ActionChip(
                   avatar: const Icon(Icons.map, size: 18, color: BytzGoTheme.accentDark),
                   label: const Text('Open in Maps'),

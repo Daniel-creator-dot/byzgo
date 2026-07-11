@@ -339,7 +339,17 @@ async function userForAuthResponse(row: Record<string, unknown> | null | undefin
   return u;
 }
 
-const SHOP_CATEGORIES = ['pharmacy', 'food', 'restaurant', 'fashion', 'groceries'] as const;
+/** Marketplace is pharmacy & health retail only — restaurants and general shops are not supported. */
+const SHOP_CATEGORIES = ['pharmacy', 'health'] as const;
+
+function isAllowedShopCategory(raw: string | null | undefined): boolean {
+  const c = String(raw ?? '').trim().toLowerCase();
+  return (SHOP_CATEGORIES as readonly string[]).includes(c);
+}
+
+function defaultShopCategoryForRole(role: string | null | undefined): string | null {
+  return role === 'vendor' ? 'pharmacy' : null;
+}
 const SHOP_OPEN_STATUSES = ['open', 'busy', 'closed'] as const;
 type ShopOpenStatus = (typeof SHOP_OPEN_STATUSES)[number];
 
@@ -1526,7 +1536,10 @@ const initDb = async () => {
         ALTER TABLE users ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active';
         ALTER TABLE users ADD COLUMN IF NOT EXISTS region TEXT;
         ALTER TABLE users ADD COLUMN IF NOT EXISTS is_online BOOLEAN DEFAULT false;
-        ALTER TABLE users ADD COLUMN IF NOT EXISTS shop_category TEXT DEFAULT 'food';
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS shop_category TEXT DEFAULT 'pharmacy';
+        UPDATE users SET status = 'disabled'
+          WHERE role = 'vendor'
+            AND LOWER(COALESCE(shop_category, 'food')) NOT IN ('pharmacy', 'health');
         ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT;
         ALTER TABLE users ADD COLUMN IF NOT EXISTS shop_open_status TEXT DEFAULT 'open';
         ALTER TABLE users ADD COLUMN IF NOT EXISTS shop_status_message TEXT;
@@ -1756,6 +1769,34 @@ const initDb = async () => {
       CREATE INDEX IF NOT EXISTS idx_support_messages_ticket_id
         ON support_messages(ticket_id, created_at);
 
+      CREATE TABLE IF NOT EXISTS shop_conversations (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        customer_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        vendor_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        last_message_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        last_message_preview TEXT,
+        customer_unread INT NOT NULL DEFAULT 0,
+        vendor_unread INT NOT NULL DEFAULT 0,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(customer_id, vendor_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_shop_conversations_customer
+        ON shop_conversations(customer_id, last_message_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_shop_conversations_vendor
+        ON shop_conversations(vendor_id, last_message_at DESC);
+
+      CREATE TABLE IF NOT EXISTS shop_messages (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        conversation_id UUID NOT NULL REFERENCES shop_conversations(id) ON DELETE CASCADE,
+        sender_id UUID NOT NULL REFERENCES users(id),
+        body TEXT NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_shop_messages_conversation
+        ON shop_messages(conversation_id, created_at);
+
       CREATE TABLE IF NOT EXISTS order_dispatch_offers (
         order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
         rider_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -1967,16 +2008,23 @@ async function ensureVapidKeys() {
 function isOfferableOrder(order: any) {
   if (order?.rider_id) return false;
   if (order?.status === 'scheduled') return false;
+  // Riders dispatch only after pharmacy confirms (ready) or for courier jobs.
   if (order?.status === 'ready') return true;
-  // Marketplace shop orders (seeded vendors) start ready; legacy food may be pending until vendor marks ready.
-  if (
-    order?.status === 'pending' &&
-    order?.vendor_id &&
-    (order?.order_type === 'food' || order?.order_type === 'courier')
-  ) {
-    return true;
-  }
   return false;
+}
+
+function isPharmacyShopOrder(order: any): boolean {
+  return Boolean(order?.vendor_id) && String(order?.order_type || '') === 'food';
+}
+
+const VENDOR_PHARMACY_STATUS: Record<string, Set<string>> = {
+  pending: new Set(['preparing', 'ready', 'cancelled']),
+  preparing: new Set(['ready', 'cancelled']),
+};
+
+function vendorMaySetPharmacyStatus(from: string, to: string): boolean {
+  if (to === 'cancelled') return from === 'pending' || from === 'preparing';
+  return VENDOR_PHARMACY_STATUS[from]?.has(to) ?? false;
 }
 
 function generateDeliveryCode(): string {
@@ -2055,6 +2103,21 @@ function tripAllowsContact(order: any): boolean {
   return Boolean(order?.rider_id) && TRIP_CONTACT_STATUSES.has(order.status);
 }
 
+/** Shop orders: customer ↔ pharmacy chat while order is active (even before a rider is assigned). */
+function shopOrderAllowsContact(order: any): boolean {
+  return Boolean(order?.vendor_id) && TRIP_CONTACT_STATUSES.has(order.status);
+}
+
+function orderAllowsChat(order: any, userId: string): boolean {
+  const isCustomer = String(order.customer_id) === String(userId);
+  const isRider = order.rider_id && String(order.rider_id) === String(userId);
+  const isVendor = order.vendor_id && String(order.vendor_id) === String(userId);
+  if (isVendor && shopOrderAllowsContact(order)) return true;
+  if (isCustomer && order.vendor_id && shopOrderAllowsContact(order)) return true;
+  if ((isCustomer || isRider) && tripAllowsContact(order)) return true;
+  return false;
+}
+
 /** Human-friendly name for chat, push, and UI (hides email stubs and broken placeholders). */
 function displayUserName(
   raw: string | null | undefined,
@@ -2074,7 +2137,7 @@ function displayUserName(
     if (role === 'rider') return 'Your biker';
     if (role === 'customer') return 'Customer';
     if (role === 'admin') return 'BytzGo Support';
-    if (role === 'vendor') return 'Shop partner';
+    if (role === 'vendor') return 'Pharmacy partner';
     return fallback;
   }
 
@@ -2111,6 +2174,102 @@ function formatOrderMessage(row: any, viewerId: string) {
     createdAt: row.created_at,
     isMine: row.sender_id === viewerId,
   };
+}
+
+function formatShopMessage(row: any, viewerId: string) {
+  return {
+    id: row.id,
+    conversationId: row.conversation_id,
+    senderId: row.sender_id,
+    senderName: displayUserName(row.sender_name, {
+      role: row.sender_role,
+      fallback: 'Pharmacy',
+    }),
+    senderRole: row.sender_role || null,
+    body: row.body,
+    createdAt: row.created_at,
+    isMine: String(row.sender_id) === String(viewerId),
+  };
+}
+
+async function assertShopConversationAccess(conversationId: string, userId: string) {
+  const res = await pool.query(
+    `SELECT c.*, cu.name AS customer_name, vu.name AS vendor_name, vu.shop_category
+     FROM shop_conversations c
+     JOIN users cu ON cu.id = c.customer_id
+     JOIN users vu ON vu.id = c.vendor_id
+     WHERE c.id = $1`,
+    [conversationId]
+  );
+  if (res.rowCount === 0) {
+    const err: any = new Error('Conversation not found');
+    err.status = 404;
+    throw err;
+  }
+  const row = res.rows[0];
+  if (String(row.customer_id) !== String(userId) && String(row.vendor_id) !== String(userId)) {
+    const err: any = new Error('Unauthorized');
+    err.status = 403;
+    throw err;
+  }
+  return row;
+}
+
+function formatShopConversation(row: any, viewerId: string, role: string) {
+  const isVendor = role === 'vendor';
+  return {
+    id: row.id,
+    customerId: row.customer_id,
+    vendorId: row.vendor_id,
+    customerName: displayUserName(row.customer_name, { role: 'customer', fallback: 'Customer' }),
+    vendorName: displayUserName(row.vendor_name, { role: 'vendor', fallback: 'Pharmacy' }),
+    shopCategory: row.shop_category || 'pharmacy',
+    lastMessageAt: row.last_message_at,
+    lastMessagePreview: row.last_message_preview || '',
+    unreadCount: isVendor ? row.vendor_unread || 0 : row.customer_unread || 0,
+    peerName: isVendor
+      ? displayUserName(row.customer_name, { role: 'customer', fallback: 'Customer' })
+      : displayUserName(row.vendor_name, { role: 'vendor', fallback: 'Pharmacy' }),
+  };
+}
+
+async function emitShopMessage(conversation: any, row: any, senderId: string) {
+  const customerPayload = formatShopMessage(row, conversation.customer_id);
+  const vendorPayload = formatShopMessage(row, conversation.vendor_id);
+  io.to(conversation.customer_id).emit('shop:message', {
+    conversationId: conversation.id,
+    message: customerPayload,
+  });
+  io.to(conversation.vendor_id).emit('shop:message', {
+    conversationId: conversation.id,
+    message: vendorPayload,
+  });
+  const preview = String(row.body || '').slice(0, 180);
+  await pool.query(
+    `UPDATE shop_conversations
+     SET last_message_at = CURRENT_TIMESTAMP,
+         last_message_preview = $2,
+         customer_unread = customer_unread + CASE WHEN $3 = customer_id THEN 0 ELSE 1 END,
+         vendor_unread = vendor_unread + CASE WHEN $3 = vendor_id THEN 0 ELSE 1 END
+     WHERE id = $1`,
+    [conversation.id, preview, senderId]
+  );
+  const recipientId =
+    String(senderId) === String(conversation.customer_id)
+      ? conversation.vendor_id
+      : conversation.customer_id;
+  const senderName = displayUserName(row.sender_name, {
+    role: row.sender_role,
+    fallback: 'Pharmacy',
+  });
+  void sendPushToUserIds([recipientId], {
+    title: `Message from ${senderName}`,
+    body: preview.length > 140 ? `${preview.slice(0, 137)}…` : preview,
+    type: 'shop-message',
+    conversationId: conversation.id,
+    channelId: 'shop_messages',
+    highPriority: true,
+  });
 }
 
 const SUPPORT_CATEGORIES = new Set(['order', 'payment', 'account', 'delivery', 'shop', 'other']);
@@ -2288,7 +2447,7 @@ async function emitSupportMessage(ticket: any, messageRow: any, senderId: string
 
 async function assertOrderChatAccess(orderId: string, userId: string) {
   const orderRes = await pool.query(
-    'SELECT id, customer_id, rider_id, status FROM orders WHERE id = $1',
+    'SELECT id, customer_id, rider_id, vendor_id, status FROM orders WHERE id = $1',
     [orderId]
   );
   if (orderRes.rowCount === 0) {
@@ -2297,14 +2456,17 @@ async function assertOrderChatAccess(orderId: string, userId: string) {
     throw err;
   }
   const order = orderRes.rows[0];
-  if (order.customer_id !== userId && order.rider_id !== userId) {
-    const err: any = new Error('Unauthorized');
-    err.status = 403;
-    throw err;
-  }
-  if (!tripAllowsContact(order)) {
-    const err: any = new Error('Chat is only available during an active trip');
-    err.status = 400;
+  if (!orderAllowsChat(order, userId)) {
+    const err: any = new Error(
+      order.vendor_id
+        ? 'Chat is only available during an active pharmacy order or trip'
+        : 'Chat is only available during an active trip'
+    );
+    err.status = order.customer_id !== userId && order.rider_id !== userId && order.vendor_id !== userId ? 403 : 400;
+    if (order.customer_id !== userId && order.rider_id !== userId && order.vendor_id !== userId) {
+      err.message = 'Unauthorized';
+      err.status = 403;
+    }
     throw err;
   }
   return order;
@@ -2336,11 +2498,17 @@ async function sanitizeOrderForRole(order: any, role: string, userId: string) {
   if (o.rider_name) o.riderName = o.rider_name;
   if (o.vendor_name) o.vendorName = o.vendor_name;
 
-  if (tripAllowsContact(o)) {
+  if (tripAllowsContact(o) || shopOrderAllowsContact(o)) {
     if (isBooker && (role === 'customer' || role === 'vendor') && o.rider_phone) {
       o.riderPhone = o.rider_phone;
     }
     if (role === 'rider' && o.rider_id === userId && o.customer_phone) {
+      o.customerPhone = o.customer_phone;
+    }
+    if (isBooker && role === 'customer' && o.vendor_phone) {
+      o.vendorPhone = o.vendor_phone;
+    }
+    if (role === 'vendor' && o.vendor_id === userId && o.customer_phone) {
       o.customerPhone = o.customer_phone;
     }
   }
@@ -2398,7 +2566,7 @@ const ORDER_CONTACT_SELECT = `
    WHERE o3.rider_id = ru.id AND o3.rating IS NOT NULL AND o3.rating > 0) AS rider_avg_rating,
   (SELECT COUNT(*)::int FROM orders o4
    WHERE o4.rider_id = ru.id AND o4.rating IS NOT NULL AND o4.rating > 0) AS rider_rating_count,
-  vu.name AS vendor_name`;
+  vu.name AS vendor_name, vu.phone AS vendor_phone`;
 
 function isCustomerPaymentReady(order: any): boolean {
   if (order.payment_status === 'paid') return true;
@@ -3035,7 +3203,8 @@ type PushAlert = {
   type: string;
   orderId?: string;
   ticketId?: string;
-  channelId?: 'incoming_rides_alarm' | 'trip_updates' | 'support_updates';
+  conversationId?: string;
+  channelId?: 'incoming_rides_alarm' | 'trip_updates' | 'support_updates' | 'shop_messages';
   highPriority?: boolean;
   expiresAt?: string;
   status?: string;
@@ -3074,6 +3243,7 @@ async function sendPushToUserIds(userIds: string[], alert: PushAlert) {
   const payload = JSON.stringify({
     type: alert.type,
     orderId: alert.orderId ?? '',
+    conversationId: alert.conversationId ?? '',
     title: alert.title,
     body: alert.body,
   });
@@ -3295,7 +3465,20 @@ async function notifyCustomerTripPush(order: any) {
   const shopLabel = shopTrip ? shopLabelForOrder(order) : '';
   let title = 'BytzGO';
   let body = '';
-  if (order.rider_id && ['pending', 'ready', 'preparing'].includes(status)) {
+  if (shopTrip && !order.rider_id) {
+    if (status === 'pending') {
+      title = 'Order sent to pharmacy';
+      body = `${shopLabel} is checking your items`;
+    } else if (status === 'preparing') {
+      title = 'Preparing your order';
+      body = `${shopLabel} is packing your medicines`;
+    } else if (status === 'ready') {
+      title = 'Order confirmed';
+      body = 'Finding a rider to pick up from the pharmacy';
+    } else {
+      return;
+    }
+  } else if (order.rider_id && ['pending', 'ready', 'preparing'].includes(status)) {
     if (shopTrip) {
       title = 'Rider heading to shop';
       body = `Your rider is going to ${shopLabel} to pick up your order`;
@@ -3317,6 +3500,11 @@ async function notifyCustomerTripPush(order: any) {
   } else if (status === 'delivered') {
     title = 'Delivered';
     body = 'Your delivery is complete';
+  } else if (status === 'cancelled') {
+    title = shopTrip ? 'Order cancelled' : 'Trip cancelled';
+    body = shopTrip
+      ? 'The pharmacy could not fulfil this order'
+      : 'Your trip was cancelled';
   } else {
     return;
   }
@@ -3984,11 +4172,12 @@ app.post('/api/auth/register', async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, 10);
     const userStatus = role === 'vendor' || role === 'rider' || role === 'owner' ? 'pending' : 'active';
     const storePhone = phone ? formatGhanaPhone(phone) : phone;
+    const vendorShopCategory = defaultShopCategoryForRole(role);
     const result = await pool.query(
-      `INSERT INTO users (name, email, password, role, status, phone, rider_vehicle_type)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING id, name, email, role, balance, phone, status, rider_vehicle_type`,
-      [name, email, hashedPassword, role, userStatus, storePhone, riderVehicle]
+      `INSERT INTO users (name, email, password, role, status, phone, rider_vehicle_type, shop_category)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING id, name, email, role, balance, phone, status, rider_vehicle_type, shop_category`,
+      [name, email, hashedPassword, role, userStatus, storePhone, riderVehicle, vendorShopCategory]
     );
     if (role === 'customer' && phone) {
       await pool.query('DELETE FROM otps WHERE phone = ANY($1) AND purpose = $2', [
@@ -4103,11 +4292,12 @@ app.post('/api/auth/google', async (req, res) => {
         newRole === 'rider'
           ? normalizeRiderVehicleType(vehicle_type ?? rider_vehicle_type)
           : null;
+      const vendorShopCategory = defaultShopCategoryForRole(newRole);
       result = await pool.query(
-        `INSERT INTO users (name, email, google_id, role, status, rider_vehicle_type)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         RETURNING id, name, email, role, balance, phone, status, rider_vehicle_type`,
-        [displayName, payload.email, googleId, newRole, userStatus, riderVehicle]
+        `INSERT INTO users (name, email, google_id, role, status, rider_vehicle_type, shop_category)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING id, name, email, role, balance, phone, status, rider_vehicle_type, shop_category`,
+        [displayName, payload.email, googleId, newRole, userStatus, riderVehicle, vendorShopCategory]
       );
       user = result.rows[0];
     } else {
@@ -4183,11 +4373,12 @@ app.post('/api/auth/apple', async (req, res) => {
           email.split('@')[0],
         { fallback: 'BytzGo member' },
       );
+      const vendorShopCategory = defaultShopCategoryForRole(newRole);
       result = await pool.query(
-        `INSERT INTO users (name, email, apple_id, role, status, rider_vehicle_type)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         RETURNING id, name, email, role, balance, phone, status, rider_vehicle_type`,
-        [displayName, email, appleId, newRole, userStatus, riderVehicle],
+        `INSERT INTO users (name, email, apple_id, role, status, rider_vehicle_type, shop_category)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING id, name, email, role, balance, phone, status, rider_vehicle_type, shop_category`,
+        [displayName, email, appleId, newRole, userStatus, riderVehicle, vendorShopCategory],
       );
       user = result.rows[0];
     } else {
@@ -4237,9 +4428,10 @@ app.post('/api/auth/supabase', async (req, res) => {
     let user = result.rows[0];
     if (!user) {
       const userStatus = role === 'vendor' || role === 'rider' || role === 'owner' ? 'pending' : 'active';
+      const vendorShopCategory = defaultShopCategoryForRole(role);
       result = await pool.query(
-        'INSERT INTO users (name, email, google_id, role, status) VALUES ($1, $2, $3, $4, $5) RETURNING id, name, email, role, balance, phone, status',
-        [name, email, googleId, role || 'customer', userStatus]
+        'INSERT INTO users (name, email, google_id, role, status, shop_category) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, name, email, role, balance, phone, status, shop_category',
+        [name, email, googleId, role || 'customer', userStatus, vendorShopCategory]
       );
       user = result.rows[0];
     } else {
@@ -4306,6 +4498,11 @@ app.delete('/api/auth/account', authenticateToken, async (req: any, res) => {
     await client.query('DELETE FROM order_messages WHERE sender_id = $1', [userId]);
     await client.query('DELETE FROM support_messages WHERE sender_id = $1', [userId]);
     await client.query('DELETE FROM support_tickets WHERE created_by = $1', [userId]);
+    await client.query(
+      `DELETE FROM shop_conversations
+       WHERE customer_id = $1 OR vendor_id = $1`,
+      [userId]
+    );
     await client.query('DELETE FROM order_dispatch_offers WHERE rider_id = $1', [userId]);
     await client.query('DELETE FROM wallet_transactions WHERE user_id = $1', [userId]);
     await client.query('DELETE FROM fcm_tokens WHERE user_id = $1', [userId]);
@@ -5366,7 +5563,8 @@ app.get('/api/vendors', async (req, res) => {
       `SELECT id, name, email, phone, cover_image, address, lat, lng, region, shop_category,
               shop_open_status, shop_status_message, shop_discount_label, shop_discount_percent,
               shop_promo_updated_at, shop_story_image, shop_story_posted_at, shop_story_expires_at
-       FROM users WHERE role = $1 AND status = 'active'`;
+       FROM users WHERE role = $1 AND status = 'active'
+         AND LOWER(COALESCE(shop_category, 'pharmacy')) IN ('pharmacy', 'health')`;
     const params: any[] = ['vendor'];
     const { category } = req.query;
     
@@ -5374,8 +5572,8 @@ app.get('/api/vendors', async (req, res) => {
       query += ' AND (region = $2 OR region IS NULL)';
       params.push(region);
     }
-    if (category && typeof category === 'string') {
-      query += ` AND LOWER(COALESCE(shop_category, 'food')) = LOWER($${params.length + 1})`;
+    if (category && typeof category === 'string' && isAllowedShopCategory(category)) {
+      query += ` AND LOWER(COALESCE(shop_category, 'pharmacy')) = LOWER($${params.length + 1})`;
       params.push(category.trim());
     }
     
@@ -5386,6 +5584,94 @@ app.get('/api/vendors', async (req, res) => {
     res.json(vendors);
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
+  }
+});
+
+/** Find pharmacies & health retailers that stock a medicine (customer drug search). */
+app.get('/api/pharmacy-search', async (req, res) => {
+  const q = String(req.query.q || '').trim();
+  if (q.length < 2) return res.json([]);
+  const { region, category } = req.query;
+  try {
+    const params: any[] = [`%${q}%`];
+    let sql = `
+      SELECT
+        u.id, u.name, u.email, u.phone, u.cover_image, u.address, u.lat, u.lng, u.region, u.shop_category,
+        u.shop_open_status, u.shop_status_message, u.shop_discount_label, u.shop_discount_percent,
+        u.shop_promo_updated_at, u.shop_story_image, u.shop_story_posted_at, u.shop_story_expires_at,
+        p.id AS product_id, p.name AS product_name, p.price AS product_price,
+        p.category AS product_category, p.image_url AS product_image_url
+      FROM products p
+      INNER JOIN users u ON u.id = p.vendor_id
+      WHERE u.role = 'vendor'
+        AND u.status = 'active'
+        AND LOWER(COALESCE(u.shop_category, 'pharmacy')) IN ('pharmacy', 'health')
+        AND p.is_available = true
+        AND p.is_approved = true
+        AND (
+          p.name ILIKE $1
+          OR p.category ILIKE $1
+          OR COALESCE(p.description, '') ILIKE $1
+        )`;
+    if (region && typeof region === 'string') {
+      params.push(region);
+      sql += ` AND (u.region = $${params.length} OR u.region IS NULL)`;
+    }
+    if (category && typeof category === 'string' && isAllowedShopCategory(category)) {
+      params.push(category.trim());
+      sql += ` AND LOWER(COALESCE(u.shop_category, 'pharmacy')) = LOWER($${params.length})`;
+    }
+    sql += ` ORDER BY u.name ASC, p.name ASC LIMIT 200`;
+    const result = await pool.query(sql, params);
+    const grouped = new Map<string, { vendor: Record<string, unknown>; matches: any[] }>();
+    for (const row of result.rows) {
+      const vendorId = String(row.id);
+      if (!grouped.has(vendorId)) {
+        grouped.set(vendorId, {
+          vendor: {
+            id: row.id,
+            name: row.name,
+            email: row.email,
+            phone: row.phone,
+            cover_image: row.cover_image,
+            address: row.address,
+            lat: row.lat,
+            lng: row.lng,
+            region: row.region,
+            shop_category: row.shop_category,
+            shop_open_status: row.shop_open_status,
+            shop_status_message: row.shop_status_message,
+            shop_discount_label: row.shop_discount_label,
+            shop_discount_percent: row.shop_discount_percent,
+            shop_promo_updated_at: row.shop_promo_updated_at,
+            shop_story_image: row.shop_story_image,
+            shop_story_posted_at: row.shop_story_posted_at,
+            shop_story_expires_at: row.shop_story_expires_at,
+          },
+          matches: [],
+        });
+      }
+      grouped.get(vendorId)!.matches.push({
+        id: row.product_id,
+        vendor_id: row.id,
+        name: row.product_name,
+        price: row.product_price,
+        category: row.product_category,
+        image_url: row.product_image_url,
+        is_available: true,
+        is_approved: true,
+      });
+    }
+    const hits = await Promise.all(
+      Array.from(grouped.values()).map(async (entry) => {
+        const vendor = await vendorRowForClient(entry.vendor);
+        return { vendor, matches: entry.matches.slice(0, 5) };
+      })
+    );
+    res.json(hits);
+  } catch (err) {
+    console.error('Pharmacy search error:', err);
+    res.status(500).json({ message: 'Search failed' });
   }
 });
 
@@ -5995,10 +6281,10 @@ app.post('/api/admin/vendors', authenticateToken, async (req: any, res) => {
   if (String(password).length < 6) {
     return res.status(400).json({ message: 'Password must be at least 6 characters' });
   }
-  let shopCat = 'food';
+  let shopCat = 'pharmacy';
   if (shop_category != null && String(shop_category).trim()) {
     const c = String(shop_category).trim().toLowerCase();
-    if (!(SHOP_CATEGORIES as readonly string[]).includes(c)) {
+    if (!isAllowedShopCategory(c)) {
       return res.status(400).json({
         message: `shop_category must be one of: ${SHOP_CATEGORIES.join(', ')}`,
       });
@@ -7345,11 +7631,15 @@ app.post('/api/orders', authenticateToken, async (req: any, res) => {
     const scheduledRaw = scheduledTime || scheduled_time || null;
     const scheduledDate = parseScheduledTimeInput(scheduledRaw);
     const scheduled = scheduledDate ? scheduledDate.toISOString() : null;
+    const isPharmacyShopOrder =
+      Boolean(vendorId) && finalOrderType === 'food';
     const initialStatus = isFutureScheduled(scheduledDate)
       ? 'scheduled'
-      : finalOrderType === 'courier' || (vendorId && finalOrderType === 'food')
-        ? 'ready'
-        : 'pending';
+      : isPharmacyShopOrder
+        ? 'pending'
+        : finalOrderType === 'courier'
+          ? 'ready'
+          : 'pending';
 
     const result = await pool.query(
       `INSERT INTO orders (
@@ -7392,9 +7682,30 @@ app.post('/api/orders', authenticateToken, async (req: any, res) => {
       );
     }
     res.json(order);
-    io.emit('order:new', order); // Notify vendors/admin
+    io.emit('order:new', order);
     if (order.customer_id) {
       io.to(String(order.customer_id)).emit('order:new', order);
+    }
+    if (order.vendor_id) {
+      io.to(String(order.vendor_id)).emit('order:new', order);
+      void sendPushToUserIds([order.vendor_id], {
+        title: 'New pharmacy order',
+        body: 'Review items and confirm availability for the customer',
+        type: 'shop-order',
+        orderId: order.id,
+        channelId: 'trip_updates',
+        highPriority: true,
+      });
+    }
+    if (isPharmacyShopOrder(order) && order.customer_id) {
+      void sendPushToUserIds([order.customer_id], {
+        title: 'Order placed',
+        body: `${shopLabelForOrder(order)} is confirming your items`,
+        type: 'trip-update',
+        orderId: order.id,
+        channelId: 'trip_updates',
+        highPriority: false,
+      });
     }
     if (isOfferableOrder(order)) {
       void broadcastRideOfferToRiders(order);
@@ -7442,6 +7753,31 @@ app.patch('/api/orders/:id', authenticateToken, async (req: any, res) => {
       return res.status(400).json({ message: 'Deliveries must be completed with the customer delivery PIN.' });
     }
 
+    const currentRes = await pool.query('SELECT * FROM orders WHERE id = $1', [orderId]);
+    const current = currentRes.rows[0];
+    if (!current) {
+      return res.status(404).json({ message: 'Order not found' });
+    }
+
+    if (req.user.role === 'vendor') {
+      if (String(current.vendor_id) !== String(req.user.id)) {
+        return res.status(403).json({ message: 'Not your pharmacy order' });
+      }
+      if (riderId) {
+        return res.status(403).json({ message: 'Pharmacies cannot assign riders' });
+      }
+      if (status && status !== current.status) {
+        if (!isPharmacyShopOrder(current)) {
+          return res.status(403).json({ message: 'Only pharmacy shop orders can be updated here' });
+        }
+        if (!vendorMaySetPharmacyStatus(String(current.status), String(status))) {
+          return res.status(400).json({
+            message: `Cannot change order from ${current.status} to ${status}`,
+          });
+        }
+      }
+    }
+
     let result;
     if (status === 'picked_up') {
       const code = generateDeliveryCode();
@@ -7457,6 +7793,10 @@ app.patch('/api/orders/:id', authenticateToken, async (req: any, res) => {
     } else {
       let updateQuery = 'UPDATE orders SET status = $1';
       const params: any[] = [status];
+
+      if (status === 'cancelled') {
+        updateQuery += ', rider_id = NULL';
+      }
 
       if (riderId) {
         updateQuery += ', rider_id = $2';
@@ -7483,6 +7823,13 @@ app.patch('/api/orders/:id', authenticateToken, async (req: any, res) => {
       broadcastOrderUpdated(order);
       if (riderId && order.rider_id) {
         await notifyRideTaken(order.id, order.rider_id);
+      } else if (status === 'cancelled') {
+        clearDispatchTimer(orderId);
+        await pool.query(
+          `UPDATE order_dispatch_offers SET status = 'expired'
+           WHERE order_id = $1 AND status = 'offered'`,
+          [orderId]
+        );
       } else if (isOfferableOrder(order)) {
         broadcastRideOfferToRiders(order);
       }
@@ -8164,14 +8511,29 @@ app.post('/api/orders/:id/messages', authenticateToken, async (req: any, res) =>
       });
     }
 
-    const recipientId =
-      req.user.id === order.customer_id ? order.rider_id : order.customer_id;
-    if (recipientId) {
+    if (order.vendor_id) {
+      io.to(order.vendor_id).emit('order:message', {
+        orderId,
+        message: formatOrderMessage(row, order.vendor_id),
+      });
+    }
+
+    const recipientIds: string[] = [];
+    if (order.customer_id && String(req.user.id) !== String(order.customer_id)) {
+      recipientIds.push(order.customer_id);
+    }
+    if (order.rider_id && String(req.user.id) !== String(order.rider_id)) {
+      recipientIds.push(order.rider_id);
+    }
+    if (order.vendor_id && String(req.user.id) !== String(order.vendor_id)) {
+      recipientIds.push(order.vendor_id);
+    }
+    if (recipientIds.length) {
       const senderName = displayUserName(nameRes.rows[0]?.name, {
         role: nameRes.rows[0]?.role,
         fallback: 'Someone',
       });
-      void sendPushToUserIds([recipientId], {
+      void sendPushToUserIds(recipientIds, {
         title: `Message from ${senderName}`,
         body: body.length > 140 ? `${body.slice(0, 137)}…` : body,
         type: 'trip-message',
@@ -8185,6 +8547,153 @@ app.post('/api/orders/:id/messages', authenticateToken, async (req: any, res) =>
   } catch (err: any) {
     const status = err.status || 500;
     res.status(status).json({ message: err.message || 'Server error' });
+  }
+});
+
+// --- Pharmacy shop chat (customer ↔ vendor) ---
+
+app.get('/api/shop/conversations', authenticateToken, async (req: any, res) => {
+  const role = req.user.role;
+  if (role !== 'customer' && role !== 'vendor') {
+    return res.status(403).json({ message: 'Customers and pharmacies only' });
+  }
+  try {
+    const sql =
+      role === 'vendor'
+        ? `SELECT c.*, cu.name AS customer_name, vu.name AS vendor_name, vu.shop_category
+           FROM shop_conversations c
+           JOIN users cu ON cu.id = c.customer_id
+           JOIN users vu ON vu.id = c.vendor_id
+           WHERE c.vendor_id = $1
+           ORDER BY c.last_message_at DESC
+           LIMIT 100`
+        : `SELECT c.*, cu.name AS customer_name, vu.name AS vendor_name, vu.shop_category
+           FROM shop_conversations c
+           JOIN users cu ON cu.id = c.customer_id
+           JOIN users vu ON vu.id = c.vendor_id
+           WHERE c.customer_id = $1
+           ORDER BY c.last_message_at DESC
+           LIMIT 100`;
+    const result = await pool.query(sql, [req.user.id]);
+    res.json(result.rows.map((row: any) => formatShopConversation(row, req.user.id, role)));
+  } catch (err) {
+    console.error('Shop conversations list error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.post('/api/shop/conversations', authenticateToken, async (req: any, res) => {
+  const role = req.user.role;
+  const vendorId = String(req.body?.vendorId ?? req.body?.vendor_id ?? '').trim();
+  const customerId = String(req.body?.customerId ?? req.body?.customer_id ?? '').trim();
+
+  try {
+    let customer = req.user.id;
+    let vendor = vendorId;
+    if (role === 'customer') {
+      if (!vendorId) return res.status(400).json({ message: 'vendor_id is required' });
+      const vRes = await pool.query(
+        `SELECT id FROM users WHERE id = $1 AND role = 'vendor' AND status = 'active'`,
+        [vendorId]
+      );
+      if (vRes.rowCount === 0) {
+        return res.status(404).json({ message: 'Pharmacy not found' });
+      }
+    } else if (role === 'vendor') {
+      if (!customerId) return res.status(400).json({ message: 'customer_id is required' });
+      vendor = req.user.id;
+      customer = customerId;
+    } else {
+      return res.status(403).json({ message: 'Customers and pharmacies only' });
+    }
+
+    let convRes = await pool.query(
+      `SELECT c.*, cu.name AS customer_name, vu.name AS vendor_name, vu.shop_category
+       FROM shop_conversations c
+       JOIN users cu ON cu.id = c.customer_id
+       JOIN users vu ON vu.id = c.vendor_id
+       WHERE c.customer_id = $1 AND c.vendor_id = $2`,
+      [customer, vendor]
+    );
+    if (convRes.rowCount === 0) {
+      const ins = await pool.query(
+        `INSERT INTO shop_conversations (customer_id, vendor_id)
+         VALUES ($1, $2)
+         RETURNING id`,
+        [customer, vendor]
+      );
+      convRes = await pool.query(
+        `SELECT c.*, cu.name AS customer_name, vu.name AS vendor_name, vu.shop_category
+         FROM shop_conversations c
+         JOIN users cu ON cu.id = c.customer_id
+         JOIN users vu ON vu.id = c.vendor_id
+         WHERE c.id = $1`,
+        [ins.rows[0].id]
+      );
+    }
+    res.status(201).json(formatShopConversation(convRes.rows[0], req.user.id, role));
+  } catch (err: any) {
+    console.error('Shop conversation create error:', err);
+    res.status(500).json({ message: err.message || 'Server error' });
+  }
+});
+
+app.get('/api/shop/conversations/:id/messages', authenticateToken, async (req: any, res) => {
+  try {
+    await assertShopConversationAccess(req.params.id, req.user.id);
+    const result = await pool.query(
+      `SELECT m.*, u.name AS sender_name, u.role AS sender_role
+       FROM shop_messages m
+       JOIN users u ON u.id = m.sender_id
+       WHERE m.conversation_id = $1
+       ORDER BY m.created_at ASC
+       LIMIT 300`,
+      [req.params.id]
+    );
+    res.json(result.rows.map((row: any) => formatShopMessage(row, req.user.id)));
+  } catch (err: any) {
+    res.status(err.status || 500).json({ message: err.message || 'Server error' });
+  }
+});
+
+app.post('/api/shop/conversations/:id/messages', authenticateToken, async (req: any, res) => {
+  const body = String(req.body?.body ?? req.body?.text ?? '').trim();
+  if (!body) return res.status(400).json({ message: 'Message cannot be empty' });
+  if (body.length > 1000) {
+    return res.status(400).json({ message: 'Message is too long (max 1000 characters)' });
+  }
+  try {
+    const conversation = await assertShopConversationAccess(req.params.id, req.user.id);
+    const inserted = await pool.query(
+      `INSERT INTO shop_messages (conversation_id, sender_id, body)
+       VALUES ($1, $2, $3)
+       RETURNING *`,
+      [req.params.id, req.user.id, body]
+    );
+    const row = inserted.rows[0];
+    const nameRes = await pool.query('SELECT name, role FROM users WHERE id = $1', [req.user.id]);
+    row.sender_name = nameRes.rows[0]?.name;
+    row.sender_role = nameRes.rows[0]?.role;
+    await emitShopMessage(conversation, row, req.user.id);
+    res.status(201).json(formatShopMessage(row, req.user.id));
+  } catch (err: any) {
+    res.status(err.status || 500).json({ message: err.message || 'Server error' });
+  }
+});
+
+app.post('/api/shop/conversations/:id/read', authenticateToken, async (req: any, res) => {
+  try {
+    const conversation = await assertShopConversationAccess(req.params.id, req.user.id);
+    const isVendor = String(conversation.vendor_id) === String(req.user.id);
+    await pool.query(
+      `UPDATE shop_conversations
+       SET ${isVendor ? 'vendor_unread = 0' : 'customer_unread = 0'}
+       WHERE id = $1`,
+      [req.params.id]
+    );
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(err.status || 500).json({ message: err.message || 'Server error' });
   }
 });
 

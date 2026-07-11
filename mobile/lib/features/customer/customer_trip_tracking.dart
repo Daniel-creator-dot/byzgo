@@ -89,6 +89,10 @@ class CustomerDeliveryTracker extends StatelessWidget {
           searching: searching,
           nearbyCount: nearbyCount,
         ),
+        if (customerPharmacyAwaitingConfirm(order)) ...[
+          const SizedBox(height: 10),
+          _PharmacyConfirmBanner(order: order),
+        ],
         if (customerOrderHasShopPickup(order) &&
             customerOrderHasActiveRider(order) &&
             !searching &&
@@ -119,6 +123,19 @@ class CustomerDeliveryTracker extends StatelessWidget {
           PulseGuideButton(
             order: order,
             onOrderUpdated: onOrderUpdated,
+          ),
+        ],
+        if (shopOrderAllowsContact(order)) ...[
+          const SizedBox(height: 12),
+          Consumer<TripChatUnread>(
+            builder: (context, unread, _) => TripContactActions(
+              order: order,
+              phone: null,
+              label: 'Contact pharmacy',
+              chatTitle:
+                  'Chat with ${order.vendorName?.trim().isNotEmpty == true ? order.vendorName!.trim() : 'your pharmacy'}',
+              unreadCount: unread.countFor(order.id),
+            ),
           ),
         ],
         if (tripAllowsContact(order)) ...[
@@ -155,6 +172,60 @@ class CustomerDeliveryTracker extends StatelessWidget {
           RateDriverCard(order: order, onOrderUpdated: onOrderUpdated),
         ],
       ],
+    );
+  }
+}
+
+/// Pharmacy is confirming items before a rider is dispatched.
+class _PharmacyConfirmBanner extends StatelessWidget {
+  const _PharmacyConfirmBanner({required this.order});
+
+  final Order order;
+
+  @override
+  Widget build(BuildContext context) {
+    final shop = customerShopLabel(order);
+    final preparing = order.status == 'preparing';
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF7C3AED).withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFF7C3AED).withValues(alpha: 0.28)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            preparing ? Icons.medical_services_outlined : Icons.hourglass_top_rounded,
+            size: 24,
+            color: const Color(0xFFA78BFA),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  preparing ? 'Pharmacy preparing your order' : 'Pharmacy reviewing your order',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 13,
+                    color: BytzGoTheme.sheetText,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  preparing
+                      ? '$shop is packing your items. A rider will be assigned as soon as everything is ready.'
+                      : '$shop is checking stock and confirming your medicines. You can chat with them while you wait.',
+                  style: BytzGoTheme.sheetBody(12),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -575,11 +646,13 @@ class _StatusHero extends StatelessWidget {
                             ? Icons.check_circle
                             : isArrived
                                 ? Icons.place
-                                : order.status == 'picked_up'
-                                    ? Icons.two_wheeler
-                                    : order.riderId != null
-                                        ? Icons.person_pin_circle
-                                        : Icons.radar,
+                                : customerPharmacyAwaitingConfirm(order)
+                                    ? Icons.local_pharmacy_outlined
+                                    : order.status == 'picked_up'
+                                        ? Icons.two_wheeler
+                                        : order.riderId != null
+                                            ? Icons.person_pin_circle
+                                            : Icons.radar,
                         color: isDelivered
                             ? BytzGoTheme.accentDark
                             : isArrived

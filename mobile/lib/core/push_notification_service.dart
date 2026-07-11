@@ -98,6 +98,7 @@ class PushNotificationService {
     await android?.createNotificationChannel(kIncomingRideChannel);
     await android?.createNotificationChannel(kTripChannel);
     await android?.createNotificationChannel(kSupportChannel);
+    await android?.createNotificationChannel(kShopChannel);
     try {
       await IncomingRideCallKit.initialize();
     } catch (e, st) {
@@ -299,7 +300,12 @@ class PushNotificationService {
       } catch (_) {}
     }
     final isSupport = type == 'support-message';
-    final channel = isSupport ? kSupportChannel : kTripChannel;
+    final isShop = type == 'shop-message';
+    final channel = isSupport
+        ? kSupportChannel
+        : isShop
+            ? kShopChannel
+            : kTripChannel;
     await _local.show(
       DateTime.now().millisecondsSinceEpoch.remainder(100000),
       title,
@@ -333,7 +339,7 @@ class PushNotificationService {
       onIncomingRidePush?.call(payload);
       return;
     }
-    if (type == 'trip-message') {
+    if (type == 'trip-message' || type == 'shop-message') {
       try {
         FlutterRingtonePlayer().playNotification();
       } catch (_) {}
@@ -392,7 +398,12 @@ class PushNotificationService {
     }
 
     final isSupport = type == 'support-message';
-    final channel = isSupport ? kSupportChannel : kTripChannel;
+    final isShop = type == 'shop-message';
+    final channel = isSupport
+        ? kSupportChannel
+        : isShop
+            ? kShopChannel
+            : kTripChannel;
     await _local.show(
       DateTime.now().millisecondsSinceEpoch.remainder(100000),
       title,

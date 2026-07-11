@@ -18,6 +18,7 @@ import {
   fetchNearbyRiders,
   fetchRiderLocation,
   isCustomerSearchingBiker,
+  customerPharmacyAwaitingConfirm,
 } from '../../lib/customerTrip';
 import { EtaCountdown } from './EtaCountdown';
 import { DriverTierBadge, RateDriverCard, driverTierForOrder } from '../shared/DriverTier';
@@ -293,6 +294,20 @@ export function LiveTripTracker({
 
           <div className="px-4 pt-2 pb-3 space-y-3">
             <TripProgressBar order={order} isCourier={isCourier} />
+
+            {customerPharmacyAwaitingConfirm(order) && (
+              <div className="rounded-2xl border border-violet-500/30 bg-violet-500/10 px-4 py-3">
+                <p className="text-sm font-black text-white">
+                  {order.status === 'preparing'
+                    ? 'Pharmacy preparing your order'
+                    : 'Pharmacy reviewing your order'}
+                </p>
+                <p className="text-xs text-slate-400 mt-1 leading-relaxed">
+                  {vendor?.name || 'Your pharmacy'} is confirming your medicines. A rider will be
+                  assigned as soon as the order is ready for pickup.
+                </p>
+              </div>
+            )}
 
             {order.rider_id && (
               <div className="flex items-center gap-2 rounded-xl bg-slate-800/60 border border-slate-700/80 px-3 py-2">

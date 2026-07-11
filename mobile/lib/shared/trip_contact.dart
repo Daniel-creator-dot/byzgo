@@ -13,6 +13,15 @@ bool tripAllowsContact(Order order) {
   return _contactStatuses.contains(order.status);
 }
 
+bool shopOrderAllowsContact(Order order) {
+  if (order.vendorId.trim().isEmpty) return false;
+  return _contactStatuses.contains(order.status);
+}
+
+bool orderAllowsChat(Order order) {
+  return tripAllowsContact(order) || shopOrderAllowsContact(order);
+}
+
 String? normalizePhone(String? raw) {
   if (raw == null) return null;
   final trimmed = raw.trim();

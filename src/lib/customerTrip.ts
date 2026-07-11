@@ -3,7 +3,18 @@ import { Order } from '../types';
 
 export function isCustomerSearchingBiker(order: Order): boolean {
   if (order.rider_id) return false;
+  if (customerOrderHasShopPickup(order)) {
+    return order.status === 'ready';
+  }
   return ['pending', 'ready', 'preparing'].includes(order.status);
+}
+
+export function customerPharmacyAwaitingConfirm(order: Order): boolean {
+  return (
+    customerOrderHasShopPickup(order) &&
+    !order.rider_id &&
+    ['pending', 'preparing'].includes(order.status)
+  );
 }
 
 export function isActiveCustomerTrip(order: Order): boolean {

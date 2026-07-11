@@ -8,7 +8,7 @@ import '../ghana_location.dart';
 import '../shop_categories.dart';
 import '../theme.dart';
 
-/// Map of popular shop pins in Accra (Restaurants / Food tabs).
+/// Map of pharmacy & health retail pins near the customer.
 class AccraShopsMap extends StatelessWidget {
   const AccraShopsMap({
     super.key,
@@ -26,9 +26,7 @@ class AccraShopsMap extends StatelessWidget {
   final double height;
 
   static bool showMapForCategory(String categoryId) =>
-      categoryId == 'restaurant' ||
-      categoryId == 'food' ||
-      categoryId == 'groceries';
+      ShopCategory.isHealthMarketplace(categoryId);
 
   @override
   Widget build(BuildContext context) {
@@ -51,15 +49,13 @@ class AccraShopsMap extends StatelessWidget {
           icon: BitmapDescriptor.defaultMarkerWithHue(
             selected
                 ? BitmapDescriptor.hueGreen
-                : categoryId == 'restaurant'
-                    ? BitmapDescriptor.hueRed
-                    : categoryId == 'groceries'
-                        ? BitmapDescriptor.hueGreen
-                        : BitmapDescriptor.hueOrange,
+                : categoryId == 'health'
+                    ? BitmapDescriptor.hueGreen
+                    : BitmapDescriptor.hueAzure,
           ),
           infoWindow: InfoWindow(
             title: v.name,
-            snippet: v.phone ?? v.address ?? 'Tap for menu',
+            snippet: v.phone ?? v.address ?? 'Tap for products',
           ),
           onTap: onVendorTap == null ? null : () => onVendorTap!(v),
         ),
@@ -81,7 +77,7 @@ class AccraShopsMap extends StatelessWidget {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  '${pins.length} popular places on the map',
+                  '${pins.length} ${cat?.label.toLowerCase() ?? 'stores'} on the map',
                   style: BytzGoTheme.sheetBody(13).copyWith(fontWeight: FontWeight.w700),
                 ),
               ),

@@ -17,7 +17,7 @@ enum AppRole {
       case AppRole.customer:
         return 'Customer';
       case AppRole.vendor:
-        return 'Vendor / Shop';
+        return 'Pharmacy / Health retailer';
       case AppRole.rider:
         return 'Driver / Rider';
       case AppRole.admin:

@@ -1,16 +1,18 @@
 import 'package:flutter/material.dart';
 
-/// Shop types for vendor listings (order = browse tabs).
+/// Pharmacy & health retail types for vendor listings.
 class ShopCategory {
   const ShopCategory({
     required this.id,
     required this.label,
+    required this.subtitle,
     required this.icon,
     required this.accent,
   });
 
   final String id;
   final String label;
+  final String subtitle;
   final IconData icon;
   final Color accent;
 
@@ -18,32 +20,16 @@ class ShopCategory {
     ShopCategory(
       id: 'pharmacy',
       label: 'Pharmacy',
-      icon: Icons.medical_services_outlined,
+      subtitle: 'Licensed pharmacies — medicines & OTC',
+      icon: Icons.local_pharmacy_outlined,
       accent: Color(0xFF0EA5E9),
     ),
     ShopCategory(
-      id: 'food',
-      label: 'Food & Drinks',
-      icon: Icons.local_cafe_outlined,
-      accent: Color(0xFFF59E0B),
-    ),
-    ShopCategory(
-      id: 'restaurant',
-      label: 'Restaurants',
-      icon: Icons.restaurant_outlined,
-      accent: Color(0xFFEF4444),
-    ),
-    ShopCategory(
-      id: 'fashion',
-      label: 'Fashion',
-      icon: Icons.checkroom_outlined,
-      accent: Color(0xFFA855F7),
-    ),
-    ShopCategory(
-      id: 'groceries',
-      label: 'Groceries',
-      icon: Icons.shopping_basket_outlined,
-      accent: Color(0xFF22C55E),
+      id: 'health',
+      label: 'Health retail',
+      subtitle: 'Supplements, medical supplies & wellness',
+      icon: Icons.health_and_safety_outlined,
+      accent: Color(0xFF10B981),
     ),
   ];
 
@@ -56,10 +42,15 @@ class ShopCategory {
     return null;
   }
 
-  static String labelFor(String? id) => byId(id)?.label ?? 'Food & Drinks';
+  static String labelFor(String? id) => byId(id)?.label ?? 'Pharmacy';
 
   static String normalizeVendorCategory(String? raw) {
     final c = byId(raw);
-    return c?.id ?? 'food';
+    return c?.id ?? 'pharmacy';
+  }
+
+  static bool isHealthMarketplace(String? id) {
+    final c = byId(id);
+    return c != null;
   }
 }

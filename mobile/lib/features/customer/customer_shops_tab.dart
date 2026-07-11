@@ -1,17 +1,24 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/session.dart';
+import '../../core/shop_chat_unread.dart';
 import '../../core/socket_service.dart';
 import '../../models/location_point.dart';
 import '../../models/order.dart';
+import '../../models/pharmacy_search_hit.dart';
+import '../../models/product.dart';
 import '../../models/vendor.dart';
+import '../../shared/format.dart';
 import '../../shared/shop_categories.dart';
 import '../../shared/theme.dart';
 import '../../shared/external_navigation.dart';
+import '../../shared/shop_chat_sheet.dart';
 import '../../shared/vendor_contact.dart';
+import '../../shared/widgets/pharmacy_hub_welcome.dart';
 import '../../shared/widgets/accra_shops_map.dart';
-import '../../shared/widgets/bytz_hero_header.dart';
 import '../../shared/widgets/ops_stat_card.dart';
 import '../../shared/shop_story_views.dart';
 import '../../shared/widgets/vendor_shop_avatar.dart';
@@ -43,15 +50,22 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
   bool _loading = true;
   String? _error;
   final _searchCtrl = TextEditingController();
-  String _categoryId = 'restaurant';
+  final _searchFocus = FocusNode();
+  String _categoryId = 'pharmacy';
   String? _mapSelectedVendorId;
   SocketService? _socket;
   VendorPromoHandler? _promoHandler;
+  ShopMessageHandler? _shopChatHandler;
+  Timer? _searchDebounce;
+  bool _drugSearching = false;
+  List<PharmacySearchHit> _drugHits = [];
+  bool _drugSearchActive = false;
 
   @override
   void initState() {
     super.initState();
     _wirePromoSocket();
+    _wireShopChatSocket();
     _loadSeen();
     _load();
   }
@@ -64,11 +78,54 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
 
   @override
   void dispose() {
+    _searchDebounce?.cancel();
     if (_promoHandler != null) {
       _socket?.removeVendorPromoListener(_promoHandler!);
     }
+    if (_shopChatHandler != null) {
+      _socket?.removeShopMessageListener(_shopChatHandler!);
+    }
     _searchCtrl.dispose();
+    _searchFocus.dispose();
     super.dispose();
+  }
+
+  void _onSearchChanged(String value) {
+    setState(() {});
+    _searchDebounce?.cancel();
+    final q = value.trim();
+    if (q.length < 2) {
+      setState(() {
+        _drugSearchActive = false;
+        _drugHits = [];
+        _drugSearching = false;
+      });
+      return;
+    }
+    _searchDebounce = Timer(const Duration(milliseconds: 400), () => _runDrugSearch(q));
+  }
+
+  Future<void> _runDrugSearch(String query) async {
+    setState(() {
+      _drugSearching = true;
+      _drugSearchActive = true;
+    });
+    try {
+      final region = context.read<Session>().user?.region;
+      final hits = await context.read<OrdersRepository>().searchPharmaciesByDrug(
+            query: query,
+            region: region,
+            category: _categoryId,
+          );
+      if (!mounted || _searchCtrl.text.trim() != query) return;
+      setState(() {
+        _drugHits = hits;
+        _drugSearching = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _drugSearching = false);
+    }
   }
 
   void _wirePromoSocket() {
@@ -84,6 +141,15 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
       });
     };
     _socket!.addVendorPromoListener(_promoHandler!);
+  }
+
+  void _wireShopChatSocket() {
+    _socket = context.read<SocketService>();
+    _shopChatHandler = (conversationId, message) {
+      if (!mounted || message.isMine) return;
+      context.read<ShopChatUnread>().increment(conversationId);
+    };
+    _socket!.addShopMessageListener(_shopChatHandler!);
   }
 
   Future<void> _load() async {
@@ -115,12 +181,28 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
     if (_categoryId == id) return;
     setState(() => _categoryId = id);
     _load();
+    final q = _searchCtrl.text.trim();
+    if (q.length >= 2) _runDrugSearch(q);
   }
+
+  Map<String, List<Product>> get _drugMatches => {
+        for (final hit in _drugHits) hit.vendor.id: hit.matches,
+      };
 
   List<Vendor> get _filtered {
     final q = _searchCtrl.text.trim().toLowerCase();
     var list = _vendors;
-    if (q.isNotEmpty) {
+
+    if (_drugSearchActive && q.length >= 2) {
+      list = _drugHits.map((h) => h.vendor).toList();
+      if (q.isNotEmpty && list.isEmpty && !_drugSearching) {
+        list = _vendors
+            .where((v) =>
+                v.name.toLowerCase().contains(q) ||
+                (v.address?.toLowerCase().contains(q) ?? false))
+            .toList();
+      }
+    } else if (q.isNotEmpty) {
       list = list
           .where((v) =>
               v.name.toLowerCase().contains(q) ||
@@ -213,16 +295,15 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
           SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-              child: BytzHeroHeader(
-                kicker: 'Marketplace',
-                title: _categoryId == 'restaurant'
-                    ? 'Popular restaurants in Accra'
-                    : _categoryId == 'groceries'
-                        ? 'Popular groceries in Accra'
-                        : 'Shops near you',
-                assetPath: 'assets/branding/hero_delivery.png',
-                dark: false,
-                height: 120,
+              child: PharmacyHubWelcome(
+                categoryLabel: _categoryId == 'health'
+                    ? 'HEALTH RETAIL HUB'
+                    : 'PHARMACY HUB',
+                openCount: _openShopCount,
+                listedCount: filtered.length,
+                onSearchTap: () {
+                  _searchFocus.requestFocus();
+                },
               ),
             ),
           ),
@@ -332,7 +413,7 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
                     ),
                     OpsStatCard(
                       light: true,
-                      label: 'All shops',
+                      label: 'All listed',
                       value: '${_vendors.length}',
                       icon: Icons.storefront_outlined,
                       accent: BytzGoTheme.brandBlue,
@@ -347,15 +428,41 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
               child: TextField(
                 controller: _searchCtrl,
-                onChanged: (_) => setState(() {}),
+                focusNode: _searchFocus,
+                onChanged: _onSearchChanged,
                 decoration: InputDecoration(
-                  hintText: 'Search ${cat.label.toLowerCase()}…',
-                  prefixIcon: const Icon(Icons.search),
+                  hintText: 'Search medicine, brand, or pharmacy…',
+                  prefixIcon: const Icon(Icons.search_rounded),
+                  suffixIcon: _drugSearching
+                      ? const Padding(
+                          padding: EdgeInsets.all(12),
+                          child: SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        )
+                      : null,
                   filled: true,
-                  fillColor: BytzGoTheme.sheetDivider.withValues(alpha: 0.35),
+                  fillColor: Colors.white,
                   border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(14),
-                    borderSide: BorderSide.none,
+                    borderRadius: BorderRadius.circular(16),
+                    borderSide: BorderSide(
+                      color: BytzGoTheme.brandBlue.withValues(alpha: 0.18),
+                    ),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    borderSide: BorderSide(
+                      color: BytzGoTheme.sheetDivider.withValues(alpha: 0.9),
+                    ),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    borderSide: const BorderSide(
+                      color: BytzGoTheme.brandBlue,
+                      width: 1.5,
+                    ),
                   ),
                 ),
               ),
@@ -392,13 +499,17 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
                       Icon(cat.icon, size: 48, color: cat.accent.withValues(alpha: 0.5)),
                       const SizedBox(height: 12),
                       Text(
-                        'No ${cat.label.toLowerCase()} in your area yet',
+                        _drugSearchActive && _searchCtrl.text.trim().length >= 2
+                            ? 'No pharmacy stocks "${_searchCtrl.text.trim()}" yet'
+                            : 'No ${cat.label.toLowerCase()} in your area yet',
                         style: BytzGoTheme.sheetTitle(16),
                         textAlign: TextAlign.center,
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        'Try another category or check back soon.',
+                        _drugSearchActive
+                            ? 'Try a different spelling or browse all pharmacies.'
+                            : 'Try the other tab or check back soon.',
                         style: BytzGoTheme.sheetBody(13),
                         textAlign: TextAlign.center,
                       ),
@@ -409,6 +520,30 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
             )
           else
             SliverPadding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+              sliver: SliverToBoxAdapter(
+                child: Row(
+                  children: [
+                    Text(
+                      'NEAR YOU',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 1.2,
+                        color: BytzGoTheme.sheetMuted.withValues(alpha: 0.9),
+                      ),
+                    ),
+                    const Spacer(),
+                    Text(
+                      '${filtered.length} ${cat.label.toLowerCase()}',
+                      style: BytzGoTheme.sheetBody(11),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          if (!_loading && _error == null && filtered.isNotEmpty)
+            SliverPadding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
               sliver: SliverList(
                 delegate: SliverChildBuilderDelegate(
@@ -417,22 +552,34 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
                     final chip = ShopCategory.byId(v.shopCategory) ?? cat;
                     final closed = v.shopOpenStatus == 'closed';
                     return Padding(
-                      padding: const EdgeInsets.only(bottom: 10),
+                      padding: const EdgeInsets.only(bottom: 12),
                       child: Opacity(
                         opacity: closed ? 0.72 : 1,
                         child: Material(
                           color: BytzGoTheme.sheetBg,
                           elevation: 0,
+                          shadowColor: chip.accent.withValues(alpha: 0.2),
                           shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(18),
+                            borderRadius: BorderRadius.circular(20),
                             side: BorderSide(
-                              color: chip.accent.withValues(alpha: closed ? 0.12 : 0.25),
+                              color: chip.accent.withValues(alpha: closed ? 0.12 : 0.22),
                             ),
                           ),
                           child: InkWell(
                             onTap: () => _openVendorMenu(v),
-                            borderRadius: BorderRadius.circular(18),
-                            child: Padding(
+                            borderRadius: BorderRadius.circular(20),
+                            child: Container(
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(20),
+                                gradient: LinearGradient(
+                                  begin: Alignment.topLeft,
+                                  end: Alignment.bottomRight,
+                                  colors: [
+                                    chip.accent.withValues(alpha: 0.04),
+                                    Colors.transparent,
+                                  ],
+                                ),
+                              ),
                               padding: const EdgeInsets.all(14),
                               child: Row(
                                 children: [
@@ -505,6 +652,39 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
                                             ),
                                           ),
                                         ],
+                                        if (_drugMatches[v.id]?.isNotEmpty == true) ...[
+                                          const SizedBox(height: 8),
+                                          Wrap(
+                                            spacing: 6,
+                                            runSpacing: 6,
+                                            children: _drugMatches[v.id]!
+                                                .take(3)
+                                                .map(
+                                                  (p) => Container(
+                                                    padding: const EdgeInsets.symmetric(
+                                                      horizontal: 8,
+                                                      vertical: 4,
+                                                    ),
+                                                    decoration: BoxDecoration(
+                                                      color: BytzGoTheme.accent.withValues(alpha: 0.12),
+                                                      borderRadius: BorderRadius.circular(8),
+                                                      border: Border.all(
+                                                        color: BytzGoTheme.accent.withValues(alpha: 0.25),
+                                                      ),
+                                                    ),
+                                                    child: Text(
+                                                      '${p.name} · ${formatCedis(p.price)}',
+                                                      style: TextStyle(
+                                                        fontSize: 10,
+                                                        fontWeight: FontWeight.w700,
+                                                        color: BytzGoTheme.accentDark,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                )
+                                                .toList(),
+                                          ),
+                                        ],
                                         const SizedBox(height: 8),
                                         Row(
                                           children: [
@@ -520,6 +700,17 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
                                                   tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                                                 ),
                                               ),
+                                            TextButton.icon(
+                                              onPressed: () => openShopChatWithVendor(context, vendor: v),
+                                              icon: const Icon(Icons.chat_bubble_outline, size: 16),
+                                              label: const Text('Chat'),
+                                              style: TextButton.styleFrom(
+                                                foregroundColor: BytzGoTheme.accent,
+                                                padding: EdgeInsets.zero,
+                                                minimumSize: const Size(0, 32),
+                                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                              ),
+                                            ),
                                             if (v.phone != null && v.phone!.trim().isNotEmpty)
                                               const SizedBox(width: 8),
                                             TextButton.icon(

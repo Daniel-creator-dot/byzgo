@@ -10,6 +10,7 @@ import '../../models/location_point.dart';
 
 import '../../models/order.dart';
 
+import '../../models/pharmacy_search_hit.dart';
 import '../../models/product.dart';
 import '../../models/trip_message.dart';
 import '../../models/vendor.dart';
@@ -81,6 +82,29 @@ class OrdersRepository {
         .map((e) => Vendor.fromJson(Map<String, dynamic>.from(e)))
         .toList();
     return dedupeVendors(list);
+  }
+
+  Future<List<PharmacySearchHit>> searchPharmaciesByDrug({
+    required String query,
+    String? region,
+    String? category,
+  }) async {
+    final q = query.trim();
+    if (q.length < 2) return [];
+    final params = <String, String>{'q': q};
+    if (region != null && region.isNotEmpty) params['region'] = region;
+    if (category != null && category.isNotEmpty) params['category'] = category;
+
+    final res = await _api.dio.get<dynamic>(
+      '/api/pharmacy-search',
+      queryParameters: params,
+    );
+    final data = res.data;
+    if (data is! List) return [];
+    return data
+        .whereType<Map>()
+        .map((e) => PharmacySearchHit.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
   }
 
   Future<List<Product>> fetchProducts({required String vendorId}) async {

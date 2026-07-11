@@ -38,7 +38,7 @@ class _VendorProductEditorSheetState extends State<_VendorProductEditorSheet> {
   final _price = TextEditingController();
   final _picker = ImagePicker();
 
-  String _category = 'Pharmacy';
+  String _category = 'OTC medicine';
   String? _imageUrl;
   bool _imageChanged = false;
   String? _localImagePath;
@@ -47,14 +47,16 @@ class _VendorProductEditorSheetState extends State<_VendorProductEditorSheet> {
   String? _error;
 
   static const _categories = [
-    'Pharmacy',
+    'Prescription medicine',
+    'OTC medicine',
     'Analgesics',
     'Antibiotics',
     'Antacids',
-    'Vitamins',
-    'Food',
-    'Drinks',
-    'Grocery',
+    'Vitamins & supplements',
+    'Medical supplies',
+    'Personal care',
+    'First aid',
+    'Maternal & child health',
     'Other',
   ];
 
@@ -68,7 +70,7 @@ class _VendorProductEditorSheetState extends State<_VendorProductEditorSheet> {
       _name.text = p.name;
       _description.text = p.description ?? '';
       _price.text = p.price.toStringAsFixed(2);
-      _category = p.category ?? 'Pharmacy';
+      _category = p.category ?? 'OTC medicine';
       _imageUrl = p.imageUrl;
     }
   }

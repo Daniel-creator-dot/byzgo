@@ -1742,6 +1742,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
                     ? userFirstName(_session.user!)
                     : 'there',
                 balance: _session.user?.balance ?? 0,
+                selectedService: widget.vendorMode ? RideServiceType.package : _rideService,
                 vendorMode: widget.vendorMode,
                 onShops: widget.vendorMode ? null : widget.onOpenShops,
                 onWallet: widget.onOpenWallet,
@@ -1779,28 +1780,33 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
             ],
             if (!tracking) ...[
               if (!widget.embedded) ...[
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(18),
-                  child: Image.asset(
-                    'assets/branding/onboarding_delivery.png',
-                    height: 72,
-                    width: double.infinity,
-                    fit: BoxFit.cover,
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: Text(
+                    widget.vendorMode ? 'Plan your dispatch' : 'Book a ride or send a package',
+                    style: BytzGoTheme.sheetTitle(20),
                   ),
                 ),
-                const SizedBox(height: 12),
+                Text(
+                  widget.vendorMode
+                      ? 'Pin pickup and drop-off, then request a bike courier.'
+                      : 'Package courier · Okada rides · Keke (Pragia) for groups',
+                  style: BytzGoTheme.sheetBody(13),
+                ),
+                const SizedBox(height: 14),
+              ] else ...[
+                Text(
+                  widget.vendorMode ? 'Plan your delivery' : 'Where are you going?',
+                  style: BytzGoTheme.sheetTitle(18),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  widget.vendorMode
+                      ? 'Search and pick a suggestion, or tap the map to pin pickup & drop-off'
+                      : _rideService.subtitle,
+                  style: BytzGoTheme.sheetBody(13),
+                ),
               ],
-              Text(
-                widget.vendorMode ? 'Plan your delivery' : 'Choose your ride',
-                style: BytzGoTheme.sheetTitle(18),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                widget.vendorMode
-                    ? 'Search and pick a suggestion, or tap the map to pin pickup & drop-off'
-                    : 'Okada for quick rides · Keke for groups · Package for deliveries',
-                style: BytzGoTheme.sheetBody(13),
-              ),
               if (!widget.vendorMode) ...[
                 const SizedBox(height: 12),
                 RideServicePicker(
@@ -1810,6 +1816,9 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
                       _rideService = type;
                       if (type == RideServiceType.okada && _passengerCount > 2) {
                         _passengerCount = 2;
+                      }
+                      if (type == RideServiceType.keke && _passengerCount > 4) {
+                        _passengerCount = 4;
                       }
                     });
                     if (_hasRoutableCoords) {
@@ -1822,6 +1831,9 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
                   PassengerCountStepper(
                     count: _passengerCount,
                     max: _rideService.maxPassengers,
+                    serviceLabel: _rideService == RideServiceType.keke
+                        ? 'Pragia passengers'
+                        : 'Okada passengers',
                     onChanged: (n) => setState(() => _passengerCount = n),
                   ),
                 ],

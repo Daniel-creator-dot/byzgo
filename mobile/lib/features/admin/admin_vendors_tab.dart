@@ -454,7 +454,7 @@ class _CreateVendorSheetState extends State<_CreateVendorSheet> {
   final _phone = TextEditingController();
   final _password = TextEditingController();
   final _address = TextEditingController();
-  String _category = 'food';
+  String _category = 'pharmacy';
   bool _activate = true;
   bool _saving = false;
   String? _error;
@@ -537,21 +537,21 @@ class _CreateVendorSheetState extends State<_CreateVendorSheet> {
               ),
               const SizedBox(height: 6),
               Text(
-                'Share the email/phone and password with the shop owner. They sign in as Vendor on the app.',
+                'Share the email/phone and password with the pharmacy owner. They sign in as Vendor on the app.',
                 style: TextStyle(
                   color: Colors.white.withValues(alpha: 0.5),
                   fontSize: 12,
                 ),
               ),
               const SizedBox(height: 16),
-              _field(_name, 'Store name', Icons.store),
+              _field(_name, 'Pharmacy / store name', Icons.local_pharmacy_outlined),
               _field(_email, 'Email (login)', Icons.email_outlined),
               _field(_phone, 'Ghana phone (login)', Icons.phone_outlined),
               _field(_password, 'Password', Icons.lock_outline, obscure: true),
               _field(_address, 'Shop address (optional)', Icons.location_on_outlined),
               const SizedBox(height: 8),
               Text(
-                'SHOP CATEGORY',
+                'STORE TYPE (PHARMACY & HEALTH ONLY)',
                 style: TextStyle(
                   color: Colors.white.withValues(alpha: 0.4),
                   fontSize: 10,

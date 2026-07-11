@@ -282,7 +282,7 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
       case _AuthMode.signIn:
         return 'Continue with your phone, email, or Google account';
       case _AuthMode.signUp:
-        return 'Deliveries, rides, and shops in one app';
+        return 'Deliveries, rides, and pharmacy in one app';
       case _AuthMode.forgot:
         return 'Use your registered phone and email';
     }
@@ -461,6 +461,26 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                   }
                 },
               ),
+              if (_signupRole == AppRole.vendor) ...[
+                const SizedBox(height: 14),
+                Text(
+                  'Pharmacy & health retail only',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                    color: BytzGoTheme.sheetText.withValues(alpha: 0.85),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Register as a licensed pharmacy or health retailer. Restaurants and general shops are not accepted.',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: BytzGoTheme.sheetMuted,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
               if (_signupRole == AppRole.rider) ...[
                 const SizedBox(height: 14),
                 Text(
@@ -522,7 +542,7 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
               TextButton(
                 onPressed: () => context.go('/customer'),
                 child: const Text(
-                  'Browse shops without signing in',
+                  'Browse pharmacies without signing in',
                   style: TextStyle(fontWeight: FontWeight.w600),
                 ),
               ),

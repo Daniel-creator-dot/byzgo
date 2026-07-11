@@ -3,6 +3,7 @@ import 'package:socket_io_client/socket_io_client.dart' as io;
 
 import '../models/order.dart';
 import '../models/support_message.dart';
+import '../models/shop_message.dart';
 import '../models/trip_message.dart';
 import 'env.dart';
 import 'push_notification_service.dart';
@@ -13,6 +14,7 @@ typedef OrderIdHandler = void Function(String orderId);
 typedef RideTakenHandler = void Function(String orderId, {String? reason});
 typedef WalletHandler = void Function(double balance);
 typedef LocationHandler = void Function(String riderId, double lat, double lng);
+typedef ShopMessageHandler = void Function(String conversationId, ShopMessage message);
 typedef OrderMessageHandler = void Function(String orderId, TripMessage message);
 typedef SupportMessageHandler = void Function(String ticketId, SupportMessage message);
 typedef ProductUpdatedHandler = void Function(String vendorId, Map<String, dynamic> product);
@@ -44,6 +46,8 @@ class SocketService {
   LocationHandler? onLocationUpdated;
   OrderMessageHandler? onOrderMessage;
   final List<OrderMessageHandler> _orderMessageListeners = [];
+  ShopMessageHandler? onShopMessage;
+  final List<ShopMessageHandler> _shopMessageListeners = [];
   SupportMessageHandler? onSupportMessage;
   final List<SupportMessageHandler> _supportMessageListeners = [];
   ProductUpdatedHandler? onProductUpdated;
@@ -121,6 +125,7 @@ class SocketService {
       ..on('wallet:updated', _onWalletUpdated)
       ..on('location:updated', _onLocationUpdated)
       ..on('order:message', _onOrderMessage)
+      ..on('shop:message', _onShopMessage)
       ..on('ticket:message', _onSupportMessage)
       ..on('product:updated', _onProductUpdated)
       ..on('pulse:guide', _onPulseGuide)
@@ -232,6 +237,33 @@ class SocketService {
 
   void removeOrderMessageListener(OrderMessageHandler listener) {
     _orderMessageListeners.remove(listener);
+  }
+
+  void addShopMessageListener(ShopMessageHandler listener) {
+    if (!_shopMessageListeners.contains(listener)) {
+      _shopMessageListeners.add(listener);
+    }
+  }
+
+  void removeShopMessageListener(ShopMessageHandler listener) {
+    _shopMessageListeners.remove(listener);
+  }
+
+  void _onShopMessage(dynamic data) {
+    final map = _asMap(data);
+    if (map == null || map['conversationId'] == null || map['message'] == null) return;
+    try {
+      final message = ShopMessage.fromJson(
+        Map<String, dynamic>.from(map['message'] as Map),
+      );
+      final conversationId = map['conversationId'].toString();
+      onShopMessage?.call(conversationId, message);
+      for (final listener in List<ShopMessageHandler>.from(_shopMessageListeners)) {
+        listener(conversationId, message);
+      }
+    } catch (e) {
+      debugPrint('[socket] bad shop:message: $e');
+    }
   }
 
   void addSupportMessageListener(SupportMessageHandler listener) {

@@ -25,7 +25,7 @@ class ProductTileImage extends StatelessWidget {
 
   static bool isPharmacyContext(Vendor vendor, Product product) {
     final shop = ShopCategory.normalizeVendorCategory(vendor.shopCategory);
-    if (shop == 'pharmacy') return true;
+    if (shop == 'pharmacy' || shop == 'health') return true;
     if (isPrimeCareVendor(vendor)) return true;
     final cat = '${product.category ?? ''} ${product.name}'.toLowerCase();
     const keys = [
@@ -53,18 +53,10 @@ class ProductTileImage extends StatelessWidget {
       return Icons.medication_outlined;
     }
     final shop = ShopCategory.normalizeVendorCategory(vendor.shopCategory);
-    switch (shop) {
-      case 'groceries':
-        return Icons.shopping_basket_outlined;
-      case 'fashion':
-        return Icons.checkroom_outlined;
-      case 'food':
-        return Icons.restaurant_outlined;
-      default:
-        final cat = (product.category ?? '').toLowerCase();
-        if (cat.contains('drink')) return Icons.local_drink_outlined;
-        return Icons.inventory_2_outlined;
+    if (shop == 'health') {
+      return Icons.health_and_safety_outlined;
     }
+    return Icons.local_pharmacy_outlined;
   }
 
   static Color placeholderTint(Vendor vendor, Product product) {

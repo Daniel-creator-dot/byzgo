@@ -70,9 +70,15 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await ios?.requestPermissions(alert: true, badge: true, sound: true);
   await android?.createNotificationChannel(kTripChannel);
   await android?.createNotificationChannel(kSupportChannel);
+  await android?.createNotificationChannel(kShopChannel);
 
   final isSupport = type == 'support-message';
-  final channel = isSupport ? kSupportChannel : kTripChannel;
+  final isShop = type == 'shop-message';
+  final channel = isSupport
+      ? kSupportChannel
+      : isShop
+          ? kShopChannel
+          : kTripChannel;
   await plugin.show(
     message.hashCode,
     title,

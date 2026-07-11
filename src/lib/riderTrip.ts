@@ -63,15 +63,7 @@ export function isOfferableToRider(order: Order): boolean {
     order.rider_id ?? (order as Order & { riderId?: string }).riderId ?? null;
   if (riderId) return false;
   if (order.status === 'ready') return true;
-  const type =
-    (order as Order & { order_type?: string }).order_type ??
-    (order as Order & { orderType?: string }).orderType ??
-    '';
-  return (
-    order.status === 'pending' &&
-    Boolean(order.vendor_id) &&
-    (type === 'food' || type === 'courier')
-  );
+  return false;
 }
 
 export function isActiveDispatchOffer(order: Order, now = Date.now()): boolean {

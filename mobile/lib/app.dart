@@ -13,10 +13,12 @@ import 'core/places_service.dart';
 import 'core/push_notification_service.dart';
 import 'core/session.dart';
 import 'core/socket_service.dart';
+import 'core/shop_chat_unread.dart';
 import 'core/trip_chat_unread.dart';
 import 'features/admin/admin_repository.dart';
 import 'features/auth/auth_repository.dart';
 import 'features/orders/orders_repository.dart';
+import 'features/shop_chat/shop_chat_repository.dart';
 import 'features/rider/rider_commission_repository.dart';
 import 'features/rider/rider_documents_repository.dart';
 import 'features/owner/owner_repository.dart';
@@ -43,6 +45,7 @@ class _BytzGoAppState extends State<BytzGoApp> {
   late final SocketService _socket;
   late final Session _session;
   late final TripChatUnread _tripChatUnread;
+  late final ShopChatUnread _shopChatUnread;
   late final DeliveryPricingConfig _deliveryPricing;
   late final MapsRuntimeConfig _mapsRuntime;
   late final GoRouter _router;
@@ -58,6 +61,7 @@ class _BytzGoAppState extends State<BytzGoApp> {
     _mapsRuntime = MapsRuntimeConfig(_api);
     _session = Session(_api, _socket);
     _tripChatUnread = TripChatUnread();
+    _shopChatUnread = ShopChatUnread();
     _session.onAuthChanged = () async {
       await _deliveryPricing.onAuthChanged();
       await PushNotificationService.instance.syncActiveRole(
@@ -69,6 +73,7 @@ class _BytzGoAppState extends State<BytzGoApp> {
     _api.onRefreshToken = () => _session.refreshAuthFromServer();
     _api.onUnauthorized = () {
       _tripChatUnread.clear();
+      _shopChatUnread.applyConversationList(const []);
       _session.clear();
     };
     _router = createAppRouter(_session);
@@ -142,6 +147,7 @@ class _BytzGoAppState extends State<BytzGoApp> {
         Provider<SocketService>.value(value: _socket),
         ChangeNotifierProvider<Session>.value(value: _session),
         ChangeNotifierProvider<TripChatUnread>.value(value: _tripChatUnread),
+        ChangeNotifierProvider<ShopChatUnread>.value(value: _shopChatUnread),
         ChangeNotifierProvider<DeliveryPricingConfig>.value(value: _deliveryPricing),
         ChangeNotifierProvider<MapsRuntimeConfig>.value(value: _mapsRuntime),
         Provider(create: (ctx) => AuthRepository(ctx.read<ApiClient>())),
@@ -155,6 +161,7 @@ class _BytzGoAppState extends State<BytzGoApp> {
         Provider(create: (ctx) => RiderStatsRepository(ctx.read<ApiClient>())),
         Provider(create: (ctx) => RiderCommissionRepository(ctx.read<ApiClient>())),
         Provider(create: (ctx) => SupportRepository(ctx.read<ApiClient>())),
+        Provider(create: (ctx) => ShopChatRepository(ctx.read<ApiClient>())),
         Provider(create: (ctx) => ConfigRepository(ctx.read<ApiClient>())),
         Provider(create: (_) => LocationService()),
         Provider(create: (ctx) => PlacesService(ctx.read<ApiClient>())),

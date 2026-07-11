@@ -1,17 +1,19 @@
 import 'package:flutter/material.dart';
 
+import '../../models/ride_service.dart';
 import '../../shared/format.dart';
 import '../../shared/theme.dart';
-import '../../shared/widgets/bytz_hero_header.dart';
 import '../../shared/widgets/ride_google_map.dart';
+import '../../shared/widgets/ride_hub_welcome.dart';
 import '../../shared/widgets/ride_ui.dart';
 
-/// Hero + quick actions for the bike delivery booking sheet.
+/// Hero + quick actions for the ride & delivery booking sheet.
 class DeliveryBookingHeader extends StatelessWidget {
   const DeliveryBookingHeader({
     super.key,
     required this.firstName,
     required this.balance,
+    required this.selectedService,
     this.vendorMode = false,
     this.onShops,
     this.onWallet,
@@ -21,6 +23,7 @@ class DeliveryBookingHeader extends StatelessWidget {
 
   final String firstName;
   final double balance;
+  final RideServiceType selectedService;
   final bool vendorMode;
   final VoidCallback? onShops;
   final VoidCallback? onWallet;
@@ -32,51 +35,14 @@ class DeliveryBookingHeader extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        BytzHeroHeader(
-          kicker: vendorMode ? 'Your store' : 'Fast delivery',
-          title: vendorMode
-              ? 'Send a package\nfrom your shop'
-              : 'Hey $firstName,\nwhere to?',
-          assetPath: 'assets/branding/hero_delivery.png',
-          dark: false,
-          height: 118,
-          trailing: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-            decoration: BoxDecoration(
-              color: BytzGoTheme.accent.withValues(alpha: 0.9),
-              borderRadius: BorderRadius.circular(12),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.12),
-                  blurRadius: 8,
-                ),
-              ],
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                const Text(
-                  'WALLET',
-                  style: TextStyle(
-                    fontSize: 7,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 0.8,
-                    color: BytzGoTheme.sheetText,
-                  ),
-                ),
-                Text(
-                  formatCedisCompact(balance),
-                  style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w900,
-                    color: BytzGoTheme.sheetText,
-                  ),
-                ),
-              ],
-            ),
-          ),
+        RideHubWelcome(
+          firstName: firstName,
+          balance: balance,
+          selectedService: selectedService,
+          vendorMode: vendorMode,
+          onWallet: onWallet,
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 14),
         SizedBox(
           height: 92,
           child: ListView(
@@ -84,13 +50,13 @@ class DeliveryBookingHeader extends StatelessWidget {
             children: [
               if (onShops != null)
                 _QuickTile(
-                  image: 'assets/branding/onboarding_delivery.png',
-                  label: 'Shops',
-                  accent: BytzGoTheme.brandBlue,
+                  image: 'assets/branding/pharmacy_hub_welcome.png',
+                  label: 'Pharmacy',
+                  accent: const Color(0xFF14B8A6),
                   onTap: onShops,
                 ),
               _QuickTile(
-                image: 'assets/branding/hero_delivery.png',
+                image: 'assets/branding/onboarding_delivery.png',
                 label: 'Top up',
                 accent: const Color(0xFF22C55E),
                 onTap: onWallet,
@@ -198,10 +164,10 @@ class PackageTypeSelector extends StatelessWidget {
   final ValueChanged<String> onSelected;
 
   static const options = [
-    _Pkg('Package', Icons.inventory_2_outlined, Color(0xFF1E60C2)),
-    _Pkg('Food', Icons.restaurant_outlined, Color(0xFFF59E0B)),
+    _Pkg('Package', Icons.inventory_2_outlined, Color(0xFF0EA5E9)),
     _Pkg('Documents', Icons.description_outlined, Color(0xFF6366F1)),
-    _Pkg('Groceries', Icons.shopping_bag_outlined, Color(0xFF22C55E)),
+    _Pkg('Medicine', Icons.medication_outlined, Color(0xFF14B8A6)),
+    _Pkg('Electronics', Icons.devices_other_outlined, Color(0xFF8B5CF6)),
     _Pkg('Fragile', Icons.wine_bar_outlined, Color(0xFFEC4899)),
   ];
 

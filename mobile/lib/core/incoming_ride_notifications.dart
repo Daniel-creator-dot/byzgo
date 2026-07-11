@@ -31,6 +31,15 @@ const AndroidNotificationChannel kSupportChannel = AndroidNotificationChannel(
   enableVibration: true,
 );
 
+const AndroidNotificationChannel kShopChannel = AndroidNotificationChannel(
+  'shop_messages',
+  'Pharmacy chat',
+  description: 'Messages between customers and pharmacies',
+  importance: Importance.max,
+  playSound: true,
+  enableVibration: true,
+);
+
 int incomingRideNotificationId(String orderId) =>
     orderId.hashCode & 0x7fffffff;
 

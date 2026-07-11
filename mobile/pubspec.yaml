@@ -1,7 +1,7 @@
 name: bytzgo_mobile
 description: BytzGo — cross-platform delivery app (iOS & Android).
 publish_to: "none"
-version: 1.0.53+78
+version: 1.0.54+79
 
 environment:
   sdk: ^3.5.0
@@ -54,4 +54,5 @@ flutter:
     - assets/branding/onboarding_rider.png
     - assets/branding/onboarding_team.png
     - assets/branding/onboarding_delivery.png
+    - assets/branding/pharmacy_hub_welcome.png
     - assets/branding/kesbridge_logo.png

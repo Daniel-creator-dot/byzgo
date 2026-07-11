@@ -16,7 +16,7 @@ enum RideServiceType {
       case RideServiceType.okada:
         return 'Okada';
       case RideServiceType.keke:
-        return 'Keke';
+        return 'Keke · Pragia';
     }
   }
 
@@ -27,7 +27,7 @@ enum RideServiceType {
       case RideServiceType.okada:
         return 'Ride · 1–2 people · motorcycle';
       case RideServiceType.keke:
-        return 'Ride · up to 4 · tricycle';
+        return 'Ride · up to 4 · tricycle (Pragia)';
     }
   }
 
@@ -105,7 +105,7 @@ String rideServiceRequestLabel(RideServiceType type) {
     case RideServiceType.okada:
       return 'Request Okada';
     case RideServiceType.keke:
-      return 'Request Keke';
+      return 'Request Keke (Pragia)';
     case RideServiceType.package:
       return 'Request bike';
   }
