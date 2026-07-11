@@ -28,7 +28,9 @@ services:
       - key: DATABASE_URL
         sync: false
       - key: PG_POOL_MAX
-        value: "10"
+        value: "8"
+      # Use Supabase *transaction* pooler (port 6543) in DATABASE_URL with ?pgbouncer=true
+      # so Render's single Node process does not exhaust Supabase connection limits.
       - key: PG_IDLE_TIMEOUT_MS
         value: "30000"
       - key: PG_CONNECT_TIMEOUT_MS

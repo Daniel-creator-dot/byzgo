@@ -143,11 +143,17 @@ export async function uploadPicture(params: {
   };
 }
 
+const signedUrlCache = new Map<string, { url: string; expires: number }>();
+
 export async function signedPictureUrl(
   objectKey: string,
   expiresInSec: number = SIGNED_URL_TTL_SEC.riderDocument
 ): Promise<string> {
   if (!isSupabaseStorageConfigured()) return objectKey;
+  const cacheKey = `${objectKey}:${expiresInSec}`;
+  const cached = signedUrlCache.get(cacheKey);
+  if (cached && Date.now() < cached.expires) return cached.url;
+
   const supabaseUrl = envSupabaseUrl();
   const serviceKey = envServiceKey();
   const bucket = envBucket();
@@ -165,9 +171,15 @@ export async function signedPictureUrl(
       }
     );
     const signed = res.data?.signedURL;
-    if (!signed) return publicPictureUrl(path);
-    if (signed.startsWith('http')) return signed;
-    return `${supabaseUrl}${signed.startsWith('/') ? '' : '/'}${signed}`;
+    let url: string;
+    if (!signed) url = publicPictureUrl(path);
+    else if (signed.startsWith('http')) url = signed;
+    else url = `${supabaseUrl}${signed.startsWith('/') ? '' : '/'}${signed}`;
+    signedUrlCache.set(cacheKey, {
+      url,
+      expires: Date.now() + Math.max(expiresInSec - 60, 30) * 1000,
+    });
+    return url;
   } catch (err) {
     console.error('[storage] sign URL failed:', err);
     return publicPictureUrl(path);

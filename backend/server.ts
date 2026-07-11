@@ -733,12 +733,23 @@ function assertProductionConfig() {
   }
 }
 
+function resolvePoolMax(): number {
+  const requested = Number(process.env.PG_POOL_MAX) || 10;
+  const capped = Math.min(20, Math.max(2, requested));
+  // Supabase transaction pooler (6543) shares a small server-side pool — stay conservative.
+  const diag = dbConnectionDiagnostics();
+  if (diag.useTransactionPooler) return Math.min(capped, 10);
+  return capped;
+}
+
 const pool = new Pool({
   connectionString: normalizeDatabaseUrl(process.env.DATABASE_URL),
   ssl: resolveDbSsl(),
-  max: Math.min(20, Math.max(2, Number(process.env.PG_POOL_MAX) || 10)),
+  max: resolvePoolMax(),
+  min: 0,
   idleTimeoutMillis: Number(process.env.PG_IDLE_TIMEOUT_MS) || 30_000,
   connectionTimeoutMillis: Number(process.env.PG_CONNECT_TIMEOUT_MS) || 10_000,
+  allowExitOnIdle: true,
 });
 
 pool.on('error', (err) => {
@@ -1843,7 +1854,53 @@ const initDb = async () => {
       CREATE INDEX IF NOT EXISTS idx_vehicles_owner_id ON vehicles(owner_id, updated_at DESC);
       CREATE INDEX IF NOT EXISTS idx_vehicles_assigned_rider ON vehicles(assigned_rider_id)
         WHERE assigned_rider_id IS NOT NULL;
+
+      -- Performance indexes (orders, products, push tokens)
+      CREATE INDEX IF NOT EXISTS idx_orders_customer_created
+        ON orders (customer_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_orders_vendor_created
+        ON orders (vendor_id, created_at DESC) WHERE vendor_id IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS idx_orders_rider_created
+        ON orders (rider_id, created_at DESC) WHERE rider_id IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS idx_orders_vendor_status
+        ON orders (vendor_id, status) WHERE vendor_id IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS idx_orders_rider_status
+        ON orders (rider_id, status) WHERE rider_id IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS idx_orders_status_scheduled
+        ON orders (status, scheduled_time) WHERE status = 'scheduled';
+      CREATE INDEX IF NOT EXISTS idx_orders_status_created
+        ON orders (status, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_orders_customer_arrived
+        ON orders (customer_id, updated_at) WHERE status = 'arrived';
+      CREATE INDEX IF NOT EXISTS idx_orders_customer_rating
+        ON orders (customer_id) WHERE rating IS NOT NULL AND rating > 0;
+      CREATE INDEX IF NOT EXISTS idx_orders_rider_rating
+        ON orders (rider_id) WHERE rating IS NOT NULL AND rating > 0;
+      CREATE INDEX IF NOT EXISTS idx_products_vendor_stock
+        ON products (vendor_id, is_available, is_approved);
+      CREATE INDEX IF NOT EXISTS idx_users_vendors_active
+        ON users (role, status, region) WHERE role = 'vendor' AND status = 'active';
+      CREATE INDEX IF NOT EXISTS idx_fcm_tokens_user
+        ON fcm_tokens (user_id);
+      CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user
+        ON push_subscriptions (user_id);
+      CREATE INDEX IF NOT EXISTS idx_dispatch_offers_rider_active
+        ON order_dispatch_offers (rider_id, status, expires_at) WHERE status = 'offered';
+      CREATE INDEX IF NOT EXISTS idx_otps_phone_purpose
+        ON otps (phone, purpose, expires_at);
     `);
+
+    try {
+      await pool.query(`CREATE EXTENSION IF NOT EXISTS pg_trgm`);
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_products_name_trgm
+          ON products USING gin (name gin_trgm_ops);
+        CREATE INDEX IF NOT EXISTS idx_products_category_trgm
+          ON products USING gin (category gin_trgm_ops);
+      `);
+    } catch (trgmErr) {
+      console.warn('[db] pg_trgm extension/index skipped:', (trgmErr as Error).message);
+    }
 
     await pool.query(`
       DO $$ BEGIN
@@ -2066,8 +2123,15 @@ async function activateDueScheduledOrders() {
   }
 }
 
-/** Close trips stuck at arrival (missing PIN / rider never completed). */
+/** Close trips stuck at arrival (missing PIN / rider never completed). Throttled per customer. */
+const staleTripRepairLastRun = new Map<string, number>();
+const STALE_TRIP_REPAIR_INTERVAL_MS = 5 * 60_000;
+
 async function repairStaleTripsForCustomer(customerId: string) {
+  const now = Date.now();
+  const last = staleTripRepairLastRun.get(customerId) ?? 0;
+  if (now - last < STALE_TRIP_REPAIR_INTERVAL_MS) return;
+  staleTripRepairLastRun.set(customerId, now);
   const stale = await pool.query(
     `UPDATE orders SET status = 'delivered', updated_at = CURRENT_TIMESTAMP
      WHERE customer_id = $1
@@ -5576,6 +5640,8 @@ app.get('/api/vendors', async (req, res) => {
       query += ` AND LOWER(COALESCE(shop_category, 'pharmacy')) = LOWER($${params.length + 1})`;
       params.push(category.trim());
     }
+
+    query += ' ORDER BY name ASC LIMIT 200';
     
     const result = await pool.query(query, params);
     const vendors = await Promise.all(
@@ -5696,6 +5762,13 @@ app.get('/api/products', async (req, res) => {
     if (vendor_id) {
       query += ' AND vendor_id = $' + (params.length + 1);
       params.push(vendor_id);
+    } else {
+      const limit = Math.min(
+        Math.max(parseInt(String(req.query.limit || '500'), 10) || 500, 1),
+        1000
+      );
+      query += ` LIMIT $${params.length + 1}`;
+      params.push(limit);
     }
     const result = await pool.query(query, params);
     res.json(result.rows);
@@ -7393,24 +7466,29 @@ app.get('/api/orders', authenticateToken, async (req: any, res) => {
         WHERE (
           o.rider_id = $1
         ) OR (
-          (
-            o.status = 'ready'
-            OR (
-              o.status = 'pending'
-              AND o.vendor_id IS NOT NULL
-              AND o.order_type IN ('food', 'courier')
-            )
-          )
+          o.status = 'ready'
           AND o.rider_id IS NULL
           AND odo.order_id IS NOT NULL
           AND $2 = true
         )
-        ORDER BY o.created_at DESC`;
-      params.push(req.user.id, rider?.is_online === true);
+        ORDER BY o.created_at DESC
+        LIMIT $3 OFFSET $4`;
+      const riderLimit = Math.min(
+        Math.max(parseInt(String(req.query.limit || '80'), 10) || 80, 1),
+        150
+      );
+      const riderOffset = Math.max(parseInt(String(req.query.offset || '0'), 10) || 0, 0);
+      params.push(req.user.id, rider?.is_online === true, riderLimit, riderOffset);
     }
 
     if (req.user.role !== 'rider') {
-      query += ' ORDER BY o.created_at DESC';
+      const limit = Math.min(
+        Math.max(parseInt(String(req.query.limit || '120'), 10) || 120, 1),
+        300
+      );
+      const offset = Math.max(parseInt(String(req.query.offset || '0'), 10) || 0, 0);
+      query += ` ORDER BY o.created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+      params.push(limit, offset);
     }
 
     const result = await pool.query(query, params);
