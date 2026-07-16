@@ -2818,13 +2818,15 @@ function ridersPerWave(wave: number): number {
 }
 /** Max sequential offers before giving up (each step = next nearest rider). */
 const MAX_DISPATCH_WAVES = 15;
-/** Max age for rider GPS row; profile lat/lng still used when socket GPS is stale. */
-const LOCATION_MAX_AGE_MIN = 45;
+/** Prefer GPS newer than this; older rows still usable as last-known position. */
+const LOCATION_FRESH_MAX_AGE_MIN = 45;
+/** Last-known GPS older than this is ignored for distance ranking. */
+const LOCATION_STALE_MAX_AGE_HOURS = 72;
 /** Expanding pickup radius (km) as dispatch steps progress. */
 const DISPATCH_RADIUS_KM_TIERS = [6, 12, 25] as const;
 const NEARBY_RIDERS_MAX_KM = 6;
-/** Start offering any online rider after this wave if nobody nearby. */
-const EARLY_GLOBAL_FALLBACK_WAVE = 2;
+/** Offer any online rider as soon as nearby search is empty (wave 1+). */
+const EARLY_GLOBAL_FALLBACK_WAVE = 1;
 
 function dispatchRadiusKm(wave: number): number {
   if (wave <= 5) return DISPATCH_RADIUS_KM_TIERS[0];
@@ -2944,18 +2946,20 @@ async function queryNearestActiveRiders(
 ): Promise<NearbyRider[]> {
   const norm = normalizeRegion(region);
   const serviceFilter = rideServiceSqlFilter(serviceType);
-  const regionClause = useRegionFilter && norm
-    ? `AND (u.region IS NULL OR TRIM(u.region) = '' OR LOWER(TRIM(u.region)) = $7)`
-    : '';
   const params: unknown[] = [
     pickup.lat,
     pickup.lng,
     excludeRiderIds.length ? excludeRiderIds : [],
     limit,
-    LOCATION_MAX_AGE_MIN,
+    LOCATION_FRESH_MAX_AGE_MIN,
     maxRadiusKm,
+    LOCATION_STALE_MAX_AGE_HOURS,
   ];
   if (useRegionFilter && norm) params.push(norm);
+  // $7 = stale hours; region is $8 when present
+  const regionClauseFixed = useRegionFilter && norm
+    ? `AND (u.region IS NULL OR TRIM(u.region) = '' OR LOWER(TRIM(u.region)) = $8)`
+    : '';
 
   const result = await pool.query(
     `SELECT id, distance_km FROM (
@@ -2969,21 +2973,34 @@ async function queryNearestActiveRiders(
        FROM users u
        LEFT JOIN rider_locations rl ON rl.rider_id = u.id
        CROSS JOIN LATERAL (
+         -- Prefer fresh GPS, then profile pin, then last-known GPS (even if stale).
          SELECT
-           COALESCE(rl.lat, u.lat::double precision) AS lat,
-           COALESCE(rl.lng, u.lng::double precision) AS lng
+           CASE
+             WHEN rl.lat IS NOT NULL AND ABS(rl.lat) > 0.001
+               AND rl.updated_at > NOW() - INTERVAL '1 minute' * $5
+               THEN rl.lat
+             WHEN u.lat IS NOT NULL AND ABS(u.lat::double precision) > 0.001
+               THEN u.lat::double precision
+             WHEN rl.lat IS NOT NULL AND ABS(rl.lat) > 0.001
+               AND rl.updated_at > NOW() - INTERVAL '1 hour' * $7
+               THEN rl.lat
+             ELSE NULL
+           END AS lat,
+           CASE
+             WHEN rl.lng IS NOT NULL AND ABS(rl.lng) > 0.001
+               AND rl.updated_at > NOW() - INTERVAL '1 minute' * $5
+               THEN rl.lng
+             WHEN u.lng IS NOT NULL AND ABS(u.lng::double precision) > 0.001
+               THEN u.lng::double precision
+             WHEN rl.lng IS NOT NULL AND ABS(rl.lng) > 0.001
+               AND rl.updated_at > NOW() - INTERVAL '1 hour' * $7
+               THEN rl.lng
+             ELSE NULL
+           END AS lng
        ) eff
        WHERE u.role = 'rider' AND u.status = 'active' AND u.is_online = true
        AND eff.lat IS NOT NULL AND eff.lng IS NOT NULL
        AND ABS(eff.lat) > 0.001 AND ABS(eff.lng) > 0.001
-       AND (
-         rl.updated_at > NOW() - INTERVAL '1 minute' * $5
-         OR (
-           u.lat IS NOT NULL AND u.lng IS NOT NULL
-           AND (rl.rider_id IS NULL OR rl.updated_at IS NULL
-             OR rl.updated_at <= NOW() - INTERVAL '1 minute' * $5)
-         )
-       )
        AND (COALESCE(array_length($3::uuid[], 1), 0) = 0 OR NOT (u.id = ANY($3::uuid[])))
        AND NOT EXISTS (
          SELECT 1 FROM orders busy
@@ -2991,7 +3008,7 @@ async function queryNearestActiveRiders(
          AND busy.status IN ('ready', 'picked_up', 'arrived')
        )
        ${serviceFilter}
-       ${regionClause}
+       ${regionClauseFixed}
      ) ranked
      WHERE distance_km <= $6
      ORDER BY distance_km ASC
@@ -3196,6 +3213,27 @@ async function startOrderDispatch(order: any) {
     [order.id]
   );
   await advanceDispatchWave(order, 1);
+}
+
+/** Re-offer ready trips that never reached a rider (stale GPS / missed dispatch). */
+async function redispatchOrphanReadyOrders() {
+  const orphans = await pool.query(
+    `SELECT o.*
+     FROM orders o
+     WHERE o.status = 'ready'
+       AND o.rider_id IS NULL
+       AND o.created_at > NOW() - INTERVAL '6 hours'
+       AND NOT EXISTS (
+         SELECT 1 FROM order_dispatch_offers d
+         WHERE d.order_id = o.id AND d.status = 'offered' AND d.expires_at > NOW()
+       )
+     ORDER BY o.created_at ASC
+     LIMIT 20`
+  );
+  for (const order of orphans.rows) {
+    console.info(`[dispatch] re-dispatching orphan ready order ${order.id}`);
+    await startOrderDispatch(order);
+  }
 }
 
 async function recordRiderDecline(orderId: string, riderId: string) {
@@ -4694,7 +4732,20 @@ app.patch('/api/auth/status', authenticateToken, async (req: any, res) => {
         [isOnline, req.user.id]
       );
       const user = result.rows[0];
-      if (isOnline) await seedRiderLocationFromProfile(user.id);
+      if (isOnline) {
+        await seedRiderLocationFromProfile(user.id);
+        // If profile has no pin, adopt last-known GPS so dispatch can match this rider.
+        await pool.query(
+          `UPDATE users u
+           SET lat = rl.lat, lng = rl.lng
+           FROM rider_locations rl
+           WHERE rl.rider_id = u.id
+             AND u.id = $1
+             AND rl.lat IS NOT NULL AND ABS(rl.lat) > 0.001
+             AND (u.lat IS NULL OR ABS(u.lat::double precision) < 0.001)`,
+          [user.id]
+        );
+      }
       const token = signAuthToken(user);
       res.json({ user: await userForAuthResponse(user), token });
       io.to(String(user.id)).emit('status:updated', { status: user.status, is_online: user.is_online });
@@ -5246,7 +5297,7 @@ app.get('/api/riders/nearby', authenticateToken, async (req: any, res) => {
        FROM rider_locations rl
        WHERE rl.rider_id = ANY($1::uuid[])
          AND rl.updated_at > NOW() - INTERVAL '1 minute' * $2`,
-      [riderIds, LOCATION_MAX_AGE_MIN]
+      [riderIds, LOCATION_FRESH_MAX_AGE_MIN]
     );
     const locById = new Map<string, { lat: number; lng: number }>();
     for (const row of locs.rows) {
@@ -9894,6 +9945,11 @@ io.on('connection', (socket) => {
         'INSERT INTO rider_locations (rider_id, lat, lng, updated_at) VALUES ($1, $2, $3, CURRENT_TIMESTAMP) ON CONFLICT (rider_id) DO UPDATE SET lat = $2, lng = $3, updated_at = CURRENT_TIMESTAMP',
         [riderId, lat, lng]
       );
+      // Keep profile pin in sync so dispatch can match when GPS feed pauses.
+      await pool.query(
+        `UPDATE users SET lat = $2, lng = $3 WHERE id = $1 AND role = 'rider'`,
+        [riderId, lat, lng]
+      );
       const payload = { riderId, lat, lng };
       io.to(riderId).emit('location:updated', payload);
       const watching = await pool.query(
@@ -10099,9 +10155,17 @@ httpServer.listen(PORT, HOST, () => {
   void activateDueScheduledOrders().catch((err) =>
     console.warn('[dispatch] scheduled order activation failed:', err)
   );
+  void redispatchOrphanReadyOrders().catch((err) =>
+    console.warn('[dispatch] orphan re-dispatch failed:', err)
+  );
   setInterval(() => {
     void activateDueScheduledOrders().catch((err) =>
       console.warn('[dispatch] scheduled order activation failed:', err)
     );
   }, 60_000);
+  setInterval(() => {
+    void redispatchOrphanReadyOrders().catch((err) =>
+      console.warn('[dispatch] orphan re-dispatch failed:', err)
+    );
+  }, 30_000);
 });
