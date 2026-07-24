@@ -1949,23 +1949,31 @@ const initDb = async () => {
         AND (rider_vehicle_type IS NULL OR TRIM(rider_vehicle_type) = '');
     `);
 
-    // One-time: clear phantom online flags left by the old boot seed (SET is_online=true for all active).
+    // One-time + recurring: clear zombie online flags (old boot seed + stale GPS).
+    await pruneStaleOnlineRiders().catch((err) =>
+      console.warn('[dispatch] startup prune failed:', err)
+    );
     const phantomFix = await pool.query(
-      `SELECT value FROM system_settings WHERE key = 'dispatch_phantom_online_cleared_v1'`
+      `SELECT value FROM system_settings WHERE key = 'dispatch_phantom_online_cleared_v2'`
     );
     if (!phantomFix.rows[0]) {
       const cleared = await pool.query(
         `UPDATE users SET is_online = false
          WHERE role = 'rider' AND is_online = true
+           AND id NOT IN (
+             SELECT rider_id FROM rider_locations
+             WHERE updated_at > NOW() - INTERVAL '90 minutes'
+               AND ABS(lat) > 0.001 AND ABS(lng) > 0.001
+           )
          RETURNING id`
       );
       await pool.query(
-        `INSERT INTO system_settings (key, value) VALUES ('dispatch_phantom_online_cleared_v1', $1)
+        `INSERT INTO system_settings (key, value) VALUES ('dispatch_phantom_online_cleared_v2', $1)
          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
         [String(cleared.rowCount ?? 0)]
       );
       console.info(
-        `[dispatch] cleared ${cleared.rowCount ?? 0} phantom online rider flag(s) — drivers must tap Go Online again`
+        `[dispatch] cleared ${cleared.rowCount ?? 0} phantom online rider flag(s) — drivers with live GPS stay online`
       );
     }
 
@@ -2855,10 +2863,12 @@ function ridersPerWave(_wave: number): number {
 }
 /** Max sequential offers before giving up (each step = next nearest rider). */
 const MAX_DISPATCH_WAVES = 15;
-/** Prefer GPS newer than this; older rows still usable as last-known position. */
+/** Prefer GPS newer than this for distance ranking (minutes). */
 const LOCATION_FRESH_MAX_AGE_MIN = 45;
-/** Last-known GPS older than this is ignored for distance ranking. */
-const LOCATION_STALE_MAX_AGE_HOURS = 72;
+/** Auto-offline riders whose GPS is older than this (minutes). */
+const ONLINE_STALE_GPS_MAX_AGE_MIN = 90;
+/** Last-known GPS older than this is ignored entirely (hours). */
+const LOCATION_STALE_MAX_AGE_HOURS = 6;
 /** Expanding pickup radius (km) as dispatch steps progress. */
 const DISPATCH_RADIUS_KM_TIERS = [6, 12, 25] as const;
 const NEARBY_RIDERS_MAX_KM = 6;
@@ -2940,18 +2950,54 @@ async function getAvailableOnlineRiders(
   limit: number
 ): Promise<NearbyRider[]> {
   if (!riderIds.length || limit <= 0) return [];
+  // Prefer riders who can actually receive the quest (fresh GPS + FCM).
   const res = await pool.query(
     `SELECT u.id FROM users u
+     LEFT JOIN rider_locations rl ON rl.rider_id = u.id
+     LEFT JOIN LATERAL (
+       SELECT 1 AS ok FROM fcm_tokens t WHERE t.user_id = u.id LIMIT 1
+     ) tok ON true
      WHERE u.id = ANY($1::uuid[])
      AND NOT EXISTS (
        SELECT 1 FROM orders busy
        WHERE busy.rider_id = u.id
        AND busy.status IN ('ready', 'picked_up', 'arrived')
      )
+     ORDER BY
+       CASE WHEN rl.updated_at > NOW() - INTERVAL '1 minute' * $3 THEN 0 ELSE 1 END,
+       CASE WHEN tok.ok IS NOT NULL THEN 0 ELSE 1 END,
+       rl.updated_at DESC NULLS LAST
      LIMIT $2`,
-    [riderIds, limit]
+    [riderIds, limit, LOCATION_FRESH_MAX_AGE_MIN]
   );
   return res.rows.map((row: { id: string }) => ({ id: row.id, distanceKm: 0 }));
+}
+
+/** Mark zombie "online" riders offline so they stop eating dispatch waves. */
+async function pruneStaleOnlineRiders(): Promise<number> {
+  const result = await pool.query(
+    `UPDATE users u
+     SET is_online = false
+     WHERE u.role = 'rider'
+       AND u.is_online = true
+       AND u.status = 'active'
+       AND NOT EXISTS (
+         SELECT 1 FROM rider_locations rl
+         WHERE rl.rider_id = u.id
+           AND rl.updated_at > NOW() - INTERVAL '1 minute' * $1
+           AND ABS(rl.lat) > 0.001 AND ABS(rl.lng) > 0.001
+       )
+     RETURNING u.id`,
+    [ONLINE_STALE_GPS_MAX_AGE_MIN]
+  );
+  const n = result.rowCount ?? 0;
+  if (n > 0) {
+    console.info(`[dispatch] pruned ${n} stale online rider(s) (GPS older than ${ONLINE_STALE_GPS_MAX_AGE_MIN}m)`);
+    for (const row of result.rows) {
+      io.to(String(row.id)).emit('status:updated', { status: 'active', is_online: false });
+    }
+  }
+  return n;
 }
 
 async function getPickupPoint(order: any): Promise<{ lat: number; lng: number } | null> {
@@ -3043,29 +3089,20 @@ async function queryNearestActiveRiders(
           ))
         )) AS distance_km
        FROM users u
-       LEFT JOIN rider_locations rl ON rl.rider_id = u.id
+       INNER JOIN rider_locations rl ON rl.rider_id = u.id
        CROSS JOIN LATERAL (
-         -- Prefer fresh GPS, then profile pin, then last-known GPS (even if stale).
+         -- ONLY fresh GPS counts for ranking. Ageless profile pins were matching
+         -- dead accounts (GPS weeks old) ahead of live drivers.
          SELECT
            CASE
-             WHEN rl.lat IS NOT NULL AND ABS(rl.lat) > 0.001
+             WHEN ABS(rl.lat) > 0.001
                AND rl.updated_at > NOW() - INTERVAL '1 minute' * $5
-               THEN rl.lat
-             WHEN u.lat IS NOT NULL AND ABS(u.lat::double precision) > 0.001
-               THEN u.lat::double precision
-             WHEN rl.lat IS NOT NULL AND ABS(rl.lat) > 0.001
-               AND rl.updated_at > NOW() - INTERVAL '1 hour' * $7
                THEN rl.lat
              ELSE NULL
            END AS lat,
            CASE
-             WHEN rl.lng IS NOT NULL AND ABS(rl.lng) > 0.001
+             WHEN ABS(rl.lng) > 0.001
                AND rl.updated_at > NOW() - INTERVAL '1 minute' * $5
-               THEN rl.lng
-             WHEN u.lng IS NOT NULL AND ABS(u.lng::double precision) > 0.001
-               THEN u.lng::double precision
-             WHEN rl.lng IS NOT NULL AND ABS(rl.lng) > 0.001
-               AND rl.updated_at > NOW() - INTERVAL '1 hour' * $7
                THEN rl.lng
              ELSE NULL
            END AS lng
@@ -3350,6 +3387,7 @@ async function advanceDispatchWave(order: any, wave: number) {
 async function startOrderDispatch(order: any, opts?: { freshCycle?: boolean }) {
   if (!isOfferableOrder(order)) return;
   clearDispatchTimer(order.id);
+  await pruneStaleOnlineRiders();
   await pool.query(
     `UPDATE order_dispatch_offers SET status = 'expired'
      WHERE order_id = $1 AND status = 'offered'`,
@@ -6822,10 +6860,33 @@ app.get('/api/admin/dispatch/status', authenticateToken, async (req: any, res) =
   }
 });
 
+/** Admin: kick zombie online riders (no fresh GPS) and re-dispatch waiting trips. */
+app.post('/api/admin/dispatch/prune', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'admin') return res.sendStatus(403);
+  try {
+    const pruned = await pruneStaleOnlineRiders();
+    await redispatchOrphanReadyOrders();
+    const status = await pool.query(
+      `SELECT COUNT(*)::int AS online
+       FROM users WHERE role = 'rider' AND status = 'active' AND is_online = true`
+    );
+    res.json({
+      ok: true,
+      pruned,
+      onlineRemaining: status.rows[0]?.online ?? 0,
+      message: `Pruned ${pruned} stale rider(s). Waiting trips re-dispatched.`,
+    });
+  } catch (err) {
+    console.error('[admin/dispatch/prune]', err);
+    res.status(500).json({ message: 'Prune failed' });
+  }
+});
+
 /** Admin: force re-dispatch of a ready order to online riders. */
 app.post('/api/admin/dispatch/:orderId/redispatch', authenticateToken, async (req: any, res) => {
   if (req.user.role !== 'admin') return res.sendStatus(403);
   try {
+    await pruneStaleOnlineRiders();
     const orderRes = await pool.query('SELECT * FROM orders WHERE id = $1', [req.params.orderId]);
     const order = orderRes.rows[0];
     if (!order) return res.status(404).json({ message: 'Order not found' });
@@ -10401,6 +10462,10 @@ httpServer.listen(PORT, HOST, () => {
   void ensureRidePromotionsSchema().catch((err) =>
     console.warn('[promotions] schema init failed:', err)
   );
+  // Production skips initDb — run phantom prune here so it actually executes on Render.
+  void pruneStaleOnlineRiders()
+    .then((n) => console.info(`[dispatch] startup prune removed ${n} stale online rider(s)`))
+    .catch((err) => console.warn('[dispatch] startup prune failed:', err));
   void activateDueScheduledOrders().catch((err) =>
     console.warn('[dispatch] scheduled order activation failed:', err)
   );
@@ -10410,6 +10475,11 @@ httpServer.listen(PORT, HOST, () => {
   setInterval(() => {
     void activateDueScheduledOrders().catch((err) =>
       console.warn('[dispatch] scheduled order activation failed:', err)
+    );
+  }, 60_000);
+  setInterval(() => {
+    void pruneStaleOnlineRiders().catch((err) =>
+      console.warn('[dispatch] prune failed:', err)
     );
   }, 60_000);
   setInterval(() => {

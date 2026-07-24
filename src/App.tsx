@@ -5049,6 +5049,22 @@ function AdminView({
                      </div>
                    </div>
                  )}
+                 <button
+                   type="button"
+                   onClick={async () => {
+                     try {
+                       const res = await axios.post('/api/admin/dispatch/prune');
+                       addNotification(res.data?.message || 'Pruned stale riders', 'success');
+                       const status = await axios.get('/api/admin/dispatch/status');
+                       setDispatchStatus(status.data);
+                     } catch (err) {
+                       addNotification(getApiError(err, 'Prune failed'), 'warning');
+                     }
+                   }}
+                   className="w-full px-4 py-3 bg-amber-500 text-slate-950 rounded-xl text-[10px] font-black uppercase"
+                 >
+                   Kick ghost online riders + re-send waiting trips
+                 </button>
                </div>
              ) : (
                <p className="text-xs text-slate-400 font-bold">Could not load dispatch status.</p>
