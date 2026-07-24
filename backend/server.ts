@@ -2812,9 +2812,13 @@ const OFFER_TTL_SEC = Math.min(
   120,
   Math.max(15, Number(process.env.DISPATCH_OFFER_TTL_SEC) || 30)
 );
-/** Offer 2 nearest riders on early waves for faster matching. */
-function ridersPerWave(wave: number): number {
-  return wave <= 3 ? 2 : 1;
+/**
+ * Bolt-style: ping one nearest rider per step.
+ * Offering 2+ on early waves burned the whole small fleet in one timeout,
+ * then permanently excluded them so later waves / orphan re-dispatch found nobody.
+ */
+function ridersPerWave(_wave: number): number {
+  return 1;
 }
 /** Max sequential offers before giving up (each step = next nearest rider). */
 const MAX_DISPATCH_WAVES = 15;
@@ -2827,6 +2831,10 @@ const DISPATCH_RADIUS_KM_TIERS = [6, 12, 25] as const;
 const NEARBY_RIDERS_MAX_KM = 6;
 /** Offer any online rider as soon as nearby search is empty (wave 1+). */
 const EARLY_GLOBAL_FALLBACK_WAVE = 1;
+/** How many times we may clear timed-out offers and re-ping the same riders. */
+const MAX_DISPATCH_RETRY_CYCLES = 8;
+/** In-memory retry budget per order (resets on process restart; orphan job recovers). */
+const dispatchRetryCycles = new Map<string, number>();
 
 function dispatchRadiusKm(wave: number): number {
   if (wave <= 5) return DISPATCH_RADIUS_KM_TIERS[0];
@@ -2927,12 +2935,42 @@ async function getPickupPoint(order: any): Promise<{ lat: number; lng: number } 
   return null;
 }
 
+/**
+ * Riders to skip for the current offer step.
+ * Keep declined/accepted forever for this order; include expired so we don't
+ * immediately re-ping the same rider on the next wave within a cycle.
+ */
 async function getOfferedRiderIds(orderId: string): Promise<string[]> {
   const r = await pool.query(
-    `SELECT rider_id FROM order_dispatch_offers WHERE order_id = $1`,
+    `SELECT rider_id FROM order_dispatch_offers
+     WHERE order_id = $1 AND status IN ('offered', 'declined', 'accepted', 'expired')`,
     [orderId]
   );
   return r.rows.map((row: { rider_id: string }) => row.rider_id);
+}
+
+/** Clear timed-out offers so the same online riders can be offered again. Keeps declines. */
+async function clearExpiredDispatchOffers(orderId: string): Promise<number> {
+  const r = await pool.query(
+    `DELETE FROM order_dispatch_offers
+     WHERE order_id = $1 AND status = 'expired'
+     RETURNING rider_id`,
+    [orderId]
+  );
+  return r.rowCount ?? 0;
+}
+
+async function maybeRestartDispatchAfterExhaustion(order: any, reason: string): Promise<boolean> {
+  const cycles = dispatchRetryCycles.get(order.id) ?? 0;
+  if (cycles >= MAX_DISPATCH_RETRY_CYCLES) return false;
+  const cleared = await clearExpiredDispatchOffers(order.id);
+  if (cleared <= 0) return false;
+  dispatchRetryCycles.set(order.id, cycles + 1);
+  console.info(
+    `[dispatch] order ${order.id}: ${reason} — cleared ${cleared} expired offer(s), retry cycle ${cycles + 1}/${MAX_DISPATCH_RETRY_CYCLES}`
+  );
+  await advanceDispatchWave(order, 1);
+  return true;
 }
 
 async function queryNearestActiveRiders(
@@ -3135,12 +3173,30 @@ async function handleWaveExpired(orderId: string, wave: number) {
   );
   if (open.rows[0].c > 0) return;
 
+  const serviceType = normalizeRideServiceType(order.service_type);
+  const [exclude, onlineIds] = await Promise.all([
+    getOfferedRiderIds(orderId),
+    getActiveRiderIds(order.region, serviceType),
+  ]);
+  const remaining = onlineIds.filter((id) => !exclude.includes(id));
+  // Small fleets: after the only online rider(s) time out, re-ping instead of dying.
+  if (remaining.length === 0 && onlineIds.length > 0) {
+    const restarted = await maybeRestartDispatchAfterExhaustion(
+      order,
+      'all online riders timed out'
+    );
+    if (restarted) return;
+  }
+
   await advanceDispatchWave(order, wave + 1);
 }
 
 async function advanceDispatchWave(order: any, wave: number) {
   if (!isOfferableOrder(order)) return;
-  if (wave > MAX_DISPATCH_WAVES) return;
+  if (wave > MAX_DISPATCH_WAVES) {
+    await maybeRestartDispatchAfterExhaustion(order, `exhausted ${MAX_DISPATCH_WAVES} waves`);
+    return;
+  }
 
   const serviceType = normalizeRideServiceType(order.service_type);
   const [exclude, pickup] = await Promise.all([
@@ -3182,15 +3238,31 @@ async function advanceDispatchWave(order: any, wave: number) {
   }
 
   if (candidates.length === 0) {
+    // If every online rider was already offered this cycle, re-open expired and retry.
+    const onlineIds = await getActiveRiderIds(order.region, serviceType);
+    const remaining = onlineIds.filter((id) => !exclude.includes(id));
+    if (remaining.length === 0 && onlineIds.length > 0) {
+      const restarted = await maybeRestartDispatchAfterExhaustion(
+        order,
+        `no unpinged riders at wave ${wave}`
+      );
+      if (restarted) return;
+    }
     if (wave < MAX_DISPATCH_WAVES) {
       console.warn(
         `[dispatch] order ${order.id} step ${wave}: no riders within ${radiusKm}km — widening search`
       );
       await advanceDispatchWave(order, wave + 1);
     } else {
-      console.warn(
-        `[dispatch] order ${order.id}: no riders available (nearby or online) after ${MAX_DISPATCH_WAVES} attempts`
+      const restarted = await maybeRestartDispatchAfterExhaustion(
+        order,
+        `no riders after ${MAX_DISPATCH_WAVES} attempts`
       );
+      if (!restarted) {
+        console.warn(
+          `[dispatch] order ${order.id}: no riders available (nearby or online) after ${MAX_DISPATCH_WAVES} attempts`
+        );
+      }
     }
     return;
   }
@@ -3204,7 +3276,7 @@ async function advanceDispatchWave(order: any, wave: number) {
   await emitOffersToRiders(order, candidates, wave);
 }
 
-async function startOrderDispatch(order: any) {
+async function startOrderDispatch(order: any, opts?: { freshCycle?: boolean }) {
   if (!isOfferableOrder(order)) return;
   clearDispatchTimer(order.id);
   await pool.query(
@@ -3212,6 +3284,10 @@ async function startOrderDispatch(order: any) {
      WHERE order_id = $1 AND status = 'offered'`,
     [order.id]
   );
+  if (opts?.freshCycle) {
+    await clearExpiredDispatchOffers(order.id);
+    dispatchRetryCycles.delete(order.id);
+  }
   await advanceDispatchWave(order, 1);
 }
 
@@ -3232,7 +3308,8 @@ async function redispatchOrphanReadyOrders() {
   );
   for (const order of orphans.rows) {
     console.info(`[dispatch] re-dispatching orphan ready order ${order.id}`);
-    await startOrderDispatch(order);
+    // Clear timed-out exclusions so the same online riders get the quest again.
+    await startOrderDispatch(order, { freshCycle: true });
   }
 }
 
@@ -3263,6 +3340,7 @@ async function recordRiderDecline(orderId: string, riderId: string) {
 
 async function notifyRideTaken(orderId: string, winnerRiderId: string) {
   clearDispatchTimer(orderId);
+  dispatchRetryCycles.delete(orderId);
 
   const offers = await pool.query(
     `SELECT rider_id FROM order_dispatch_offers WHERE order_id = $1`,
@@ -3288,6 +3366,7 @@ async function notifyRideTaken(orderId: string, winnerRiderId: string) {
 /** Customer cancelled before a rider accepted — dismiss incoming UI for offered riders. */
 async function notifyRideCancelled(orderId: string) {
   clearDispatchTimer(orderId);
+  dispatchRetryCycles.delete(orderId);
   const offers = await pool.query(
     `SELECT DISTINCT rider_id FROM order_dispatch_offers WHERE order_id = $1`,
     [orderId]
@@ -10148,7 +10227,7 @@ process.on('uncaughtException', (err) => {
 
 httpServer.listen(PORT, HOST, () => {
   console.log(`Server running on http://${HOST}:${PORT}`);
-  console.log(`[dispatch] offer TTL ${OFFER_TTL_SEC}s, early waves offer ${ridersPerWave(1)} rider(s)`);
+  console.log(`[dispatch] offer TTL ${OFFER_TTL_SEC}s, ${ridersPerWave(1)} rider(s) per wave, orphan re-dispatch every 30s`);
   void ensureRidePromotionsSchema().catch((err) =>
     console.warn('[promotions] schema init failed:', err)
   );
