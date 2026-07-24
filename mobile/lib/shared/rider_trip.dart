@@ -238,15 +238,12 @@ double riderTrackingSheetFraction(Order order) {
 }
 
 bool isOfferableOrder(Order order) {
-  if (order.riderId != null) return false;
-  if (const {'cancelled', 'delivered', 'picked_up', 'arrived'}.contains(order.status)) {
+  final riderId = order.riderId?.trim();
+  if (riderId != null && riderId.isNotEmpty && riderId.toLowerCase() != 'null') {
     return false;
   }
-  final offerableStatus = order.status == 'ready' ||
-      (order.status == 'pending' &&
-          order.vendorId.trim().isNotEmpty &&
-          (order.orderType == 'food' || order.orderType == 'courier'));
-  if (!offerableStatus) return false;
+  // Backend only dispatches status=ready (pharmacy confirms first).
+  if (order.status != 'ready') return false;
   if (order.expiresAt == null) return true;
   try {
     return DateTime.parse(order.expiresAt!).isAfter(DateTime.now());

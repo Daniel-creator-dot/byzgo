@@ -1100,6 +1100,7 @@ function MainApp() {
                 { id: 'promotions', label: 'Promos', icon: Tag },
                 { id: 'zones', label: 'Zones', icon: MapPin },
                 { id: 'sms', label: 'SMS', icon: MessageSquare },
+                { id: 'dispatch', label: 'Dispatch', icon: Navigation },
                 { id: 'settings', label: 'Settings', icon: Settings },
               ] as NavItem[])
         }
@@ -3749,6 +3750,8 @@ function AdminView({
   const [smsCustomPhones, setSmsCustomPhones] = useState('');
   const [smsBlastLoading, setSmsBlastLoading] = useState(false);
   const [smsBlastResult, setSmsBlastResult] = useState<any>(null);
+  const [dispatchStatus, setDispatchStatus] = useState<any>(null);
+  const [dispatchStatusLoading, setDispatchStatusLoading] = useState(false);
   const [editingZone, setEditingZone] = useState<any | null>(null);
   const [zoneForm, setZoneForm] = useState({ name: '', region: '', base_price: '10', price_per_km: '2', min_price: '5', max_price: '' });
   const [showZoneForm, setShowZoneForm] = useState(false);
@@ -3852,6 +3855,13 @@ function AdminView({
         .then((res) => setSmsAudience(res.data?.counts || {}))
         .catch(() => addNotification('Failed to load SMS audience counts', 'warning'));
     }
+    if (activeTab === 'dispatch') {
+      setDispatchStatusLoading(true);
+      axios.get('/api/admin/dispatch/status')
+        .then((res) => setDispatchStatus(res.data))
+        .catch(() => addNotification('Failed to load dispatch status', 'warning'))
+        .finally(() => setDispatchStatusLoading(false));
+    }
   }, [activeTab, smsAudienceRegion]);
 
   const refreshPendingRiders = async () => {
@@ -3926,6 +3936,7 @@ function AdminView({
              <button onClick={() => setActiveTab('promotions')} className={cn("px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all", activeTab === 'promotions' ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500")}>Promos</button>
              <button onClick={() => setActiveTab('zones')} className={cn("px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all", activeTab === 'zones' ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500")}>Zones</button>
              <button onClick={() => setActiveTab('sms')} className={cn("px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all", activeTab === 'sms' ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500")}>SMS</button>
+             <button onClick={() => setActiveTab('dispatch')} className={cn("px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all", activeTab === 'dispatch' ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500")}>Dispatch</button>
              <button onClick={() => setActiveTab('settings')} className={cn("px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all", activeTab === 'settings' ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500")}>Settings</button>
           </div>
        </header>
@@ -4925,6 +4936,123 @@ function AdminView({
                  {smsTestLoading ? '…' : 'Test'}
                </button>
              </div>
+           </DarkCard>
+         </div>
+       ) : activeTab === 'dispatch' ? (
+         <div className="space-y-6 max-w-3xl">
+           <DarkCard>
+             <div className="flex justify-between items-start gap-4 mb-4">
+               <div>
+                 <h3 className="text-lg font-black text-white uppercase italic tracking-tighter">Ride dispatch</h3>
+                 <p className="text-[10px] text-slate-500 font-bold mt-1">
+                   Live view of online riders and why quests may not reach them.
+                 </p>
+               </div>
+               <button
+                 type="button"
+                 disabled={dispatchStatusLoading}
+                 onClick={async () => {
+                   setDispatchStatusLoading(true);
+                   try {
+                     const res = await axios.get('/api/admin/dispatch/status');
+                     setDispatchStatus(res.data);
+                   } catch (err) {
+                     addNotification(getApiError(err, 'Failed to refresh'), 'warning');
+                   } finally {
+                     setDispatchStatusLoading(false);
+                   }
+                 }}
+                 className="px-3 py-2 bg-slate-800 text-white rounded-xl text-[10px] font-black uppercase"
+               >
+                 {dispatchStatusLoading ? '…' : 'Refresh'}
+               </button>
+             </div>
+             {dispatchStatusLoading && !dispatchStatus ? (
+               <LoadingIndicator />
+             ) : dispatchStatus ? (
+               <div className="space-y-4">
+                 <p className="text-sm font-bold text-brand-green">{dispatchStatus.hint}</p>
+                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                   <div className="bg-slate-900 rounded-xl p-3 text-center">
+                     <p className="text-[9px] font-black uppercase text-slate-500">Online</p>
+                     <p className="text-xl font-black text-white">{dispatchStatus.onlineRiderCount ?? 0}</p>
+                   </div>
+                   <div className="bg-slate-900 rounded-xl p-3 text-center">
+                     <p className="text-[9px] font-black uppercase text-slate-500">FCM riders</p>
+                     <p className="text-xl font-black text-white">{dispatchStatus.ridersWithFcmToken ?? 0}</p>
+                   </div>
+                   <div className="bg-slate-900 rounded-xl p-3 text-center">
+                     <p className="text-[9px] font-black uppercase text-slate-500">Waiting trips</p>
+                     <p className="text-xl font-black text-white">{dispatchStatus.readyUnassignedOrders?.length ?? 0}</p>
+                   </div>
+                   <div className="bg-slate-900 rounded-xl p-3 text-center">
+                     <p className="text-[9px] font-black uppercase text-slate-500">Offer TTL</p>
+                     <p className="text-xl font-black text-white">{dispatchStatus.offerTtlSec ?? 30}s</p>
+                   </div>
+                 </div>
+                 <div>
+                   <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2">Online riders</h4>
+                   {(dispatchStatus.onlineRiders || []).length === 0 ? (
+                     <p className="text-xs text-slate-400 font-bold">No drivers online — they must open the rider app and tap Go Online.</p>
+                   ) : (
+                     <div className="space-y-2">
+                       {dispatchStatus.onlineRiders.map((r: any) => (
+                         <div key={r.id} className="bg-slate-900/80 border border-slate-700 rounded-xl p-3 flex flex-wrap justify-between gap-2">
+                           <div>
+                             <p className="text-sm font-black text-white">{r.name}</p>
+                             <p className="text-[10px] text-slate-500 font-bold">{r.phone || '—'} · {r.vehicle} · {r.region || 'no region'}</p>
+                           </div>
+                           <div className="text-[10px] font-black uppercase text-right space-y-0.5">
+                             <p className={r.socketRooms > 0 ? 'text-brand-green' : 'text-amber-400'}>
+                               Socket {r.socketRooms > 0 ? 'live' : 'off'}
+                             </p>
+                             <p className={r.hasFcm ? 'text-brand-green' : 'text-red-400'}>
+                               Push {r.hasFcm ? 'ok' : 'missing'}
+                             </p>
+                             <p className="text-slate-500">GPS {r.hasGps ? `${r.gpsAgeMin ?? '?'}m ago` : 'none'}</p>
+                           </div>
+                         </div>
+                       ))}
+                     </div>
+                   )}
+                 </div>
+                 {(dispatchStatus.readyUnassignedOrders || []).length > 0 && (
+                   <div>
+                     <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2">Unassigned ready trips</h4>
+                     <div className="space-y-2">
+                       {dispatchStatus.readyUnassignedOrders.map((o: any) => (
+                         <div key={o.id} className="bg-slate-900/80 border border-slate-700 rounded-xl p-3 flex flex-wrap justify-between gap-2 items-center">
+                           <div>
+                             <p className="text-sm font-black text-white">#{String(o.id).slice(-6)} · {o.service_type || 'package'}</p>
+                             <p className="text-[10px] text-slate-500 font-bold">
+                               Wave {o.dispatch_wave || '—'} · {o.region || 'no region'}
+                             </p>
+                           </div>
+                           <button
+                             type="button"
+                             onClick={async () => {
+                               try {
+                                 await axios.post(`/api/admin/dispatch/${o.id}/redispatch`);
+                                 addNotification('Re-dispatched to online riders', 'success');
+                                 const res = await axios.get('/api/admin/dispatch/status');
+                                 setDispatchStatus(res.data);
+                               } catch (err) {
+                                 addNotification(getApiError(err, 'Re-dispatch failed'), 'warning');
+                               }
+                             }}
+                             className="px-3 py-2 bg-brand-green text-slate-950 rounded-lg text-[10px] font-black uppercase"
+                           >
+                             Re-send quest
+                           </button>
+                         </div>
+                       ))}
+                     </div>
+                   </div>
+                 )}
+               </div>
+             ) : (
+               <p className="text-xs text-slate-400 font-bold">Could not load dispatch status.</p>
+             )}
            </DarkCard>
          </div>
        ) : activeTab === 'zones' ? (

@@ -286,12 +286,9 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
   Order? _orderFromPushData(Map<String, String> data) {
     final orderId = data['orderId']?.trim() ?? '';
     if (orderId.isEmpty) return null;
+    // Never drop on stale push expiry alone — fetchIncomingOffer has the live TTL.
+    // (Retry/orphan redispatches used to send an outdated expiresAt in FCM data.)
     final expiresRaw = data['expiresAt']?.trim() ?? '';
-    if (expiresRaw.isNotEmpty) {
-      try {
-        if (DateTime.parse(expiresRaw).isBefore(DateTime.now())) return null;
-      } catch (_) {}
-    }
     final pickup = data['pickup']?.trim();
     final drop = data['address']?.trim();
     if ((pickup == null || pickup.isEmpty) && (drop == null || drop.isEmpty)) {

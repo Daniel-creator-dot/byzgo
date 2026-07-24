@@ -184,18 +184,23 @@ class SocketService {
   }
 
   void _onRideIncoming(dynamic data) {
-    if (!PushNotificationService.instance.acceptsIncomingRideJobs) return;
+    // Deliver whenever rider shell registered a handler. Do not drop on push-role
+    // sync races — that silently swallowed live socket quests.
     final order = _parseOrder(data);
     if (order == null) return;
     if (order.expiresAt != null) {
       try {
-        if (DateTime.parse(order.expiresAt!).isBefore(DateTime.now())) return;
+        if (DateTime.parse(order.expiresAt!).isBefore(DateTime.now())) {
+          debugPrint('[socket] ignoring expired ride:incoming ${order.id}');
+          return;
+        }
       } catch (_) {
         // Keep offer if timestamp is malformed (parity with isOfferableOrder).
       }
     }
     final handler = onRideIncoming;
     if (handler == null) {
+      if (!PushNotificationService.instance.acceptsIncomingRideJobs) return;
       _pendingIncomingRide = order;
       return;
     }

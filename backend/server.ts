@@ -481,14 +481,19 @@ function riderServesService(riderVehicle: string | null | undefined, service: Ri
   return false;
 }
 
+/**
+ * SQL vehicle filter. Empty/whitespace vehicle types are treated as motorcycle.
+ * Legacy aliases (okada/motorbike/tricycle) are accepted so old rows still match.
+ */
 function rideServiceSqlFilter(service: RideServiceType): string {
+  const v = `LOWER(TRIM(COALESCE(NULLIF(TRIM(u.rider_vehicle_type), ''), 'motorcycle')))`;
   if (service === 'okada') {
-    return `AND COALESCE(u.rider_vehicle_type, 'motorcycle') IN ('motorcycle')`;
+    return `AND (${v} IN ('motorcycle', 'okada', 'motorbike', 'bike'))`;
   }
   if (service === 'keke') {
-    return `AND COALESCE(u.rider_vehicle_type, 'motorcycle') = 'keke'`;
+    return `AND (${v} IN ('keke', 'tricycle', 'napep', 'auto', 'rickshaw'))`;
   }
-  return `AND COALESCE(u.rider_vehicle_type, 'motorcycle') IN ('motorcycle', 'bicycle')`;
+  return `AND (${v} IN ('motorcycle', 'okada', 'motorbike', 'bike', 'bicycle'))`;
 }
 
 async function getRideServiceRate(service: RideServiceType): Promise<number> {
@@ -1932,15 +1937,37 @@ const initDb = async () => {
       END $$;
     `);
 
-    // Seed SMS gateway configurations
+    // Normalize legacy rider rows only — never force active riders online on boot
+    // (that sent quests to phantom "online" accounts with no socket/FCM listener).
     await pool.query(`
       UPDATE users SET status = 'active', is_online = false
       WHERE role = 'rider' AND status = 'offline';
-      UPDATE users SET is_online = true
-      WHERE role = 'rider' AND status = 'active';
       UPDATE users SET is_online = false
       WHERE role = 'rider' AND status IN ('pending', 'disabled', 'rejected');
+      UPDATE users SET rider_vehicle_type = 'motorcycle'
+      WHERE role = 'rider'
+        AND (rider_vehicle_type IS NULL OR TRIM(rider_vehicle_type) = '');
     `);
+
+    // One-time: clear phantom online flags left by the old boot seed (SET is_online=true for all active).
+    const phantomFix = await pool.query(
+      `SELECT value FROM system_settings WHERE key = 'dispatch_phantom_online_cleared_v1'`
+    );
+    if (!phantomFix.rows[0]) {
+      const cleared = await pool.query(
+        `UPDATE users SET is_online = false
+         WHERE role = 'rider' AND is_online = true
+         RETURNING id`
+      );
+      await pool.query(
+        `INSERT INTO system_settings (key, value) VALUES ('dispatch_phantom_online_cleared_v1', $1)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+        [String(cleared.rowCount ?? 0)]
+      );
+      console.info(
+        `[dispatch] cleared ${cleared.rowCount ?? 0} phantom online rider flag(s) — drivers must tap Go Online again`
+      );
+    }
 
     await pool.query(`
       INSERT INTO system_settings (key, value)
@@ -2869,9 +2896,10 @@ function normalizeRegion(region?: string | null): string | null {
 /** Active online riders; widens to all riders if regional filter matches nobody. */
 async function getActiveRiderIds(
   region?: string | null,
-  serviceType: RideServiceType = 'package'
+  serviceType: RideServiceType | null = 'package'
 ): Promise<string[]> {
-  const serviceFilter = rideServiceSqlFilter(serviceType);
+  const serviceFilter =
+    serviceType == null ? '' : rideServiceSqlFilter(serviceType);
   const norm = normalizeRegion(region);
   if (norm) {
     const regional = await pool.query(
@@ -3128,9 +3156,16 @@ async function emitOffersToRiders(order: any, candidates: NearbyRider[], wave: n
     [wave, expiresAt, order.id]
   );
 
-  void sendPushToRiders(order, eligible, { skipRecipientFilter: true }).catch((err) =>
-    console.warn('[push] incoming ride send failed:', err)
-  );
+  // Keep in-memory order in sync so push uses the fresh TTL (not a prior wave's expiry).
+  order.offer_expires_at = expiresAt;
+  orderPayload.offer_expires_at = expiresAt;
+  orderPayload.expiresAt = expiresIso;
+  orderPayload.expires_at = expiresIso;
+
+  void sendPushToRiders(order, eligible, {
+    skipRecipientFilter: true,
+    expiresAt: expiresIso,
+  }).catch((err) => console.warn('[push] incoming ride send failed:', err));
 
   for (const { id: riderId, distanceKm } of eligible) {
     const dist =
@@ -3140,10 +3175,18 @@ async function emitOffersToRiders(order: any, candidates: NearbyRider[], wave: n
     const payload = {
       ...orderPayload,
       expiresAt: expiresIso,
+      expires_at: expiresIso,
+      offer_expires_at: expiresAt,
       dispatchWave: wave,
       offerDistanceKm: dist,
       pickupDistanceKm: dist,
     };
+    const roomSize = io.sockets.adapter.rooms.get(String(riderId))?.size ?? 0;
+    if (roomSize === 0) {
+      console.warn(
+        `[dispatch] order ${order.id}: rider ${riderId.slice(0, 8)}… has no socket room — relying on FCM/poll`
+      );
+    }
     io.to(String(riderId)).emit('ride:incoming', payload);
   }
 
@@ -3216,6 +3259,7 @@ async function advanceDispatchWave(order: any, wave: number) {
 
   let candidates: NearbyRider[] = [];
   let usedGlobalFallback = false;
+  let usedVehicleBypass = false;
 
   if (pickup) {
     candidates = await getNearestActiveRiders(
@@ -3243,9 +3287,25 @@ async function advanceDispatchWave(order: any, wave: number) {
     candidates = await getAvailableOnlineRiders(fallback, limit);
   }
 
+  // Vehicle-type mismatch (e.g. keke booking, only motorcycle riders online):
+  // still offer to any online rider so quests are not silently dropped.
   if (candidates.length === 0) {
-    // If every online rider was already offered this cycle, re-open expired and retry.
-    const onlineIds = await getActiveRiderIds(order.region, serviceType);
+    const anyOnline = (await getActiveRiderIds(order.region, null)).filter(
+      (id) => !exclude.includes(id)
+    );
+    candidates = await getAvailableOnlineRiders(anyOnline, limit);
+    if (candidates.length > 0) {
+      usedVehicleBypass = true;
+      usedGlobalFallback = true;
+      console.warn(
+        `[dispatch] order ${order.id} step ${wave}: no ${serviceType}-matched riders — offering to any online rider`
+      );
+    }
+  }
+
+  if (candidates.length === 0) {
+    // Prefer counts without vehicle filter so we know if anyone is online at all.
+    const onlineIds = await getActiveRiderIds(order.region, null);
     const remaining = onlineIds.filter((id) => !exclude.includes(id));
     if (remaining.length === 0 && onlineIds.length > 0) {
       const restarted = await maybeRestartDispatchAfterExhaustion(
@@ -3253,6 +3313,11 @@ async function advanceDispatchWave(order: any, wave: number) {
         `no unpinged riders at wave ${wave}`
       );
       if (restarted) return;
+    }
+    if (onlineIds.length === 0) {
+      console.warn(
+        `[dispatch] order ${order.id} step ${wave}: zero online active riders (service=${serviceType})`
+      );
     }
     if (wave < MAX_DISPATCH_WAVES) {
       console.warn(
@@ -3273,7 +3338,7 @@ async function advanceDispatchWave(order: any, wave: number) {
     return;
   }
 
-  if (usedGlobalFallback) {
+  if (usedGlobalFallback && !usedVehicleBypass) {
     console.info(
       `[dispatch] order ${order.id} step ${wave}: no rider within ${radiusKm}km — falling back to any online rider`
     );
@@ -3594,7 +3659,7 @@ async function sendPushToUserIds(userIds: string[], alert: PushAlert) {
 async function sendPushToRiders(
   order: any,
   riders: NearbyRider[],
-  opts?: { skipRecipientFilter?: boolean }
+  opts?: { skipRecipientFilter?: boolean; expiresAt?: string }
 ) {
   let eligible = riders;
   if (!opts?.skipRecipientFilter) {
@@ -3607,9 +3672,11 @@ async function sendPushToRiders(
   if (!eligible.length) return;
   const pickup = order.pickup_address || order.pickup || 'Pickup';
   const dropoff = order.address || 'Drop-off';
-  const expiresAt = order.offer_expires_at
-    ? new Date(order.offer_expires_at).toISOString()
-    : new Date(Date.now() + OFFER_TTL_SEC * 1000).toISOString();
+  const expiresAt =
+    opts?.expiresAt ||
+    (order.offer_expires_at
+      ? new Date(order.offer_expires_at).toISOString()
+      : new Date(Date.now() + OFFER_TTL_SEC * 1000).toISOString());
   await Promise.all(
     eligible.map(({ id, distanceKm }) => {
       const distLabel =
@@ -6675,6 +6742,103 @@ app.get('/api/admin/pending-riders', authenticateToken, async (req: any, res) =>
   } catch (err) {
     console.error('Pending riders error:', err);
     res.status(500).json({ message: 'Failed to fetch pending riders' });
+  }
+});
+
+/** Admin: live dispatch diagnostics — why quests may not reach riders. */
+app.get('/api/admin/dispatch/status', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'admin') return res.sendStatus(403);
+  try {
+    const [online, ready, openOffers, tokens] = await Promise.all([
+      pool.query(
+        `SELECT u.id, u.name, u.phone, u.region, u.is_online, u.rider_vehicle_type,
+                u.lat AS profile_lat, u.lng AS profile_lng,
+                rl.lat AS gps_lat, rl.lng AS gps_lng, rl.updated_at AS gps_at,
+                EXISTS(SELECT 1 FROM fcm_tokens t WHERE t.user_id = u.id) AS has_fcm
+         FROM users u
+         LEFT JOIN rider_locations rl ON rl.rider_id = u.id
+         WHERE u.role = 'rider' AND u.status = 'active' AND u.is_online = true
+         ORDER BY rl.updated_at DESC NULLS LAST
+         LIMIT 50`
+      ),
+      pool.query(
+        `SELECT id, status, service_type, region, created_at, pickup_lat, pickup_lng, rider_id, dispatch_wave, offer_expires_at
+         FROM orders
+         WHERE status = 'ready' AND rider_id IS NULL
+           AND created_at > NOW() - INTERVAL '6 hours'
+         ORDER BY created_at DESC
+         LIMIT 20`
+      ),
+      pool.query(
+        `SELECT d.order_id, d.rider_id, d.status, d.wave, d.expires_at, d.offered_at
+         FROM order_dispatch_offers d
+         JOIN orders o ON o.id = d.order_id
+         WHERE o.status = 'ready' AND o.rider_id IS NULL
+           AND d.offered_at > NOW() - INTERVAL '2 hours'
+         ORDER BY d.offered_at DESC
+         LIMIT 40`
+      ),
+      pool.query(
+        `SELECT COUNT(DISTINCT user_id)::int AS riders_with_token
+         FROM fcm_tokens t
+         JOIN users u ON u.id = t.user_id
+         WHERE u.role = 'rider'`
+      ),
+    ]);
+
+    const onlineRiders = online.rows.map((r: any) => ({
+      id: r.id,
+      name: r.name,
+      phone: r.phone,
+      region: r.region,
+      vehicle: r.rider_vehicle_type || 'motorcycle',
+      hasFcm: r.has_fcm === true,
+      hasGps: r.gps_lat != null || r.profile_lat != null,
+      gpsAgeMin:
+        r.gps_at != null
+          ? Math.round((Date.now() - new Date(r.gps_at).getTime()) / 60000)
+          : null,
+      socketRooms: io.sockets.adapter.rooms.get(String(r.id))?.size ?? 0,
+    }));
+
+    res.json({
+      offerTtlSec: OFFER_TTL_SEC,
+      ridersPerWave: ridersPerWave(1),
+      onlineRiderCount: onlineRiders.length,
+      onlineRiders,
+      readyUnassignedOrders: ready.rows,
+      recentOffers: openOffers.rows,
+      ridersWithFcmToken: tokens.rows[0]?.riders_with_token ?? 0,
+      hint:
+        onlineRiders.length === 0
+          ? 'No riders are online. Ask a driver to open the app and tap Go Online.'
+          : onlineRiders.every((r: any) => r.socketRooms === 0 && !r.hasFcm)
+            ? 'Online riders have no live socket and no FCM token — they will not see quests.'
+            : 'Dispatch looks ready. Book a test ride while a rider is online.',
+    });
+  } catch (err) {
+    console.error('[admin/dispatch/status]', err);
+    res.status(500).json({ message: 'Failed to load dispatch status' });
+  }
+});
+
+/** Admin: force re-dispatch of a ready order to online riders. */
+app.post('/api/admin/dispatch/:orderId/redispatch', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'admin') return res.sendStatus(403);
+  try {
+    const orderRes = await pool.query('SELECT * FROM orders WHERE id = $1', [req.params.orderId]);
+    const order = orderRes.rows[0];
+    if (!order) return res.status(404).json({ message: 'Order not found' });
+    if (!isOfferableOrder(order)) {
+      return res.status(400).json({
+        message: `Order is not offerable (status=${order.status}, rider=${order.rider_id || 'none'})`,
+      });
+    }
+    await startOrderDispatch(order, { freshCycle: true });
+    res.json({ ok: true, message: 'Re-dispatched to online riders' });
+  } catch (err) {
+    console.error('[admin/dispatch/redispatch]', err);
+    res.status(500).json({ message: 'Re-dispatch failed' });
   }
 });
 
