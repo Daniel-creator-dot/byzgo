@@ -233,6 +233,12 @@ app.get('/api/health', async (req, res) => {
       fast: true,
       fcm: firebaseAdminHasCredentials,
       firebaseProject: FIREBASE_PROJECT_ID,
+      dispatch: {
+        offerTtlSec: OFFER_TTL_SEC,
+        ridersPerWave: ridersPerWave(1),
+        retryCycles: MAX_DISPATCH_RETRY_CYCLES,
+        orphanRedispatch: true,
+      },
       database: {
         ...dbConnectionDiagnostics(),
         poolMax: (pool as any).options?.max ?? null,
