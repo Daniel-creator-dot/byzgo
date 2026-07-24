@@ -3570,8 +3570,15 @@ async function sendPushToUserIds(userIds: string[], alert: PushAlert) {
   if (!firebaseAdminHasCredentials) return;
 
   try {
+    // Prefer the newest token per platform — old reinstall tokens poison delivery.
     const fcmRes = await pool.query(
-      `SELECT token, platform FROM fcm_tokens WHERE user_id = ANY($1::uuid[])`,
+      `SELECT DISTINCT ON (user_id, LOWER(COALESCE(NULLIF(TRIM(platform), ''), 'android')))
+         token, platform, user_id, updated_at
+       FROM fcm_tokens
+       WHERE user_id = ANY($1::uuid[])
+       ORDER BY user_id,
+         LOWER(COALESCE(NULLIF(TRIM(platform), ''), 'android')),
+         updated_at DESC NULLS LAST`,
       [ids]
     );
     const rows = fcmRes.rows.filter((r: { token: string }) => r.token);
@@ -3608,19 +3615,20 @@ async function sendPushToUserIds(userIds: string[], alert: PushAlert) {
     const apnsExpires =
       incomingRide && alert.expiresAt
         ? String(Math.floor(new Date(alert.expiresAt).getTime() / 1000))
-        : String(Math.floor(Date.now() / 1000) + 90);
+        : String(Math.floor(Date.now() / 1000) + 120);
+    // Was 30s — FCM often delivers after that window, so Android/iOS never rang.
+    const androidTtlMs = incomingRide || high ? 120 * 1000 : 3600 * 1000;
 
     const messages = rows.map((row: { token: string; platform?: string }) => {
       const platform = String(row.platform || '').toLowerCase();
       const isIos = platform === 'ios' || platform === 'macos';
-      const isAndroid = platform === 'android';
-      // Android incoming jobs: data-only (Flutter shows one loud local alarm).
-      // iOS / unknown platform: APNs alert+sound only (no FCM notification key — avoids silent iOS banners).
+      const isAndroid = platform === 'android' || (!isIos && !platform);
+      // Android incoming: data + high-priority notification so OEM kill-switches
+      // still show a tray alert if the background isolate fails.
       const androidIncomingRide = incomingRide && isAndroid;
       const iosIncomingRide = incomingRide && isIos;
       const loudAlert = iosIncomingRide || (high && !androidIncomingRide);
-      // iOS incoming jobs: alert + content-available so the device wakes and AppDelegate can show CallKit.
-      const includeNotification = !incomingRide || iosIncomingRide;
+      const includeNotification = !incomingRide || iosIncomingRide || androidIncomingRide;
       return {
         token: row.token,
         ...(includeNotification
@@ -3634,25 +3642,25 @@ async function sendPushToUserIds(userIds: string[], alert: PushAlert) {
         data: dataPayload,
         android: {
           priority: high ? 'high' : 'normal',
-          ttl: high ? 30 * 1000 : 3600 * 1000,
-          ...(androidIncomingRide
-            ? {}
-            : {
+          ttl: androidTtlMs,
+          ...(androidIncomingRide || (high && isAndroid)
+            ? {
                 notification: {
-                  channelId,
+                  channelId: incomingRide ? 'incoming_rides_alarm' : channelId,
                   sound: 'default',
                   priority: high ? ('max' as const) : ('default' as const),
                   visibility: 'public',
                   defaultVibrateTimings: true,
                   ...(high && alert.orderId ? { tag: `ride-${alert.orderId}` } : {}),
                 },
-              }),
+              }
+            : {}),
         },
         apns: {
           headers: {
             'apns-priority': iosIncomingRide || loudAlert ? '10' : '5',
             'apns-push-type': iosIncomingRide || loudAlert ? 'alert' : 'background',
-            ...(iosIncomingRide ? { 'apns-expiration': apnsExpires } : {}),
+            ...(iosIncomingRide || incomingRide ? { 'apns-expiration': apnsExpires } : {}),
           },
           payload: {
             aps: iosIncomingRide
@@ -3678,16 +3686,28 @@ async function sendPushToUserIds(userIds: string[], alert: PushAlert) {
     });
 
     const result = await admin.messaging().sendEach(messages);
-    if (incomingRide && result.failureCount > 0) {
-      result.responses.forEach((r, i) => {
-        if (!r.success) {
-          console.warn(
-            `[push] incoming-ride FCM failed token[${i}]:`,
-            r.error?.code,
-            r.error?.message
-          );
-        }
-      });
+    const deadTokens: string[] = [];
+    result.responses.forEach((r, i) => {
+      if (r.success) return;
+      const code = String(r.error?.code || '');
+      if (
+        code.includes('registration-token-not-registered') ||
+        code.includes('invalid-registration-token') ||
+        code.includes('invalid-argument')
+      ) {
+        deadTokens.push(rows[i].token);
+      }
+      if (incomingRide) {
+        console.warn(
+          `[push] incoming-ride FCM failed token[${i}] (${rows[i].platform}):`,
+          r.error?.code,
+          r.error?.message
+        );
+      }
+    });
+    if (deadTokens.length) {
+      await pool.query(`DELETE FROM fcm_tokens WHERE token = ANY($1::text[])`, [deadTokens]);
+      console.info(`[push] removed ${deadTokens.length} dead FCM token(s)`);
     }
   } catch (err) {
     console.warn('[push] FCM send failed:', err);
@@ -10118,14 +10138,24 @@ app.post('/api/push/test-incoming-ride', authenticateToken, async (req: any, res
   if (req.user.role !== 'rider') {
     return res.status(403).json({ message: 'Riders only' });
   }
-  if (!req.user.is_online) {
-    return res.status(400).json({
-      message: 'Go Online first — then lock the screen and call this again',
-    });
-  }
   try {
+    // JWT is minimal {id,role} — always read is_online from DB.
+    const userRes = await pool.query(
+      'SELECT status, is_online FROM users WHERE id = $1',
+      [req.user.id]
+    );
+    const account = userRes.rows[0];
+    if (account?.status !== 'active' || account?.is_online !== true) {
+      return res.status(400).json({
+        message: 'Go Online first — then lock the screen and call this again',
+      });
+    }
     const tokRes = await pool.query(
-      `SELECT token, platform FROM fcm_tokens WHERE user_id = $1`,
+      `SELECT DISTINCT ON (LOWER(COALESCE(NULLIF(TRIM(platform), ''), 'android')))
+         token, platform, updated_at
+       FROM fcm_tokens
+       WHERE user_id = $1
+       ORDER BY LOWER(COALESCE(NULLIF(TRIM(platform), ''), 'android')), updated_at DESC NULLS LAST`,
       [req.user.id]
     );
     if (!tokRes.rows.length) {
@@ -10135,6 +10165,7 @@ app.post('/api/push/test-incoming-ride', authenticateToken, async (req: any, res
         tokens: 0,
       });
     }
+    const expiresAt = new Date(Date.now() + OFFER_TTL_SEC * 1000).toISOString();
     await sendPushToUserIds([req.user.id], {
       title: 'Test delivery job',
       body: 'Screen-off alert test — tap to open BytzGo',
@@ -10142,6 +10173,11 @@ app.post('/api/push/test-incoming-ride', authenticateToken, async (req: any, res
       orderId: 'test-push',
       channelId: 'incoming_rides_alarm',
       highPriority: true,
+      expiresAt,
+      status: 'ready',
+      pickup: 'Test pickup',
+      address: 'Test drop-off',
+      orderType: 'courier',
     });
     res.json({
       ok: true,

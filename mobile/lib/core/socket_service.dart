@@ -93,7 +93,11 @@ class SocketService {
   }
 
   Future<void> connect({required String userId, String? token}) async {
-    if (_userId == userId && isConnected) return;
+    if (_userId == userId && isConnected) {
+      // Server restarts drop room membership while the client still thinks it is connected.
+      _socket!.emit('join', userId);
+      return;
+    }
     disconnect(clearCallbacks: false);
     _userId = userId;
 
@@ -118,6 +122,10 @@ class SocketService {
         debugPrint('[socket] connected');
         _socket!.emit('join', userId);
       })
+      ..on('reconnect', (_) {
+        debugPrint('[socket] reconnected — rejoin $userId');
+        _socket!.emit('join', userId);
+      })
       ..on('ride:incoming', _onRideIncoming)
       ..on('ride:taken', _onRideTaken)
       ..on('order:new', _onOrderNew)
@@ -132,6 +140,17 @@ class SocketService {
       ..on('status:updated', _onStatusUpdated)
       ..on('vendor:promo', _onVendorPromo)
       ..on('pricing:updated', _onPricingUpdated);
+  }
+
+  /// Re-assert room membership (call on app resume / go-online).
+  void ensureJoined() {
+    final id = _userId;
+    if (id == null || id.isEmpty) return;
+    if (!isConnected) {
+      _socket?.connect();
+      return;
+    }
+    _socket?.emit('join', id);
   }
 
   void addPricingUpdatedListener(PricingUpdatedHandler listener) {

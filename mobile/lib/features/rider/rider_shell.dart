@@ -239,6 +239,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
   Future<void> _onAppResumed() async {
     await _processPendingCallKitAction();
     await PushNotificationService.instance.dispatchPendingIncomingRideIfAny();
+    _socket.ensureJoined();
     await _refreshAll(silent: true);
     if (!mounted || !_isOnline) return;
 
