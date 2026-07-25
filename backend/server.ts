@@ -237,6 +237,7 @@ app.get('/api/health', async (req, res) => {
         offerTtlSec: OFFER_TTL_SEC,
         ridersPerWave: ridersPerWave(1),
         retryCycles: MAX_DISPATCH_RETRY_CYCLES,
+        noRiderRetryMs: NO_RIDER_RETRY_MS,
         orphanRedispatch: true,
       },
       database: {
@@ -2876,6 +2877,8 @@ const NEARBY_RIDERS_MAX_KM = 6;
 const EARLY_GLOBAL_FALLBACK_WAVE = 1;
 /** How many times we may clear timed-out offers and re-ping the same riders. */
 const MAX_DISPATCH_RETRY_CYCLES = 8;
+/** Wait before widening search when nobody is online yet (ms). */
+const NO_RIDER_RETRY_MS = 5_000;
 /** In-memory retry budget per order (resets on process restart; orphan job recovers). */
 const dispatchRetryCycles = new Map<string, number>();
 
@@ -2976,8 +2979,7 @@ async function getAvailableOnlineRiders(
 /** Mark zombie "online" riders offline so they stop eating dispatch waves. */
 async function pruneStaleOnlineRiders(): Promise<number> {
   const result = await pool.query(
-    `UPDATE users u
-     SET is_online = false
+    `SELECT u.id FROM users u
      WHERE u.role = 'rider'
        AND u.is_online = true
        AND u.status = 'active'
@@ -2986,14 +2988,25 @@ async function pruneStaleOnlineRiders(): Promise<number> {
          WHERE rl.rider_id = u.id
            AND rl.updated_at > NOW() - INTERVAL '1 minute' * $1
            AND ABS(rl.lat) > 0.001 AND ABS(rl.lng) > 0.001
-       )
-     RETURNING u.id`,
+       )`,
     [ONLINE_STALE_GPS_MAX_AGE_MIN]
   );
-  const n = result.rowCount ?? 0;
+  // Keep drivers with a live socket — GPS may lag briefly after Go Online.
+  const staleIds = result.rows
+    .map((row: { id: string }) => row.id)
+    .filter((id: string) => (io.sockets.adapter.rooms.get(String(id))?.size ?? 0) === 0);
+  if (!staleIds.length) return 0;
+
+  const pruned = await pool.query(
+    `UPDATE users SET is_online = false
+     WHERE id = ANY($1::uuid[]) AND is_online = true
+     RETURNING id`,
+    [staleIds]
+  );
+  const n = pruned.rowCount ?? 0;
   if (n > 0) {
-    console.info(`[dispatch] pruned ${n} stale online rider(s) (GPS older than ${ONLINE_STALE_GPS_MAX_AGE_MIN}m)`);
-    for (const row of result.rows) {
+    console.info(`[dispatch] pruned ${n} stale online rider(s) (GPS older than ${ONLINE_STALE_GPS_MAX_AGE_MIN}m, no socket)`);
+    for (const row of pruned.rows) {
       io.to(String(row.id)).emit('status:updated', { status: 'active', is_online: false });
     }
   }
@@ -3353,14 +3366,37 @@ async function advanceDispatchWave(order: any, wave: number) {
     }
     if (onlineIds.length === 0) {
       console.warn(
-        `[dispatch] order ${order.id} step ${wave}: zero online active riders (service=${serviceType})`
+        `[dispatch] order ${order.id} step ${wave}: zero online active riders (service=${serviceType}) — retrying in ${NO_RIDER_RETRY_MS}ms`
+      );
+    } else {
+      console.warn(
+        `[dispatch] order ${order.id} step ${wave}: no riders within ${radiusKm}km — retrying in ${NO_RIDER_RETRY_MS}ms`
       );
     }
+    // Persist wave so admin/diagnostics show hunting started (emitOffers also sets this).
+    await pool.query(
+      `UPDATE orders SET dispatch_wave = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+      [wave, order.id]
+    );
+    order.dispatch_wave = wave;
+
     if (wave < MAX_DISPATCH_WAVES) {
-      console.warn(
-        `[dispatch] order ${order.id} step ${wave}: no riders within ${radiusKm}km — widening search`
-      );
-      await advanceDispatchWave(order, wave + 1);
+      // Do NOT burn all waves in one tick — wait so a driver can go online / GPS can refresh.
+      clearDispatchTimer(order.id);
+      const orderId = order.id;
+      const nextWave = wave + 1;
+      const timer = setTimeout(() => {
+        void (async () => {
+          dispatchWaveTimers.delete(orderId);
+          const fresh = await pool.query('SELECT * FROM orders WHERE id = $1', [orderId]);
+          const latest = fresh.rows[0];
+          if (!latest || !isOfferableOrder(latest)) return;
+          await advanceDispatchWave(latest, nextWave);
+        })().catch((err) =>
+          console.error(`[dispatch] delayed wave ${nextWave} failed for ${orderId}:`, err)
+        );
+      }, NO_RIDER_RETRY_MS);
+      dispatchWaveTimers.set(orderId, timer);
     } else {
       const restarted = await maybeRestartDispatchAfterExhaustion(
         order,
@@ -3387,7 +3423,8 @@ async function advanceDispatchWave(order: any, wave: number) {
 async function startOrderDispatch(order: any, opts?: { freshCycle?: boolean }) {
   if (!isOfferableOrder(order)) return;
   clearDispatchTimer(order.id);
-  await pruneStaleOnlineRiders();
+  // Do not prune here — that raced live drivers (stale GPS + Go Online) and
+  // wiped the only match before nearby/fallback search. Interval prune is enough.
   await pool.query(
     `UPDATE order_dispatch_offers SET status = 'expired'
      WHERE order_id = $1 AND status = 'offered'`,
@@ -4944,6 +4981,14 @@ app.patch('/api/auth/status', authenticateToken, async (req: any, res) => {
       const user = result.rows[0];
       if (isOnline) {
         await seedRiderLocationFromProfile(user.id);
+        // Refresh last-known GPS timestamp so the 90m prune grace starts now —
+        // otherwise Go Online + stale pin gets kicked offline before location:update.
+        await pool.query(
+          `UPDATE rider_locations
+           SET updated_at = CURRENT_TIMESTAMP
+           WHERE rider_id = $1 AND ABS(lat) > 0.001 AND ABS(lng) > 0.001`,
+          [user.id]
+        );
         // If profile has no pin, adopt last-known GPS so dispatch can match this rider.
         await pool.query(
           `UPDATE users u
