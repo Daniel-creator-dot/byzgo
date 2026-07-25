@@ -3622,23 +3622,80 @@ async function recordRiderDecline(orderId: string, riderId: string) {
   if (!order || !isOfferableOrder(order)) return;
 
   const wave = order.dispatch_wave || 1;
+  // Stop the current offer timer — we're handing off now, Bolt-style.
+  clearDispatchTimer(orderId);
+
   await pool.query(
     `INSERT INTO order_dispatch_offers (order_id, rider_id, wave, status, offered_at, expires_at)
      VALUES ($1, $2, $3, 'declined', CURRENT_TIMESTAMP, NOW())
      ON CONFLICT (order_id, rider_id) DO UPDATE SET status = 'declined'`,
     [orderId, riderId, wave]
   );
-
-  const open = await pool.query(
-    `SELECT COUNT(*)::int AS c FROM order_dispatch_offers
-     WHERE order_id = $1 AND wave = $2 AND status = 'offered'`,
-    [orderId, wave]
+  // Close any sibling open offers so we never wait on a parallel TTL.
+  await pool.query(
+    `UPDATE order_dispatch_offers SET status = 'expired'
+     WHERE order_id = $1 AND status = 'offered' AND rider_id IS DISTINCT FROM $2`,
+    [orderId, riderId]
   );
 
-  if (open.rows[0].c === 0) {
-    clearDispatchTimer(orderId);
-    await advanceDispatchWave(order, wave + 1);
+  console.info(
+    `[dispatch] rider ${riderId.slice(0, 8)}… declined ${orderId} — offering next nearest immediately`
+  );
+  await offerNextNearestAfterDecline(order, wave + 1);
+}
+
+/**
+ * Bolt-style handoff: after a reject, ping the next nearest online rider now
+ * (widest radius + global fallback). Declined riders stay excluded.
+ */
+async function offerNextNearestAfterDecline(order: any, nextWave: number) {
+  if (!isOfferableOrder(order)) return;
+  if (nextWave > MAX_DISPATCH_WAVES) {
+    await maybeRestartDispatchAfterExhaustion(order, `exhausted after declines (${MAX_DISPATCH_WAVES})`);
+    return;
   }
+
+  const serviceType = normalizeRideServiceType(order.service_type);
+  const [exclude, pickup] = await Promise.all([
+    getOfferedRiderIds(order.id),
+    getPickupPoint(order),
+  ]);
+  const widest = DISPATCH_RADIUS_KM_TIERS[DISPATCH_RADIUS_KM_TIERS.length - 1];
+
+  let candidates: NearbyRider[] = [];
+  if (pickup) {
+    candidates = await getNearestActiveRiders(
+      pickup,
+      order.region,
+      exclude,
+      1,
+      widest,
+      serviceType
+    );
+  }
+  if (!candidates.length) {
+    const fallbackIds = (await getActiveRiderIds(order.region, serviceType)).filter(
+      (id) => !exclude.includes(id)
+    );
+    candidates = await getAvailableOnlineRiders(fallbackIds, 1);
+  }
+  if (!candidates.length) {
+    const anyOnline = (await getActiveRiderIds(order.region, null)).filter(
+      (id) => !exclude.includes(id)
+    );
+    candidates = await getAvailableOnlineRiders(anyOnline, 1);
+  }
+
+  if (candidates.length > 0) {
+    await emitOffersToRiders(order, candidates, nextWave);
+    return;
+  }
+
+  // Nobody else online yet — keep hunting (same path as empty-wave retry).
+  console.warn(
+    `[dispatch] order ${order.id}: decline handoff found no other riders — retrying wave ${nextWave}`
+  );
+  await advanceDispatchWave(order, nextWave);
 }
 
 async function notifyRideTaken(orderId: string, winnerRiderId: string) {
@@ -10755,6 +10812,15 @@ httpServer.listen(PORT, HOST, () => {
   void redispatchOrphanReadyOrders().catch((err) =>
     console.warn('[dispatch] orphan re-dispatch failed:', err)
   );
+  void closeStuckTripsGlobally()
+    .then((r) => {
+      if (r.cancelledReady || r.cancelledAbandoned) {
+        console.info(
+          `[dispatch] startup closed ${r.cancelledReady} waiting + ${r.cancelledAbandoned} abandoned trip(s)`
+        );
+      }
+    })
+    .catch((err) => console.warn('[dispatch] startup close-stuck failed:', err));
   setInterval(() => {
     void activateDueScheduledOrders().catch((err) =>
       console.warn('[dispatch] scheduled order activation failed:', err)
@@ -10770,4 +10836,9 @@ httpServer.listen(PORT, HOST, () => {
       console.warn('[dispatch] orphan re-dispatch failed:', err)
     );
   }, 10_000);
+  setInterval(() => {
+    void closeStuckTripsGlobally().catch((err) =>
+      console.warn('[dispatch] close-stuck failed:', err)
+    );
+  }, 5 * 60_000);
 });
