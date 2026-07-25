@@ -3102,6 +3102,9 @@ async function queryNearestActiveRiders(
 ): Promise<NearbyRider[]> {
   const norm = normalizeRegion(region);
   const serviceFilter = rideServiceSqlFilter(serviceType);
+  // IMPORTANT: Postgres requires contiguous $1..$N. A skipped $7 with region at $8
+  // throws "could not determine data type of parameter $7" and kills ALL dispatch
+  // for orders that have a region (every Accra booking).
   const params: unknown[] = [
     pickup.lat,
     pickup.lng,
@@ -3109,12 +3112,10 @@ async function queryNearestActiveRiders(
     limit,
     LOCATION_FRESH_MAX_AGE_MIN,
     maxRadiusKm,
-    LOCATION_STALE_MAX_AGE_HOURS,
   ];
   if (useRegionFilter && norm) params.push(norm);
-  // $7 = stale hours; region is $8 when present
   const regionClauseFixed = useRegionFilter && norm
-    ? `AND (u.region IS NULL OR TRIM(u.region) = '' OR LOWER(TRIM(u.region)) = $8)`
+    ? `AND (u.region IS NULL OR TRIM(u.region) = '' OR LOWER(TRIM(u.region)) = $7)`
     : '';
 
   const result = await pool.query(
@@ -3176,27 +3177,32 @@ async function getNearestActiveRiders(
   maxRadiusKm: number = DISPATCH_RADIUS_KM_TIERS[0],
   serviceType: RideServiceType = 'package'
 ): Promise<NearbyRider[]> {
-  let riders = await queryNearestActiveRiders(
-    pickup,
-    region,
-    excludeRiderIds,
-    limit,
-    maxRadiusKm,
-    true,
-    serviceType
-  );
-  if (riders.length === 0 && normalizeRegion(region)) {
-    riders = await queryNearestActiveRiders(
+  try {
+    let riders = await queryNearestActiveRiders(
       pickup,
       region,
       excludeRiderIds,
       limit,
       maxRadiusKm,
-      false,
+      true,
       serviceType
     );
+    if (riders.length === 0 && normalizeRegion(region)) {
+      riders = await queryNearestActiveRiders(
+        pickup,
+        region,
+        excludeRiderIds,
+        limit,
+        maxRadiusKm,
+        false,
+        serviceType
+      );
+    }
+    return riders;
+  } catch (err) {
+    console.error('[dispatch] nearby rider query failed — will use online fallback:', err);
+    return [];
   }
-  return riders;
 }
 
 async function emitOffersToRiders(order: any, candidates: NearbyRider[], wave: number) {
