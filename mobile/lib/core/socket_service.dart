@@ -209,7 +209,9 @@ class SocketService {
     if (order == null) return;
     if (order.expiresAt != null) {
       try {
-        if (DateTime.parse(order.expiresAt!).isBefore(DateTime.now())) {
+        final expires = DateTime.parse(order.expiresAt!);
+        // Soft grace for clock skew — hard-drop only if clearly stale.
+        if (expires.isBefore(DateTime.now().subtract(const Duration(seconds: 20)))) {
           debugPrint('[socket] ignoring expired ride:incoming ${order.id}');
           return;
         }

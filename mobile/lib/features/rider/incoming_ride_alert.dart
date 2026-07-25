@@ -59,7 +59,7 @@ class IncomingRideAlert {
       } else {
         unawaited(IncomingRideRing.start(maxDuration: callRingDuration));
       }
-      _scheduleRingEnd(order.id, endCallKit: useCallKit);
+      _scheduleRingEnd(order.id, endCallKit: false);
       return;
     }
 
@@ -74,7 +74,7 @@ class IncomingRideAlert {
       unawaited(WakelockPlus.enable());
       unawaited(PushNotificationService.instance.cancelIncomingRide(order.id));
     }
-    _scheduleRingEnd(order.id, endCallKit: useCallKit);
+    _scheduleRingEnd(order.id, endCallKit: false);
   }
 
   static void _scheduleRingEnd(String orderId, {required bool endCallKit}) {

@@ -239,6 +239,7 @@ app.get('/api/health', async (req, res) => {
         retryCycles: MAX_DISPATCH_RETRY_CYCLES,
         noRiderRetryMs: NO_RIDER_RETRY_MS,
         orphanRedispatch: true,
+        orphanIntervalSec: 10,
       },
       database: {
         ...dbConnectionDiagnostics(),
@@ -2852,7 +2853,7 @@ async function settleOrderPayment(order: any) {
 /** Seconds a rider can accept after push/socket (aligned with app UI countdown). */
 const OFFER_TTL_SEC = Math.min(
   120,
-  Math.max(15, Number(process.env.DISPATCH_OFFER_TTL_SEC) || 30)
+  Math.max(15, Number(process.env.DISPATCH_OFFER_TTL_SEC) || 60)
 );
 /**
  * Bolt-style: ping one nearest rider per step.
@@ -2879,8 +2880,32 @@ const EARLY_GLOBAL_FALLBACK_WAVE = 1;
 const MAX_DISPATCH_RETRY_CYCLES = 8;
 /** Wait before widening search when nobody is online yet (ms). */
 const NO_RIDER_RETRY_MS = 5_000;
+/** Min gap between rider-poll kicks of orphan re-dispatch (ms). */
+const ORPHAN_KICK_THROTTLE_MS = 8_000;
 /** In-memory retry budget per order (resets on process restart; orphan job recovers). */
 const dispatchRetryCycles = new Map<string, number>();
+let lastOrphanKickAt = 0;
+
+function kickOrphanRedispatch(reason: string) {
+  const now = Date.now();
+  if (now - lastOrphanKickAt < ORPHAN_KICK_THROTTLE_MS) return;
+  lastOrphanKickAt = now;
+  void redispatchOrphanReadyOrders().catch((err) =>
+    console.warn(`[dispatch] orphan kick (${reason}) failed:`, err)
+  );
+}
+
+async function riderHasFcmToken(riderId: string): Promise<boolean> {
+  const r = await pool.query(
+    `SELECT 1 FROM fcm_tokens WHERE user_id = $1 LIMIT 1`,
+    [riderId]
+  );
+  return (r.rowCount ?? 0) > 0;
+}
+
+function riderSocketRoomSize(riderId: string): number {
+  return io.sockets.adapter.rooms.get(String(riderId))?.size ?? 0;
+}
 
 function dispatchRadiusKm(wave: number): number {
   if (wave <= 5) return DISPATCH_RADIUS_KM_TIERS[0];
@@ -3177,8 +3202,50 @@ async function getNearestActiveRiders(
 async function emitOffersToRiders(order: any, candidates: NearbyRider[], wave: number) {
   const customerId = order?.customer_id ?? null;
   // Candidates already come from online+active rider SQL — only exclude the customer.
-  const eligible = candidates.filter((c) => !customerId || c.id !== customerId);
+  let eligible = candidates.filter((c) => !customerId || c.id !== customerId);
   if (!eligible.length) return 0;
+
+  // Skip riders who cannot receive the quest (no live socket AND no FCM) — otherwise
+  // a dead account burns the full offer TTL while the customer waits.
+  const deliverable: NearbyRider[] = [];
+  for (const c of eligible) {
+    const roomSize = riderSocketRoomSize(c.id);
+    const hasFcm = roomSize > 0 ? true : await riderHasFcmToken(c.id);
+    if (roomSize > 0 || hasFcm) {
+      deliverable.push(c);
+      continue;
+    }
+    console.warn(
+      `[dispatch] order ${order.id}: skipping rider ${c.id.slice(0, 8)}… (no socket, no FCM)`
+    );
+    await pool.query(
+      `INSERT INTO order_dispatch_offers (order_id, rider_id, wave, status, offered_at, expires_at)
+       VALUES ($1, $2, $3, 'expired', CURRENT_TIMESTAMP, NOW())
+       ON CONFLICT (order_id, rider_id) DO UPDATE SET
+         wave = EXCLUDED.wave, status = 'expired', offered_at = CURRENT_TIMESTAMP, expires_at = NOW()`,
+      [order.id, c.id, wave]
+    );
+  }
+  eligible = deliverable;
+  if (!eligible.length) {
+    // Immediately try the next rider instead of sitting on a silent wave.
+    clearDispatchTimer(order.id);
+    const orderId = order.id;
+    const nextWave = wave + 1;
+    const timer = setTimeout(() => {
+      void (async () => {
+        dispatchWaveTimers.delete(orderId);
+        const fresh = await pool.query('SELECT * FROM orders WHERE id = $1', [orderId]);
+        const latest = fresh.rows[0];
+        if (!latest || !isOfferableOrder(latest)) return;
+        await advanceDispatchWave(latest, nextWave);
+      })().catch((err) =>
+        console.error(`[dispatch] skip-undeliverable wave ${nextWave} failed:`, err)
+      );
+    }, 250);
+    dispatchWaveTimers.set(orderId, timer);
+    return 0;
+  }
 
   const expiresAt = new Date(Date.now() + OFFER_TTL_SEC * 1000);
   const orderPayload = { ...order };
@@ -3208,6 +3275,7 @@ async function emitOffersToRiders(order: any, candidates: NearbyRider[], wave: n
 
   // Keep in-memory order in sync so push uses the fresh TTL (not a prior wave's expiry).
   order.offer_expires_at = expiresAt;
+  order.dispatch_wave = wave;
   orderPayload.offer_expires_at = expiresAt;
   orderPayload.expiresAt = expiresIso;
   orderPayload.expires_at = expiresIso;
@@ -3231,13 +3299,17 @@ async function emitOffersToRiders(order: any, candidates: NearbyRider[], wave: n
       offerDistanceKm: dist,
       pickupDistanceKm: dist,
     };
-    const roomSize = io.sockets.adapter.rooms.get(String(riderId))?.size ?? 0;
+    const roomSize = riderSocketRoomSize(riderId);
     if (roomSize === 0) {
       console.warn(
         `[dispatch] order ${order.id}: rider ${riderId.slice(0, 8)}… has no socket room — relying on FCM/poll`
       );
     }
-    io.to(String(riderId)).emit('ride:incoming', payload);
+    try {
+      io.to(String(riderId)).emit('ride:incoming', payload);
+    } catch (err) {
+      console.warn(`[dispatch] socket emit failed for ${riderId.slice(0, 8)}…:`, err);
+    }
   }
 
   const next = eligible[0];
@@ -3452,10 +3524,17 @@ async function redispatchOrphanReadyOrders() {
      ORDER BY o.created_at ASC
      LIMIT 20`
   );
+  if (orphans.rows.length > 0) {
+    console.info(`[dispatch] orphan re-dispatch: ${orphans.rows.length} ready order(s)`);
+  }
   for (const order of orphans.rows) {
-    console.info(`[dispatch] re-dispatching orphan ready order ${order.id}`);
-    // Clear timed-out exclusions so the same online riders get the quest again.
-    await startOrderDispatch(order, { freshCycle: true });
+    try {
+      console.info(`[dispatch] re-dispatching orphan ready order ${order.id}`);
+      // Clear timed-out exclusions so the same online riders get the quest again.
+      await startOrderDispatch(order, { freshCycle: true });
+    } catch (err) {
+      console.error(`[dispatch] orphan re-dispatch failed for ${order.id}:`, err);
+    }
   }
 }
 
@@ -5000,6 +5079,7 @@ app.patch('/api/auth/status', authenticateToken, async (req: any, res) => {
              AND (u.lat IS NULL OR ABS(u.lat::double precision) < 0.001)`,
           [user.id]
         );
+        kickOrphanRedispatch('rider-online');
       }
       const token = signAuthToken(user);
       res.json({ user: await userForAuthResponse(user), token });
@@ -7879,6 +7959,11 @@ app.get('/api/orders', authenticateToken, async (req: any, res) => {
       if (rider?.status !== 'active') {
         return res.json([]);
       }
+      // Online riders polling for jobs also kick orphan re-dispatch — self-heals
+      // if create-time broadcast was missed (deploy restart, emit error, etc.).
+      if (rider?.is_online === true) {
+        kickOrphanRedispatch('rider-poll');
+      }
 
       query = `
         SELECT o.*, odo.expires_at AS rider_offer_expires_at, odo.wave AS rider_offer_wave,
@@ -8185,34 +8270,57 @@ app.post('/api/orders', authenticateToken, async (req: any, res) => {
         [orderPromotionId]
       );
     }
-    res.json(order);
-    io.emit('order:new', order);
-    if (order.customer_id) {
-      io.to(String(order.customer_id)).emit('order:new', order);
-    }
-    if (order.vendor_id) {
-      io.to(String(order.vendor_id)).emit('order:new', order);
-      void sendPushToUserIds([order.vendor_id], {
-        title: 'New pharmacy order',
-        body: 'Review items and confirm availability for the customer',
-        type: 'shop-order',
-        orderId: order.id,
-        channelId: 'trip_updates',
-        highPriority: true,
-      });
-    }
-    if (isPharmacyShopOrder(order) && order.customer_id) {
-      void sendPushToUserIds([order.customer_id], {
-        title: 'Order placed',
-        body: `${shopLabelForOrder(order)} is confirming your items`,
-        type: 'trip-update',
-        orderId: order.id,
-        channelId: 'trip_updates',
-        highPriority: false,
-      });
-    }
+
+    // Dispatch BEFORE responding so Android/iOS never get a "ready" trip with zero offers.
+    // Fire-and-forget previously raced crashes / emit errors and left customers hanging.
+    let responseOrder = order;
     if (isOfferableOrder(order)) {
-      void broadcastRideOfferToRiders(order);
+      try {
+        await broadcastRideOfferToRiders(order);
+        const refreshed = await pool.query('SELECT * FROM orders WHERE id = $1', [order.id]);
+        if (refreshed.rows[0]) responseOrder = refreshed.rows[0];
+        const offerCount = await pool.query(
+          `SELECT COUNT(*)::int AS c FROM order_dispatch_offers
+           WHERE order_id = $1 AND status = 'offered' AND expires_at > NOW()`,
+          [order.id]
+        );
+        console.info(
+          `[dispatch] create-time offer for ${order.id}: wave=${responseOrder.dispatch_wave ?? 'null'} openOffers=${offerCount.rows[0]?.c ?? 0}`
+        );
+      } catch (err) {
+        console.error(`[dispatch] create-time dispatch failed for ${order.id}:`, err);
+      }
+    }
+
+    res.json(responseOrder);
+    try {
+      io.emit('order:new', responseOrder);
+      if (responseOrder.customer_id) {
+        io.to(String(responseOrder.customer_id)).emit('order:new', responseOrder);
+      }
+      if (responseOrder.vendor_id) {
+        io.to(String(responseOrder.vendor_id)).emit('order:new', responseOrder);
+        void sendPushToUserIds([responseOrder.vendor_id], {
+          title: 'New pharmacy order',
+          body: 'Review items and confirm availability for the customer',
+          type: 'shop-order',
+          orderId: responseOrder.id,
+          channelId: 'trip_updates',
+          highPriority: true,
+        });
+      }
+      if (isPharmacyShopOrder(responseOrder) && responseOrder.customer_id) {
+        void sendPushToUserIds([responseOrder.customer_id], {
+          title: 'Order placed',
+          body: `${shopLabelForOrder(responseOrder)} is confirming your items`,
+          type: 'trip-update',
+          orderId: responseOrder.id,
+          channelId: 'trip_updates',
+          highPriority: false,
+        });
+      }
+    } catch (err) {
+      console.error('[socket] order:new broadcast failed:', err);
     }
   } catch (err) {
     console.error('Order creation error:', err);
@@ -8335,7 +8443,7 @@ app.patch('/api/orders/:id', authenticateToken, async (req: any, res) => {
           [orderId]
         );
       } else if (isOfferableOrder(order)) {
-        broadcastRideOfferToRiders(order);
+        await broadcastRideOfferToRiders(order);
       }
       if (status === 'delivered' && req.user.role === 'admin') {
         await settleOrderPayment(order);
@@ -10567,5 +10675,5 @@ httpServer.listen(PORT, HOST, () => {
     void redispatchOrphanReadyOrders().catch((err) =>
       console.warn('[dispatch] orphan re-dispatch failed:', err)
     );
-  }, 30_000);
+  }, 10_000);
 });

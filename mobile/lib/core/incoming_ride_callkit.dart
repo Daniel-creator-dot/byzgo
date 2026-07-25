@@ -17,7 +17,7 @@ typedef IncomingRideCallAction = void Function(
 class IncomingRideCallKit {
   IncomingRideCallKit._();
 
-  static const _offerDurationMs = 30000;
+  static const _offerDurationMs = 60000;
   static bool _initialized = false;
   static StreamSubscription<CallEvent?>? _eventSub;
   static IncomingRideCallAction? onRideAction;

@@ -246,7 +246,10 @@ bool isOfferableOrder(Order order) {
   if (order.status != 'ready') return false;
   if (order.expiresAt == null) return true;
   try {
-    return DateTime.parse(order.expiresAt!).isAfter(DateTime.now());
+    // 20s grace: device clocks often skew ahead of the server and were
+    // dropping live socket/FCM offers as "expired" before the rider saw them.
+    return DateTime.parse(order.expiresAt!)
+        .isAfter(DateTime.now().subtract(const Duration(seconds: 20)));
   } catch (_) {
     return true;
   }

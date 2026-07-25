@@ -332,7 +332,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
     final orderId = data['orderId']?.trim() ?? '';
     if (orderId.isEmpty) return;
 
-    if (action == 'decline' || action == 'timeout') {
+    if (action == 'decline') {
       await IncomingRideCallKit.endCall(orderId);
       if (_incoming?.id == orderId) {
         await _declineRide();
@@ -341,6 +341,17 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
           await _ordersRepo.declineOrder(orderId);
         } catch (_) {}
         await IncomingRideAlert.dismiss(orderId: orderId);
+      }
+      return;
+    }
+
+    if (action == 'timeout') {
+      // Native CallKit timed out — do NOT decline on the server. Declining
+      // permanently burns this rider for the order; let the wave expire instead.
+      await IncomingRideCallKit.endCall(orderId);
+      await IncomingRideAlert.dismiss(orderId: orderId);
+      if (_incoming?.id == orderId && mounted) {
+        setState(() => _incoming = null);
       }
       return;
     }

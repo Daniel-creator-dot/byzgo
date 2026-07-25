@@ -18,7 +18,8 @@ class PendingIncomingRideStore {
     final expiresRaw = data['expiresAt']?.trim() ?? '';
     if (expiresRaw.isEmpty) return false;
     try {
-      return DateTime.parse(expiresRaw).isBefore(DateTime.now());
+      return DateTime.parse(expiresRaw)
+          .isBefore(DateTime.now().subtract(const Duration(seconds: 20)));
     } catch (_) {
       return false;
     }
