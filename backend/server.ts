@@ -2193,14 +2193,85 @@ async function repairStaleTripsForCustomer(customerId: string) {
     }
     broadcastOrderUpdated(order);
   }
-  await pool.query(
+  // Cancel zombie searches: unassigned ready/pending older than 2 hours (was 3 days —
+  // those blocked the UI as "pending requests" forever after dispatch outages).
+  const cancelled = await pool.query(
     `UPDATE orders SET status = 'cancelled', rider_id = NULL, updated_at = CURRENT_TIMESTAMP
      WHERE customer_id = $1
        AND status IN ('ready', 'pending', 'preparing')
        AND rider_id IS NULL
-       AND created_at < NOW() - INTERVAL '3 days'`,
+       AND created_at < NOW() - INTERVAL '2 hours'
+     RETURNING id`,
     [customerId]
   );
+  for (const row of cancelled.rows) {
+    clearDispatchTimer(row.id);
+    dispatchRetryCycles.delete(row.id);
+  }
+  // Free riders stuck on abandoned in-progress trips (no PIN / customer gone).
+  const abandoned = await pool.query(
+    `UPDATE orders SET status = 'cancelled', rider_id = NULL, updated_at = CURRENT_TIMESTAMP
+     WHERE customer_id = $1
+       AND status IN ('picked_up', 'arrived')
+       AND updated_at < NOW() - INTERVAL '2 hours'
+       AND payment_status IS DISTINCT FROM 'paid'
+       AND customer_payment_ack IS NULL
+     RETURNING id, rider_id`,
+    [customerId]
+  );
+  for (const row of abandoned.rows) {
+    clearDispatchTimer(row.id);
+    if (row.rider_id) {
+      io.to(String(row.rider_id)).emit('ride:taken', { orderId: row.id, reason: 'cancelled' });
+    }
+  }
+}
+
+/** Admin/ops: close all zombie waiting + abandoned in-progress trips. */
+async function closeStuckTripsGlobally(): Promise<{
+  cancelledReady: number;
+  cancelledAbandoned: number;
+}> {
+  const ready = await pool.query(
+    `UPDATE orders SET status = 'cancelled', rider_id = NULL, updated_at = CURRENT_TIMESTAMP
+     WHERE status IN ('ready', 'pending', 'preparing')
+       AND rider_id IS NULL
+       AND created_at < NOW() - INTERVAL '2 hours'
+     RETURNING id`
+  );
+  for (const row of ready.rows) {
+    clearDispatchTimer(row.id);
+    dispatchRetryCycles.delete(row.id);
+  }
+  const abandoned = await pool.query(
+    `UPDATE orders SET status = 'cancelled', rider_id = NULL, updated_at = CURRENT_TIMESTAMP
+     WHERE status IN ('picked_up', 'arrived')
+       AND updated_at < NOW() - INTERVAL '2 hours'
+       AND (payment_status IS DISTINCT FROM 'paid')
+       AND customer_payment_ack IS NULL
+     RETURNING id, rider_id`
+  );
+  for (const row of abandoned.rows) {
+    clearDispatchTimer(row.id);
+    dispatchRetryCycles.delete(row.id);
+    if (row.rider_id) {
+      io.to(String(row.rider_id)).emit('ride:taken', { orderId: row.id, reason: 'cancelled' });
+      io.to(String(row.rider_id)).emit('order:updated', {
+        id: row.id,
+        status: 'cancelled',
+        rider_id: null,
+      });
+    }
+  }
+  await pool.query(
+    `UPDATE order_dispatch_offers SET status = 'expired'
+     WHERE status = 'offered'
+       AND order_id IN (SELECT id FROM orders WHERE status IN ('cancelled', 'delivered'))`
+  );
+  return {
+    cancelledReady: ready.rowCount ?? 0,
+    cancelledAbandoned: abandoned.rowCount ?? 0,
+  };
 }
 
 const deliveryCodeAttempts = new Map<string, { attempts: number; lockedUntil: number }>();
@@ -7031,6 +7102,22 @@ app.post('/api/admin/dispatch/prune', authenticateToken, async (req: any, res) =
   } catch (err) {
     console.error('[admin/dispatch/prune]', err);
     res.status(500).json({ message: 'Prune failed' });
+  }
+});
+
+/** Admin: cancel zombie waiting searches + abandoned in-progress trips. */
+app.post('/api/admin/dispatch/close-stuck', authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'admin') return res.sendStatus(403);
+  try {
+    const result = await closeStuckTripsGlobally();
+    res.json({
+      ok: true,
+      ...result,
+      message: `Closed ${result.cancelledReady} waiting + ${result.cancelledAbandoned} abandoned trip(s).`,
+    });
+  } catch (err) {
+    console.error('[admin/dispatch/close-stuck]', err);
+    res.status(500).json({ message: 'Close stuck trips failed' });
   }
 });
 

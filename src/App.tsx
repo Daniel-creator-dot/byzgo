@@ -5065,6 +5065,22 @@ function AdminView({
                  >
                    Kick ghost online riders + re-send waiting trips
                  </button>
+                 <button
+                   type="button"
+                   onClick={async () => {
+                     try {
+                       const res = await axios.post('/api/admin/dispatch/close-stuck');
+                       addNotification(res.data?.message || 'Closed stuck trips', 'success');
+                       const status = await axios.get('/api/admin/dispatch/status');
+                       setDispatchStatus(status.data);
+                     } catch (err) {
+                       addNotification(getApiError(err, 'Close stuck failed'), 'warning');
+                     }
+                   }}
+                   className="w-full px-4 py-3 bg-red-500 text-white rounded-xl text-[10px] font-black uppercase"
+                 >
+                   End stuck waiting / abandoned trips
+                 </button>
                </div>
              ) : (
                <p className="text-xs text-slate-400 font-bold">Could not load dispatch status.</p>
