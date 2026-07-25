@@ -239,8 +239,9 @@ app.get('/api/health', async (req, res) => {
         retryCycles: MAX_DISPATCH_RETRY_CYCLES,
         noRiderRetryMs: NO_RIDER_RETRY_MS,
         orphanRedispatch: true,
-        orphanIntervalSec: 10,
-        nearbyParamFix: true,
+        orphanIntervalSec: ORPHAN_REDISPATCH_INTERVAL_MS / 1000,
+        declineHandoff: true,
+        boltStyle: true,
       },
       database: {
         ...dbConnectionDiagnostics(),
@@ -2927,36 +2928,65 @@ const OFFER_TTL_SEC = Math.min(
   120,
   Math.max(15, Number(process.env.DISPATCH_OFFER_TTL_SEC) || 60)
 );
-/**
- * Bolt-style: ping one nearest rider per step.
- * Offering 2+ on early waves burned the whole small fleet in one timeout,
- * then permanently excluded them so later waves / orphan re-dispatch found nobody.
- */
+/** Bolt-style: one nearest rider per step so a timeout does not burn the whole fleet. */
 function ridersPerWave(_wave: number): number {
   return 1;
 }
-/** Max sequential offers before giving up (each step = next nearest rider). */
 const MAX_DISPATCH_WAVES = 15;
-/** Prefer GPS newer than this for distance ranking (minutes). */
 const LOCATION_FRESH_MAX_AGE_MIN = 45;
-/** Auto-offline riders whose GPS is older than this (minutes). */
 const ONLINE_STALE_GPS_MAX_AGE_MIN = 90;
-/** Last-known GPS older than this is ignored entirely (hours). */
-const LOCATION_STALE_MAX_AGE_HOURS = 6;
-/** Expanding pickup radius (km) as dispatch steps progress. */
 const DISPATCH_RADIUS_KM_TIERS = [6, 12, 25] as const;
-const NEARBY_RIDERS_MAX_KM = 6;
-/** Offer any online rider as soon as nearby search is empty (wave 1+). */
+const NEARBY_RIDERS_MAX_KM = DISPATCH_RADIUS_KM_TIERS[0];
 const EARLY_GLOBAL_FALLBACK_WAVE = 1;
-/** How many times we may clear timed-out offers and re-ping the same riders. */
 const MAX_DISPATCH_RETRY_CYCLES = 8;
-/** Wait before widening search when nobody is online yet (ms). */
 const NO_RIDER_RETRY_MS = 5_000;
-/** Min gap between rider-poll kicks of orphan re-dispatch (ms). */
 const ORPHAN_KICK_THROTTLE_MS = 8_000;
-/** In-memory retry budget per order (resets on process restart; orphan job recovers). */
+const ORPHAN_REDISPATCH_INTERVAL_MS = 10_000;
+const CLOSE_STUCK_INTERVAL_MS = 5 * 60_000;
+
 const dispatchRetryCycles = new Map<string, number>();
+const dispatchWaveTimers = new Map<string, NodeJS.Timeout>();
 let lastOrphanKickAt = 0;
+
+type NearbyRider = { id: string; distanceKm: number };
+
+function dispatchShort(id: string | undefined | null): string {
+  return id && id.length >= 8 ? `${id.slice(0, 8)}…` : String(id ?? '?');
+}
+
+function widestDispatchRadiusKm(): number {
+  return DISPATCH_RADIUS_KM_TIERS[DISPATCH_RADIUS_KM_TIERS.length - 1];
+}
+
+function dispatchRadiusKm(wave: number): number {
+  if (wave <= 5) return DISPATCH_RADIUS_KM_TIERS[0];
+  if (wave <= 10) return DISPATCH_RADIUS_KM_TIERS[1];
+  return DISPATCH_RADIUS_KM_TIERS[2];
+}
+
+function clearDispatchTimer(orderId: string) {
+  const t = dispatchWaveTimers.get(orderId);
+  if (t) {
+    clearTimeout(t);
+    dispatchWaveTimers.delete(orderId);
+  }
+}
+
+function scheduleDispatchWave(orderId: string, nextWave: number, delayMs: number, reason: string) {
+  clearDispatchTimer(orderId);
+  const timer = setTimeout(() => {
+    void (async () => {
+      dispatchWaveTimers.delete(orderId);
+      const fresh = await pool.query('SELECT * FROM orders WHERE id = $1', [orderId]);
+      const latest = fresh.rows[0];
+      if (!latest || !isOfferableOrder(latest)) return;
+      await advanceDispatchWave(latest, nextWave);
+    })().catch((err) =>
+      console.error(`[dispatch] ${reason} wave ${nextWave} failed for ${dispatchShort(orderId)}:`, err)
+    );
+  }, delayMs);
+  dispatchWaveTimers.set(orderId, timer);
+}
 
 function kickOrphanRedispatch(reason: string) {
   const now = Date.now();
@@ -2968,33 +2998,12 @@ function kickOrphanRedispatch(reason: string) {
 }
 
 async function riderHasFcmToken(riderId: string): Promise<boolean> {
-  const r = await pool.query(
-    `SELECT 1 FROM fcm_tokens WHERE user_id = $1 LIMIT 1`,
-    [riderId]
-  );
+  const r = await pool.query(`SELECT 1 FROM fcm_tokens WHERE user_id = $1 LIMIT 1`, [riderId]);
   return (r.rowCount ?? 0) > 0;
 }
 
 function riderSocketRoomSize(riderId: string): number {
   return io.sockets.adapter.rooms.get(String(riderId))?.size ?? 0;
-}
-
-function dispatchRadiusKm(wave: number): number {
-  if (wave <= 5) return DISPATCH_RADIUS_KM_TIERS[0];
-  if (wave <= 10) return DISPATCH_RADIUS_KM_TIERS[1];
-  return DISPATCH_RADIUS_KM_TIERS[2];
-}
-
-type NearbyRider = { id: string; distanceKm: number };
-
-const dispatchWaveTimers = new Map<string, NodeJS.Timeout>();
-
-function clearDispatchTimer(orderId: string) {
-  const t = dispatchWaveTimers.get(orderId);
-  if (t) {
-    clearTimeout(t);
-    dispatchWaveTimers.delete(orderId);
-  }
 }
 
 function normalizeRegion(region?: string | null): string | null {
@@ -3008,8 +3017,7 @@ async function getActiveRiderIds(
   region?: string | null,
   serviceType: RideServiceType | null = 'package'
 ): Promise<string[]> {
-  const serviceFilter =
-    serviceType == null ? '' : rideServiceSqlFilter(serviceType);
+  const serviceFilter = serviceType == null ? '' : rideServiceSqlFilter(serviceType);
   const norm = normalizeRegion(region);
   if (norm) {
     const regional = await pool.query(
@@ -3050,7 +3058,6 @@ async function getAvailableOnlineRiders(
   limit: number
 ): Promise<NearbyRider[]> {
   if (!riderIds.length || limit <= 0) return [];
-  // Prefer riders who can actually receive the quest (fresh GPS + FCM).
   const res = await pool.query(
     `SELECT u.id FROM users u
      LEFT JOIN rider_locations rl ON rl.rider_id = u.id
@@ -3088,10 +3095,9 @@ async function pruneStaleOnlineRiders(): Promise<number> {
        )`,
     [ONLINE_STALE_GPS_MAX_AGE_MIN]
   );
-  // Keep drivers with a live socket — GPS may lag briefly after Go Online.
   const staleIds = result.rows
     .map((row: { id: string }) => row.id)
-    .filter((id: string) => (io.sockets.adapter.rooms.get(String(id))?.size ?? 0) === 0);
+    .filter((id: string) => riderSocketRoomSize(id) === 0);
   if (!staleIds.length) return 0;
 
   const pruned = await pool.query(
@@ -3102,7 +3108,9 @@ async function pruneStaleOnlineRiders(): Promise<number> {
   );
   const n = pruned.rowCount ?? 0;
   if (n > 0) {
-    console.info(`[dispatch] pruned ${n} stale online rider(s) (GPS older than ${ONLINE_STALE_GPS_MAX_AGE_MIN}m, no socket)`);
+    console.info(
+      `[dispatch] pruned ${n} stale online rider(s) (GPS > ${ONLINE_STALE_GPS_MAX_AGE_MIN}m, no socket)`
+    );
     for (const row of pruned.rows) {
       io.to(String(row.id)).emit('status:updated', { status: 'active', is_online: false });
     }
@@ -3125,11 +3133,7 @@ async function getPickupPoint(order: any): Promise<{ lat: number; lng: number } 
   return null;
 }
 
-/**
- * Riders to skip for the current offer step.
- * Keep declined/accepted forever for this order; include expired so we don't
- * immediately re-ping the same rider on the next wave within a cycle.
- */
+/** Riders already offered / declined / accepted — skip for the current cycle. */
 async function getOfferedRiderIds(orderId: string): Promise<string[]> {
   const r = await pool.query(
     `SELECT rider_id FROM order_dispatch_offers
@@ -3157,7 +3161,7 @@ async function maybeRestartDispatchAfterExhaustion(order: any, reason: string): 
   if (cleared <= 0) return false;
   dispatchRetryCycles.set(order.id, cycles + 1);
   console.info(
-    `[dispatch] order ${order.id}: ${reason} — cleared ${cleared} expired offer(s), retry cycle ${cycles + 1}/${MAX_DISPATCH_RETRY_CYCLES}`
+    `[dispatch] ${dispatchShort(order.id)}: ${reason} — cleared ${cleared} expired, retry ${cycles + 1}/${MAX_DISPATCH_RETRY_CYCLES}`
   );
   await advanceDispatchWave(order, 1);
   return true;
@@ -3174,9 +3178,7 @@ async function queryNearestActiveRiders(
 ): Promise<NearbyRider[]> {
   const norm = normalizeRegion(region);
   const serviceFilter = rideServiceSqlFilter(serviceType);
-  // IMPORTANT: Postgres requires contiguous $1..$N. A skipped $7 with region at $8
-  // throws "could not determine data type of parameter $7" and kills ALL dispatch
-  // for orders that have a region (every Accra booking).
+  // Postgres requires contiguous $1..$N — never skip a parameter index.
   const params: unknown[] = [
     pickup.lat,
     pickup.lng,
@@ -3186,7 +3188,7 @@ async function queryNearestActiveRiders(
     maxRadiusKm,
   ];
   if (useRegionFilter && norm) params.push(norm);
-  const regionClauseFixed = useRegionFilter && norm
+  const regionClause = useRegionFilter && norm
     ? `AND (u.region IS NULL OR TRIM(u.region) = '' OR LOWER(TRIM(u.region)) = $7)`
     : '';
 
@@ -3202,8 +3204,6 @@ async function queryNearestActiveRiders(
        FROM users u
        INNER JOIN rider_locations rl ON rl.rider_id = u.id
        CROSS JOIN LATERAL (
-         -- ONLY fresh GPS counts for ranking. Ageless profile pins were matching
-         -- dead accounts (GPS weeks old) ahead of live drivers.
          SELECT
            CASE
              WHEN ABS(rl.lat) > 0.001
@@ -3228,7 +3228,7 @@ async function queryNearestActiveRiders(
          AND busy.status IN ('ready', 'picked_up', 'arrived')
        )
        ${serviceFilter}
-       ${regionClauseFixed}
+       ${regionClause}
      ) ranked
      WHERE distance_km <= $6
      ORDER BY distance_km ASC
@@ -3272,19 +3272,89 @@ async function getNearestActiveRiders(
     }
     return riders;
   } catch (err) {
-    console.error('[dispatch] nearby rider query failed — will use online fallback:', err);
+    console.error('[dispatch] nearby query failed — using online fallback:', err);
     return [];
   }
 }
 
+/**
+ * Shared Bolt matcher: nearest by fresh GPS → same-service online → any online.
+ */
+async function findDispatchCandidates(opts: {
+  order: any;
+  exclude: string[];
+  limit: number;
+  radiusKm: number;
+  allowGlobalFallback: boolean;
+}): Promise<{ candidates: NearbyRider[]; usedGlobalFallback: boolean; usedVehicleBypass: boolean }> {
+  const { order, exclude, limit, radiusKm, allowGlobalFallback } = opts;
+  const serviceType = normalizeRideServiceType(order.service_type);
+  const pickup = await getPickupPoint(order);
+
+  let candidates: NearbyRider[] = [];
+  let usedGlobalFallback = false;
+  let usedVehicleBypass = false;
+
+  if (pickup) {
+    candidates = await getNearestActiveRiders(
+      pickup,
+      order.region,
+      exclude,
+      limit,
+      radiusKm,
+      serviceType
+    );
+  }
+
+  if ((!candidates.length && allowGlobalFallback) || !pickup) {
+    const fallbackIds = (await getActiveRiderIds(order.region, serviceType)).filter(
+      (id) => !exclude.includes(id)
+    );
+    const online = await getAvailableOnlineRiders(fallbackIds, limit);
+    if (online.length) {
+      candidates = online;
+      usedGlobalFallback = Boolean(pickup);
+    }
+  }
+
+  if (!candidates.length) {
+    const anyOnline = (await getActiveRiderIds(order.region, null)).filter(
+      (id) => !exclude.includes(id)
+    );
+    const bypass = await getAvailableOnlineRiders(anyOnline, limit);
+    if (bypass.length) {
+      candidates = bypass;
+      usedVehicleBypass = true;
+      usedGlobalFallback = true;
+    }
+  }
+
+  return { candidates, usedGlobalFallback, usedVehicleBypass };
+}
+
+async function markRiderOfferStatus(
+  orderId: string,
+  riderId: string,
+  wave: number,
+  status: 'expired' | 'declined'
+) {
+  await pool.query(
+    `INSERT INTO order_dispatch_offers (order_id, rider_id, wave, status, offered_at, expires_at)
+     VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP, NOW())
+     ON CONFLICT (order_id, rider_id) DO UPDATE SET
+       wave = EXCLUDED.wave,
+       status = EXCLUDED.status,
+       offered_at = CURRENT_TIMESTAMP,
+       expires_at = NOW()`,
+    [orderId, riderId, wave, status]
+  );
+}
+
 async function emitOffersToRiders(order: any, candidates: NearbyRider[], wave: number) {
   const customerId = order?.customer_id ?? null;
-  // Candidates already come from online+active rider SQL — only exclude the customer.
   let eligible = candidates.filter((c) => !customerId || c.id !== customerId);
   if (!eligible.length) return 0;
 
-  // Skip riders who cannot receive the quest (no live socket AND no FCM) — otherwise
-  // a dead account burns the full offer TTL while the customer waits.
   const deliverable: NearbyRider[] = [];
   for (const c of eligible) {
     const roomSize = riderSocketRoomSize(c.id);
@@ -3294,43 +3364,21 @@ async function emitOffersToRiders(order: any, candidates: NearbyRider[], wave: n
       continue;
     }
     console.warn(
-      `[dispatch] order ${order.id}: skipping rider ${c.id.slice(0, 8)}… (no socket, no FCM)`
+      `[dispatch] ${dispatchShort(order.id)}: skip ${dispatchShort(c.id)} (no socket, no FCM)`
     );
-    await pool.query(
-      `INSERT INTO order_dispatch_offers (order_id, rider_id, wave, status, offered_at, expires_at)
-       VALUES ($1, $2, $3, 'expired', CURRENT_TIMESTAMP, NOW())
-       ON CONFLICT (order_id, rider_id) DO UPDATE SET
-         wave = EXCLUDED.wave, status = 'expired', offered_at = CURRENT_TIMESTAMP, expires_at = NOW()`,
-      [order.id, c.id, wave]
-    );
+    await markRiderOfferStatus(order.id, c.id, wave, 'expired');
   }
   eligible = deliverable;
   if (!eligible.length) {
-    // Immediately try the next rider instead of sitting on a silent wave.
-    clearDispatchTimer(order.id);
-    const orderId = order.id;
-    const nextWave = wave + 1;
-    const timer = setTimeout(() => {
-      void (async () => {
-        dispatchWaveTimers.delete(orderId);
-        const fresh = await pool.query('SELECT * FROM orders WHERE id = $1', [orderId]);
-        const latest = fresh.rows[0];
-        if (!latest || !isOfferableOrder(latest)) return;
-        await advanceDispatchWave(latest, nextWave);
-      })().catch((err) =>
-        console.error(`[dispatch] skip-undeliverable wave ${nextWave} failed:`, err)
-      );
-    }, 250);
-    dispatchWaveTimers.set(orderId, timer);
+    scheduleDispatchWave(order.id, wave + 1, 250, 'skip-undeliverable');
     return 0;
   }
 
   const expiresAt = new Date(Date.now() + OFFER_TTL_SEC * 1000);
   const orderPayload = { ...order };
   const expiresIso = expiresAt.toISOString();
-  const dispatchStarted = Date.now();
+  const started = Date.now();
 
-  // Persist offers before push/socket so decline/accept never races an empty row.
   await Promise.all(
     eligible.map(({ id: riderId }) =>
       pool.query(
@@ -3351,7 +3399,6 @@ async function emitOffersToRiders(order: any, candidates: NearbyRider[], wave: n
     [wave, expiresAt, order.id]
   );
 
-  // Keep in-memory order in sync so push uses the fresh TTL (not a prior wave's expiry).
   order.offer_expires_at = expiresAt;
   order.dispatch_wave = wave;
   orderPayload.offer_expires_at = expiresAt;
@@ -3377,22 +3424,21 @@ async function emitOffersToRiders(order: any, candidates: NearbyRider[], wave: n
       offerDistanceKm: dist,
       pickupDistanceKm: dist,
     };
-    const roomSize = riderSocketRoomSize(riderId);
-    if (roomSize === 0) {
+    if (riderSocketRoomSize(riderId) === 0) {
       console.warn(
-        `[dispatch] order ${order.id}: rider ${riderId.slice(0, 8)}… has no socket room — relying on FCM/poll`
+        `[dispatch] ${dispatchShort(order.id)}: ${dispatchShort(riderId)} no socket — FCM/poll`
       );
     }
     try {
       io.to(String(riderId)).emit('ride:incoming', payload);
     } catch (err) {
-      console.warn(`[dispatch] socket emit failed for ${riderId.slice(0, 8)}…:`, err);
+      console.warn(`[dispatch] socket emit failed for ${dispatchShort(riderId)}:`, err);
     }
   }
 
   const next = eligible[0];
   console.info(
-    `[dispatch] order ${order.id} step ${wave}: offered to ${eligible.length} rider(s), first ${next.id.slice(0, 8)}… (${next.distanceKm.toFixed(1)} km) in ${Date.now() - dispatchStarted}ms`,
+    `[dispatch] ${dispatchShort(order.id)} wave ${wave}: offered ${eligible.length} → ${dispatchShort(next.id)} (${next.distanceKm.toFixed(1)} km) ${Date.now() - started}ms`
   );
 
   clearDispatchTimer(order.id);
@@ -3428,7 +3474,6 @@ async function handleWaveExpired(orderId: string, wave: number) {
     getActiveRiderIds(order.region, serviceType),
   ]);
   const remaining = onlineIds.filter((id) => !exclude.includes(id));
-  // Small fleets: after the only online rider(s) time out, re-ping instead of dying.
   if (remaining.length === 0 && onlineIds.length > 0) {
     const restarted = await maybeRestartDispatchAfterExhaustion(
       order,
@@ -3447,64 +3492,31 @@ async function advanceDispatchWave(order: any, wave: number) {
     return;
   }
 
-  const serviceType = normalizeRideServiceType(order.service_type);
-  const [exclude, pickup] = await Promise.all([
-    getOfferedRiderIds(order.id),
-    getPickupPoint(order),
-  ]);
+  const exclude = await getOfferedRiderIds(order.id);
   const radiusKm = dispatchRadiusKm(wave);
   const limit = ridersPerWave(wave);
+  const serviceType = normalizeRideServiceType(order.service_type);
 
-  const widestRadiusKm = DISPATCH_RADIUS_KM_TIERS[DISPATCH_RADIUS_KM_TIERS.length - 1];
+  const { candidates, usedGlobalFallback, usedVehicleBypass } = await findDispatchCandidates({
+    order,
+    exclude,
+    limit,
+    radiusKm,
+    allowGlobalFallback:
+      wave >= EARLY_GLOBAL_FALLBACK_WAVE || radiusKm >= widestDispatchRadiusKm(),
+  });
 
-  let candidates: NearbyRider[] = [];
-  let usedGlobalFallback = false;
-  let usedVehicleBypass = false;
-
-  if (pickup) {
-    candidates = await getNearestActiveRiders(
-      pickup,
-      order.region,
-      exclude,
-      limit,
-      radiusKm,
-      serviceType
+  if (usedVehicleBypass) {
+    console.warn(
+      `[dispatch] ${dispatchShort(order.id)} wave ${wave}: no ${serviceType} match — any online rider`
     );
-    if (
-      candidates.length === 0 &&
-      (wave >= EARLY_GLOBAL_FALLBACK_WAVE || radiusKm >= widestRadiusKm)
-    ) {
-      const fallbackIds = (await getActiveRiderIds(order.region, serviceType)).filter(
-        (id) => !exclude.includes(id)
-      );
-      candidates = await getAvailableOnlineRiders(fallbackIds, limit);
-      usedGlobalFallback = candidates.length > 0;
-    }
-  } else {
-    const fallback = (await getActiveRiderIds(order.region, serviceType)).filter(
-      (id) => !exclude.includes(id)
+  } else if (usedGlobalFallback) {
+    console.info(
+      `[dispatch] ${dispatchShort(order.id)} wave ${wave}: none within ${radiusKm}km — global fallback`
     );
-    candidates = await getAvailableOnlineRiders(fallback, limit);
   }
 
-  // Vehicle-type mismatch (e.g. keke booking, only motorcycle riders online):
-  // still offer to any online rider so quests are not silently dropped.
-  if (candidates.length === 0) {
-    const anyOnline = (await getActiveRiderIds(order.region, null)).filter(
-      (id) => !exclude.includes(id)
-    );
-    candidates = await getAvailableOnlineRiders(anyOnline, limit);
-    if (candidates.length > 0) {
-      usedVehicleBypass = true;
-      usedGlobalFallback = true;
-      console.warn(
-        `[dispatch] order ${order.id} step ${wave}: no ${serviceType}-matched riders — offering to any online rider`
-      );
-    }
-  }
-
-  if (candidates.length === 0) {
-    // Prefer counts without vehicle filter so we know if anyone is online at all.
+  if (!candidates.length) {
     const onlineIds = await getActiveRiderIds(order.region, null);
     const remaining = onlineIds.filter((id) => !exclude.includes(id));
     if (remaining.length === 0 && onlineIds.length > 0) {
@@ -3514,16 +3526,11 @@ async function advanceDispatchWave(order: any, wave: number) {
       );
       if (restarted) return;
     }
-    if (onlineIds.length === 0) {
-      console.warn(
-        `[dispatch] order ${order.id} step ${wave}: zero online active riders (service=${serviceType}) — retrying in ${NO_RIDER_RETRY_MS}ms`
-      );
-    } else {
-      console.warn(
-        `[dispatch] order ${order.id} step ${wave}: no riders within ${radiusKm}km — retrying in ${NO_RIDER_RETRY_MS}ms`
-      );
-    }
-    // Persist wave so admin/diagnostics show hunting started (emitOffers also sets this).
+    console.warn(
+      `[dispatch] ${dispatchShort(order.id)} wave ${wave}: ${
+        onlineIds.length === 0 ? 'zero online riders' : `none within ${radiusKm}km`
+      } — retry in ${NO_RIDER_RETRY_MS}ms`
+    );
     await pool.query(
       `UPDATE orders SET dispatch_wave = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
       [wave, order.id]
@@ -3531,22 +3538,7 @@ async function advanceDispatchWave(order: any, wave: number) {
     order.dispatch_wave = wave;
 
     if (wave < MAX_DISPATCH_WAVES) {
-      // Do NOT burn all waves in one tick — wait so a driver can go online / GPS can refresh.
-      clearDispatchTimer(order.id);
-      const orderId = order.id;
-      const nextWave = wave + 1;
-      const timer = setTimeout(() => {
-        void (async () => {
-          dispatchWaveTimers.delete(orderId);
-          const fresh = await pool.query('SELECT * FROM orders WHERE id = $1', [orderId]);
-          const latest = fresh.rows[0];
-          if (!latest || !isOfferableOrder(latest)) return;
-          await advanceDispatchWave(latest, nextWave);
-        })().catch((err) =>
-          console.error(`[dispatch] delayed wave ${nextWave} failed for ${orderId}:`, err)
-        );
-      }, NO_RIDER_RETRY_MS);
-      dispatchWaveTimers.set(orderId, timer);
+      scheduleDispatchWave(order.id, wave + 1, NO_RIDER_RETRY_MS, 'empty-hunt');
     } else {
       const restarted = await maybeRestartDispatchAfterExhaustion(
         order,
@@ -3554,17 +3546,11 @@ async function advanceDispatchWave(order: any, wave: number) {
       );
       if (!restarted) {
         console.warn(
-          `[dispatch] order ${order.id}: no riders available (nearby or online) after ${MAX_DISPATCH_WAVES} attempts`
+          `[dispatch] ${dispatchShort(order.id)}: giving up after ${MAX_DISPATCH_WAVES} attempts`
         );
       }
     }
     return;
-  }
-
-  if (usedGlobalFallback && !usedVehicleBypass) {
-    console.info(
-      `[dispatch] order ${order.id} step ${wave}: no rider within ${radiusKm}km — falling back to any online rider`
-    );
   }
 
   await emitOffersToRiders(order, candidates, wave);
@@ -3573,8 +3559,6 @@ async function advanceDispatchWave(order: any, wave: number) {
 async function startOrderDispatch(order: any, opts?: { freshCycle?: boolean }) {
   if (!isOfferableOrder(order)) return;
   clearDispatchTimer(order.id);
-  // Do not prune here — that raced live drivers (stale GPS + Go Online) and
-  // wiped the only match before nearby/fallback search. Interval prune is enough.
   await pool.query(
     `UPDATE order_dispatch_offers SET status = 'expired'
      WHERE order_id = $1 AND status = 'offered'`,
@@ -3587,7 +3571,7 @@ async function startOrderDispatch(order: any, opts?: { freshCycle?: boolean }) {
   await advanceDispatchWave(order, 1);
 }
 
-/** Re-offer ready trips that never reached a rider (stale GPS / missed dispatch). */
+/** Re-offer ready trips that never reached a rider. */
 async function redispatchOrphanReadyOrders() {
   const orphans = await pool.query(
     `SELECT o.*
@@ -3607,31 +3591,24 @@ async function redispatchOrphanReadyOrders() {
   }
   for (const order of orphans.rows) {
     try {
-      console.info(`[dispatch] re-dispatching orphan ready order ${order.id}`);
-      // Clear timed-out exclusions so the same online riders get the quest again.
+      console.info(`[dispatch] re-dispatching orphan ${dispatchShort(order.id)}`);
       await startOrderDispatch(order, { freshCycle: true });
     } catch (err) {
-      console.error(`[dispatch] orphan re-dispatch failed for ${order.id}:`, err);
+      console.error(`[dispatch] orphan failed for ${dispatchShort(order.id)}:`, err);
     }
   }
 }
 
+/** Bolt-style: rider rejects → instantly offer the next nearest. */
 async function recordRiderDecline(orderId: string, riderId: string) {
   const orderRes = await pool.query('SELECT * FROM orders WHERE id = $1', [orderId]);
   const order = orderRes.rows[0];
   if (!order || !isOfferableOrder(order)) return;
 
   const wave = order.dispatch_wave || 1;
-  // Stop the current offer timer — we're handing off now, Bolt-style.
   clearDispatchTimer(orderId);
 
-  await pool.query(
-    `INSERT INTO order_dispatch_offers (order_id, rider_id, wave, status, offered_at, expires_at)
-     VALUES ($1, $2, $3, 'declined', CURRENT_TIMESTAMP, NOW())
-     ON CONFLICT (order_id, rider_id) DO UPDATE SET status = 'declined'`,
-    [orderId, riderId, wave]
-  );
-  // Close any sibling open offers so we never wait on a parallel TTL.
+  await markRiderOfferStatus(orderId, riderId, wave, 'declined');
   await pool.query(
     `UPDATE order_dispatch_offers SET status = 'expired'
      WHERE order_id = $1 AND status = 'offered' AND rider_id IS DISTINCT FROM $2`,
@@ -3639,61 +3616,34 @@ async function recordRiderDecline(orderId: string, riderId: string) {
   );
 
   console.info(
-    `[dispatch] rider ${riderId.slice(0, 8)}… declined ${orderId} — offering next nearest immediately`
+    `[dispatch] ${dispatchShort(riderId)} declined ${dispatchShort(orderId)} — next nearest now`
   );
-  await offerNextNearestAfterDecline(order, wave + 1);
-}
 
-/**
- * Bolt-style handoff: after a reject, ping the next nearest online rider now
- * (widest radius + global fallback). Declined riders stay excluded.
- */
-async function offerNextNearestAfterDecline(order: any, nextWave: number) {
-  if (!isOfferableOrder(order)) return;
+  const nextWave = wave + 1;
   if (nextWave > MAX_DISPATCH_WAVES) {
-    await maybeRestartDispatchAfterExhaustion(order, `exhausted after declines (${MAX_DISPATCH_WAVES})`);
+    await maybeRestartDispatchAfterExhaustion(
+      order,
+      `exhausted after declines (${MAX_DISPATCH_WAVES})`
+    );
     return;
   }
 
-  const serviceType = normalizeRideServiceType(order.service_type);
-  const [exclude, pickup] = await Promise.all([
-    getOfferedRiderIds(order.id),
-    getPickupPoint(order),
-  ]);
-  const widest = DISPATCH_RADIUS_KM_TIERS[DISPATCH_RADIUS_KM_TIERS.length - 1];
-
-  let candidates: NearbyRider[] = [];
-  if (pickup) {
-    candidates = await getNearestActiveRiders(
-      pickup,
-      order.region,
-      exclude,
-      1,
-      widest,
-      serviceType
-    );
-  }
-  if (!candidates.length) {
-    const fallbackIds = (await getActiveRiderIds(order.region, serviceType)).filter(
-      (id) => !exclude.includes(id)
-    );
-    candidates = await getAvailableOnlineRiders(fallbackIds, 1);
-  }
-  if (!candidates.length) {
-    const anyOnline = (await getActiveRiderIds(order.region, null)).filter(
-      (id) => !exclude.includes(id)
-    );
-    candidates = await getAvailableOnlineRiders(anyOnline, 1);
-  }
+  const exclude = await getOfferedRiderIds(order.id);
+  const { candidates } = await findDispatchCandidates({
+    order,
+    exclude,
+    limit: 1,
+    radiusKm: widestDispatchRadiusKm(),
+    allowGlobalFallback: true,
+  });
 
   if (candidates.length > 0) {
     await emitOffersToRiders(order, candidates, nextWave);
     return;
   }
 
-  // Nobody else online yet — keep hunting (same path as empty-wave retry).
   console.warn(
-    `[dispatch] order ${order.id}: decline handoff found no other riders — retrying wave ${nextWave}`
+    `[dispatch] ${dispatchShort(order.id)}: decline handoff empty — hunting wave ${nextWave}`
   );
   await advanceDispatchWave(order, nextWave);
 }
@@ -10798,7 +10748,9 @@ process.on('uncaughtException', (err) => {
 
 httpServer.listen(PORT, HOST, () => {
   console.log(`Server running on http://${HOST}:${PORT}`);
-  console.log(`[dispatch] offer TTL ${OFFER_TTL_SEC}s, ${ridersPerWave(1)} rider(s) per wave, orphan re-dispatch every 30s`);
+  console.log(
+    `[dispatch] Bolt-style: TTL ${OFFER_TTL_SEC}s, ${ridersPerWave(1)}/wave, orphan ${ORPHAN_REDISPATCH_INTERVAL_MS / 1000}s, decline→next nearest`
+  );
   void ensureRidePromotionsSchema().catch((err) =>
     console.warn('[promotions] schema init failed:', err)
   );
@@ -10835,10 +10787,10 @@ httpServer.listen(PORT, HOST, () => {
     void redispatchOrphanReadyOrders().catch((err) =>
       console.warn('[dispatch] orphan re-dispatch failed:', err)
     );
-  }, 10_000);
+  }, ORPHAN_REDISPATCH_INTERVAL_MS);
   setInterval(() => {
     void closeStuckTripsGlobally().catch((err) =>
       console.warn('[dispatch] close-stuck failed:', err)
     );
-  }, 5 * 60_000);
+  }, CLOSE_STUCK_INTERVAL_MS);
 });
