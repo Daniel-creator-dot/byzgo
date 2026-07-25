@@ -240,6 +240,7 @@ app.get('/api/health', async (req, res) => {
         noRiderRetryMs: NO_RIDER_RETRY_MS,
         orphanRedispatch: true,
         orphanIntervalSec: 10,
+        nearbyParamFix: true,
       },
       database: {
         ...dbConnectionDiagnostics(),
