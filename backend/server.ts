@@ -5127,10 +5127,8 @@ app.patch('/api/auth/status', authenticateToken, async (req: any, res) => {
         return res.status(400).json({ message: 'Riders can only go online or offline.' });
       }
       const isOnline = status === 'active';
-      const hasDocs = await riderHasAllDocuments(req.user.id);
-      if (isOnline && !hasDocs) {
-        return res.status(403).json({ message: 'Upload your licence, Ghana card, and photo before going online.' });
-      }
+      // Admin approval (`status === 'active'`) is the gate for working — KYC photos
+      // are collected for review but must not block an already-approved rider.
       if (isOnline && (await riderHasOverdueCommission(req.user.id))) {
         const settings = await getCommissionSettings();
         return res.status(403).json({

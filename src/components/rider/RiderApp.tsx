@@ -1432,7 +1432,7 @@ export function RiderApp({
 
               <div className="mb-8 p-4 rounded-2xl border border-slate-800 bg-slate-900/60">
                 <h3 className="text-sm font-black uppercase tracking-widest text-slate-300 mb-1">Verification documents</h3>
-                <p className="text-[10px] text-slate-500 font-bold mb-4">Upload clear photos of your licence, Ghana card, and profile picture. Admin will review before you can go online.</p>
+                <p className="text-[10px] text-slate-500 font-bold mb-4">Upload clear photos of your licence, Ghana card, and profile picture for admin review. Once approved, you can go online and accept jobs.</p>
                 {docsLoading ? (
                   <p className="text-xs text-slate-500">Loading…</p>
                 ) : (

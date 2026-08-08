@@ -58,7 +58,11 @@ class ApiClient {
                 }
               } catch (_) {}
             }
-            onUnauthorized?.call();
+            // Only force logout on real auth failures. Business 403s (pending
+            // approval, missing docs, commission overdue, etc.) must stay signed in.
+            if (status == 401 || _isAuthForbidden(err)) {
+              onUnauthorized?.call();
+            }
           }
           handler.next(err);
         },
@@ -95,6 +99,19 @@ class ApiClient {
         msg.contains('header fields too large');
   }
 
+  /// True when a 403 means the session itself is invalid (not a business rule).
+  static bool _isAuthForbidden(DioException err) {
+    final data = err.response?.data;
+    final msg = data is Map
+        ? '${data['message'] ?? data['error'] ?? ''}'.toLowerCase()
+        : '';
+    return msg.contains('session expired') ||
+        msg.contains('sign in required') ||
+        msg.contains('invalid token') ||
+        msg.contains('account disabled') ||
+        msg.contains('session is no longer valid');
+  }
+
   static String messageFromDio(DioException err, [String fallback = 'Something went wrong']) {
     if (isHeaderTooLargeError(err)) {
       return 'Your session needs a refresh. Please sign out and sign in again.';
@@ -106,16 +123,13 @@ class ApiClient {
     if (status == 413) {
       return 'Photo or request is too large. Use a smaller image, or save without changing the photo.';
     }
-    if (status == 401) {
-      return 'Your session expired. Please sign in again to book a delivery.';
-    }
-    if (status == 403) {
-      return 'Your session is no longer valid. Please sign in again.';
-    }
     final data = err.response?.data;
     if (data is Map) {
       final m = data['message'] ?? data['error'];
-      if (m != null) return m.toString();
+      if (m != null && m.toString().trim().isNotEmpty) return m.toString();
+    }
+    if (status == 401 || (status == 403 && _isAuthForbidden(err))) {
+      return 'Your session expired. Please sign in again.';
     }
     if (err.type == DioExceptionType.connectionError ||
         err.type == DioExceptionType.connectionTimeout ||

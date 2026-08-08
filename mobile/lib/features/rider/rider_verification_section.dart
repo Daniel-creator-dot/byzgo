@@ -153,7 +153,7 @@ class _RiderVerificationSectionState extends State<RiderVerificationSection> {
           ),
           const SizedBox(height: 6),
           Text(
-            'Upload JPEG photos of your licence, Ghana card, and a clear profile picture. Admin must approve before you can go online.',
+            'Upload JPEG photos of your licence, Ghana card, and a clear profile picture for admin review. Once your account is approved, you can go online and accept jobs.',
             style: BytzGoTheme.sheetBody().copyWith(fontSize: 11),
           ),
           if (widget.user.riderVehicleType != null &&

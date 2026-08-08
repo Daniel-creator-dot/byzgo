@@ -488,6 +488,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
       if (!mounted) return;
       final u = _session.user;
       if (u == null) return;
+      final wasPending = u.status == 'pending' || u.status == 'rejected';
       _session.patchUser(u.copyWith(
         status: status.isNotEmpty ? status : u.status,
         isOnline: isOnline ?? u.isOnline,
@@ -503,6 +504,8 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
       });
       if (reason != null && reason.isNotEmpty && status == 'rejected') {
         _snack(reason);
+      } else if (wasPending && status == 'active') {
+        _snack('Approved — turn on Online to start accepting jobs', success: true);
       }
     };
     _socket.onRideIncoming = (order) {
