@@ -5,7 +5,6 @@ import '../../models/rider_document.dart';
 import '../../shared/data_url_image.dart';
 import '../../shared/theme.dart';
 import '../../shared/widgets/ride_ui.dart';
-import '../../shared/widgets/rider_vehicle_type_picker.dart';
 import 'admin_repository.dart';
 import 'widgets/admin_hero_header.dart';
 
@@ -53,6 +52,51 @@ class AdminDriversTabState extends State<AdminDriversTab> {
     } finally {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  void _previewDoc(String url, String title) {
+    if (url.trim().isEmpty) return;
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => Dialog(
+        backgroundColor: const Color(0xFF0B1220),
+        insetPadding: const EdgeInsets.all(16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      title,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: () => Navigator.pop(ctx),
+                    icon: const Icon(Icons.close, color: Colors.white70),
+                  ),
+                ],
+              ),
+            ),
+            ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.sizeOf(ctx).height * 0.7,
+              ),
+              child: InteractiveViewer(
+                child: dataUrlImage(url, fit: BoxFit.contain),
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
+        ),
+      ),
+    );
   }
 
   Future<void> _approve(String id, String name) async {
@@ -255,18 +299,6 @@ class AdminDriversTabState extends State<AdminDriversTab> {
                       ),
                     ),
                     Text(r.email, style: TextStyle(color: Colors.white.withValues(alpha: 0.5), fontSize: 12)),
-                    if (r.riderVehicleType != null && r.riderVehicleType!.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 4),
-                        child: Text(
-                          'Vehicle: ${RiderVehicleTypePicker.labelFor(r.riderVehicleType)}',
-                          style: const TextStyle(
-                            color: BytzGoTheme.accent,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
-                      ),
                   ],
                 ),
               ),
@@ -298,7 +330,13 @@ class AdminDriversTabState extends State<AdminDriversTab> {
                         child: AspectRatio(
                           aspectRatio: 4 / 3,
                           child: doc != null
-                              ? dataUrlImage(doc.imageUrl)
+                              ? GestureDetector(
+                                  onTap: () => _previewDoc(
+                                    doc!.imageUrl,
+                                    labels[type] ?? type,
+                                  ),
+                                  child: dataUrlImage(doc.imageUrl),
+                                )
                               : const ColoredBox(
                                   color: Color(0xFF1E293B),
                                   child: Icon(Icons.image_outlined, color: Color(0xFF64748B), size: 20),

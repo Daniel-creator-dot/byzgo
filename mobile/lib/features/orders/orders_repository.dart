@@ -4,13 +4,11 @@ import 'package:dio/dio.dart';
 
 import '../../core/api_client.dart';
 
-import '../../models/ride_service.dart';
 import '../../models/delivery_quote.dart';
 import '../../models/location_point.dart';
 
 import '../../models/order.dart';
 
-import '../../models/pharmacy_search_hit.dart';
 import '../../models/product.dart';
 import '../../models/trip_message.dart';
 import '../../models/vendor.dart';
@@ -84,29 +82,6 @@ class OrdersRepository {
     return dedupeVendors(list);
   }
 
-  Future<List<PharmacySearchHit>> searchPharmaciesByDrug({
-    required String query,
-    String? region,
-    String? category,
-  }) async {
-    final q = query.trim();
-    if (q.length < 2) return [];
-    final params = <String, String>{'q': q};
-    if (region != null && region.isNotEmpty) params['region'] = region;
-    if (category != null && category.isNotEmpty) params['category'] = category;
-
-    final res = await _api.dio.get<dynamic>(
-      '/api/pharmacy-search',
-      queryParameters: params,
-    );
-    final data = res.data;
-    if (data is! List) return [];
-    return data
-        .whereType<Map>()
-        .map((e) => PharmacySearchHit.fromJson(Map<String, dynamic>.from(e)))
-        .toList();
-  }
-
   Future<List<Product>> fetchProducts({required String vendorId}) async {
     final res = await _api.dio.get<dynamic>(
       '/api/products',
@@ -128,27 +103,21 @@ class OrdersRepository {
     String paymentMethod = 'pay_on_delivery',
     String? region,
     String? scheduledTime,
-    RideServiceType serviceType = RideServiceType.package,
-    int passengerCount = 1,
+    String? vehicleType,
   }) async {
-    final itemName = serviceType.isPassengerRide
-        ? rideServiceItemLabel(serviceType, passengers: passengerCount)
-        : 'Delivery: $itemDescription';
     final res = await _api.dio.post<Map<String, dynamic>>(
       '/api/orders',
       data: {
         'items': [
           {
             'id': 'courier-1',
-            'name': itemName,
+            'name': 'Delivery: $itemDescription',
             'quantity': 1,
             'price': 0,
           },
         ],
         'total': deliveryFee,
         'order_type': 'courier',
-        'service_type': serviceType.id,
-        if (serviceType.isPassengerRide) 'passenger_count': passengerCount,
         'address': destination.address,
         'pickup': pickup.address,
         'lat': destination.lat,
@@ -160,6 +129,8 @@ class OrdersRepository {
         if (region != null && region.isNotEmpty) 'region': region,
         if (scheduledTime != null && scheduledTime.isNotEmpty)
           'scheduled_time': scheduledTime,
+        if (vehicleType != null && vehicleType.isNotEmpty)
+          'vehicle_type': vehicleType,
       },
     );
 
@@ -171,6 +142,53 @@ class OrdersRepository {
 
   }
 
+  /// Creates a courier order; retries once with server `expected_total` on fee mismatch.
+  Future<Order> createCourierOrderResilient({
+    required LocationPoint pickup,
+    required LocationPoint destination,
+    required double deliveryFee,
+    String itemDescription = 'Package',
+    String paymentMethod = 'pay_on_delivery',
+    String? region,
+    String? scheduledTime,
+    String? vehicleType,
+  }) async {
+    try {
+      return await createCourierOrder(
+        pickup: pickup,
+        destination: destination,
+        deliveryFee: deliveryFee,
+        itemDescription: itemDescription,
+        paymentMethod: paymentMethod,
+        region: region,
+        scheduledTime: scheduledTime,
+        vehicleType: vehicleType,
+      );
+    } catch (e) {
+      final retryFee = expectedTotalFromError(e);
+      if (retryFee == null) rethrow;
+      return createCourierOrder(
+        pickup: pickup,
+        destination: destination,
+        deliveryFee: retryFee,
+        itemDescription: itemDescription,
+        paymentMethod: paymentMethod,
+        region: region,
+        scheduledTime: scheduledTime,
+        vehicleType: vehicleType,
+      );
+    }
+  }
+
+  static double? expectedTotalFromError(Object err) {
+    if (err is! DioException || err.response?.statusCode != 400) return null;
+    final data = err.response?.data;
+    if (data is! Map) return null;
+    final expected = data['expected_total'];
+    if (expected is num && expected > 0) return expected.toDouble();
+    return null;
+  }
+
   Future<DeliveryQuote> calculateRouteDelivery({
     required double pickupLat,
     required double pickupLng,
@@ -178,7 +196,7 @@ class OrdersRepository {
     required double destLng,
     String? pickupRegion,
     String? destinationRegion,
-    RideServiceType serviceType = RideServiceType.package,
+    String? vehicleType,
   }) async {
     final res = await _api.dio.post<Map<String, dynamic>>(
       '/api/delivery/calculate',
@@ -189,7 +207,8 @@ class OrdersRepository {
         'dest_lng': destLng,
         if (pickupRegion != null) 'pickup_region': pickupRegion,
         if (destinationRegion != null) 'destination_region': destinationRegion,
-        'service_type': serviceType.id,
+        if (vehicleType != null && vehicleType.isNotEmpty)
+          'vehicle_type': vehicleType,
       },
     );
     final data = res.data;
@@ -369,13 +388,9 @@ class OrdersRepository {
 
 
   Future<void> declineOrder(String orderId) async {
-    try {
-      await _api.dio.post('/api/orders/$orderId/decline');
-    } on DioException catch (e) {
-      final status = e.response?.statusCode;
-      if (status == 403 || status == 404 || status == 409) return;
-      rethrow;
-    }
+
+    await _api.dio.post('/api/orders/$orderId/decline');
+
   }
 
   /// Release an accepted trip before pickup so dispatch can re-offer it.

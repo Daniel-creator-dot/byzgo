@@ -11,13 +11,14 @@ import '../../shared/responsive_layout.dart';
 import '../../shared/theme.dart';
 import '../../shared/widgets/bytz_brand.dart';
 import '../../shared/widgets/ride_ui.dart';
-import '../../shared/widgets/rider_vehicle_type_picker.dart';
 import 'auth_repository.dart';
 import 'ghana_phone.dart';
 import 'widgets/login_decor.dart';
 import 'widgets/login_ui.dart';
 
 enum _AuthMode { signIn, signUp, forgot }
+
+enum _ForgotStep { phone, reset }
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -35,10 +36,11 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
   final _phone = TextEditingController();
   final _newPassword = TextEditingController();
   final _confirmPassword = TextEditingController();
+  final _otp = TextEditingController();
 
   _AuthMode _mode = _AuthMode.signIn;
+  _ForgotStep _forgotStep = _ForgotStep.phone;
   AppRole _signupRole = AppRole.customer;
-  String _riderVehicleType = 'motorcycle';
   bool _loading = false;
   bool _googleLoading = false;
   bool _appleLoading = false;
@@ -70,6 +72,7 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
     _phone.dispose();
     _newPassword.dispose();
     _confirmPassword.dispose();
+    _otp.dispose();
     super.dispose();
   }
 
@@ -77,6 +80,10 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
     setState(() {
       _mode = mode;
       _error = null;
+      if (mode != _AuthMode.forgot) {
+        _forgotStep = _ForgotStep.phone;
+        _otp.clear();
+      }
     });
   }
 
@@ -114,10 +121,6 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
               return;
             }
           }
-          if (_signupRole == AppRole.rider && _riderVehicleType.isEmpty) {
-            setState(() => _error = 'Choose your vehicle type (Okada, Keke, or Bicycle).');
-            return;
-          }
           final registered = await repo.register(
             name: _name.text,
             email: _email.text,
@@ -126,8 +129,6 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
             phone: _signupRole == AppRole.customer || _phone.text.isNotEmpty
                 ? _phone.text
                 : null,
-            riderVehicleType:
-                _signupRole == AppRole.rider ? _riderVehicleType : null,
           );
           await session.setSession(
             token: registered.token,
@@ -138,31 +139,90 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
           break;
 
         case _AuthMode.forgot:
-          if (!isValidGhanaPhone(_phone.text)) {
-            setState(() => _error = 'Enter a valid Ghana phone (e.g. 0247904675).');
-            return;
+          if (_forgotStep == _ForgotStep.phone) {
+            await _sendForgotOtp();
+          } else {
+            await _resetPasswordWithOtp();
           }
-          if (_newPassword.text != _confirmPassword.text) {
-            setState(() => _error = 'Passwords do not match.');
-            return;
-          }
-          await repo.resetPassword(
-            phone: _phone.text,
-            email: _email.text,
-            newPassword: _newPassword.text,
-          );
-          if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              behavior: SnackBarBehavior.floating,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              backgroundColor: BytzGoTheme.sheetText,
-              content: const Text('Password updated. Sign in with your phone or email.'),
-            ),
-          );
-          _setMode(_AuthMode.signIn);
           break;
       }
+    } catch (e) {
+      setState(() => _error = AuthRepository.errorMessage(e));
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _sendForgotOtp() async {
+    if (!isValidGhanaPhone(_phone.text)) {
+      setState(() => _error = 'Enter a valid Ghana phone (e.g. 0247904675).');
+      return;
+    }
+    await context.read<AuthRepository>().sendForgotPasswordOtp(_phone.text);
+    if (!mounted) return;
+    setState(() {
+      _forgotStep = _ForgotStep.reset;
+      _error = null;
+      _otp.clear();
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        backgroundColor: BytzGoTheme.sheetText,
+        content: Text(
+          'Reset code sent to ${_phone.text.trim()}. Check your SMS.',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _resetPasswordWithOtp() async {
+    if (_otp.text.trim().length < 4) {
+      setState(() => _error = 'Enter the SMS code we sent you.');
+      return;
+    }
+    if (_newPassword.text != _confirmPassword.text) {
+      setState(() => _error = 'Passwords do not match.');
+      return;
+    }
+    await context.read<AuthRepository>().resetPasswordWithOtp(
+          phone: _phone.text,
+          otp: _otp.text,
+          newPassword: _newPassword.text,
+        );
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        backgroundColor: BytzGoTheme.sheetText,
+        content: const Text('Password updated. Sign in with your phone or email.'),
+      ),
+    );
+    _newPassword.clear();
+    _confirmPassword.clear();
+    _otp.clear();
+    _setMode(_AuthMode.signIn);
+  }
+
+  Future<void> _resendForgotOtp() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      await context.read<AuthRepository>().resendOtp(
+            phone: _phone.text,
+            purpose: 'forgot_password',
+          );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          behavior: SnackBarBehavior.floating,
+          content: Text('A new code was sent by SMS.'),
+        ),
+      );
     } catch (e) {
       setState(() => _error = AuthRepository.errorMessage(e));
     } finally {
@@ -177,17 +237,7 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
     });
     try {
       final role = _mode == _AuthMode.signUp ? _signupRole : AppRole.customer;
-      if (_mode == _AuthMode.signUp &&
-          role == AppRole.rider &&
-          _riderVehicleType.isEmpty) {
-        setState(() => _error = 'Choose your vehicle type before continuing.');
-        return;
-      }
-      final result = await context.read<AuthRepository>().signInWithGoogle(
-            role: role,
-            riderVehicleType:
-                role == AppRole.rider ? _riderVehicleType : null,
-          );
+      final result = await context.read<AuthRepository>().signInWithGoogle(role: role);
       await context.read<Session>().setSession(
         token: result.token,
         user: result.user,
@@ -212,17 +262,7 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
     });
     try {
       final role = _mode == _AuthMode.signUp ? _signupRole : AppRole.customer;
-      if (_mode == _AuthMode.signUp &&
-          role == AppRole.rider &&
-          _riderVehicleType.isEmpty) {
-        setState(() => _error = 'Choose your vehicle type before continuing.');
-        return;
-      }
-      final result = await context.read<AuthRepository>().signInWithApple(
-            role: role,
-            riderVehicleType:
-                role == AppRole.rider ? _riderVehicleType : null,
-          );
+      final result = await context.read<AuthRepository>().signInWithApple(role: role);
       await context.read<Session>().setSession(
         token: result.token,
         user: result.user,
@@ -250,8 +290,6 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
         return '/vendor';
       case AppRole.admin:
         return '/admin';
-      case AppRole.owner:
-        return '/owner';
     }
   }
 
@@ -262,7 +300,7 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
       case _AuthMode.signUp:
         return 'Create account';
       case _AuthMode.forgot:
-        return 'Reset password';
+        return _forgotStep == _ForgotStep.phone ? 'Send code' : 'Reset password';
     }
   }
 
@@ -282,9 +320,11 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
       case _AuthMode.signIn:
         return 'Continue with your phone, email, or Google account';
       case _AuthMode.signUp:
-        return 'Deliveries, rides, and pharmacy in one app';
+        return 'Deliveries, rides, and shops in one app';
       case _AuthMode.forgot:
-        return 'Use your registered phone and email';
+        return _forgotStep == _ForgotStep.phone
+            ? 'Enter your registered phone — we\'ll text you a code'
+            : 'Enter the SMS code and choose a new password';
     }
   }
 
@@ -350,10 +390,10 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                   return null;
                 },
               ),
-            if (isSignUp || isForgot) ...[
+            if (isSignUp) ...[
               AuthTextField(
                 controller: _email,
-                label: isForgot ? 'Registered email' : 'Email',
+                label: 'Email',
                 icon: Icons.mail_outline_rounded,
                 keyboardType: TextInputType.emailAddress,
                 validator: (v) =>
@@ -362,14 +402,12 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
               const SizedBox(height: 12),
               AuthTextField(
                 controller: _phone,
-                label: isForgot ? 'Registered phone' : 'Phone number',
+                label: 'Phone number',
                 icon: Icons.phone_android_rounded,
                 keyboardType: TextInputType.phone,
                 validator: (v) {
                   if (v == null || v.trim().isEmpty) {
-                    return isSignUp && _signupRole != AppRole.customer
-                        ? null
-                        : 'Phone required';
+                    return _signupRole != AppRole.customer ? null : 'Phone required';
                   }
                   if (!isValidGhanaPhone(v)) {
                     return 'Use format 0247904675';
@@ -379,31 +417,69 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
               ),
             ],
             if (isForgot) ...[
-              const SizedBox(height: 12),
               AuthTextField(
-                controller: _newPassword,
-                label: 'New password',
-                icon: Icons.lock_outline_rounded,
-                obscureText: _obscure,
-                validator: (v) =>
-                    v == null || v.length < 6 ? 'Min 6 characters' : null,
+                controller: _phone,
+                label: 'Registered phone number',
+                icon: Icons.phone_android_rounded,
+                keyboardType: TextInputType.phone,
+                readOnly: _forgotStep == _ForgotStep.reset,
+                validator: (v) {
+                  if (v == null || v.trim().isEmpty) {
+                    return 'Phone required';
+                  }
+                  if (!isValidGhanaPhone(v)) {
+                    return 'Use format 0247904675';
+                  }
+                  return null;
+                },
               ),
-              const SizedBox(height: 12),
-              AuthTextField(
-                controller: _confirmPassword,
-                label: 'Confirm password',
-                icon: Icons.lock_outline_rounded,
-                obscureText: _obscure,
-                suffix: IconButton(
-                  icon: Icon(
-                    _obscure ? Icons.visibility_outlined : Icons.visibility_off_outlined,
-                    color: BytzGoTheme.sheetMuted,
-                  ),
-                  onPressed: () => setState(() => _obscure = !_obscure),
+              if (_forgotStep == _ForgotStep.reset) ...[
+                const SizedBox(height: 12),
+                AuthTextField(
+                  controller: _otp,
+                  label: 'SMS verification code',
+                  icon: Icons.sms_outlined,
+                  keyboardType: TextInputType.number,
+                  validator: (v) =>
+                      v == null || v.trim().length < 4 ? 'Enter the code from SMS' : null,
                 ),
-                validator: (v) =>
-                    v != _confirmPassword.text ? 'Passwords must match' : null,
-              ),
+                const SizedBox(height: 12),
+                AuthTextField(
+                  controller: _newPassword,
+                  label: 'New password',
+                  icon: Icons.lock_outline_rounded,
+                  obscureText: _obscure,
+                  validator: (v) =>
+                      v == null || v.length < 6 ? 'Min 6 characters' : null,
+                ),
+                const SizedBox(height: 12),
+                AuthTextField(
+                  controller: _confirmPassword,
+                  label: 'Confirm password',
+                  icon: Icons.lock_outline_rounded,
+                  obscureText: _obscure,
+                  suffix: IconButton(
+                    icon: Icon(
+                      _obscure ? Icons.visibility_outlined : Icons.visibility_off_outlined,
+                      color: BytzGoTheme.sheetMuted,
+                    ),
+                    onPressed: () => setState(() => _obscure = !_obscure),
+                  ),
+                  validator: (v) =>
+                      v != _confirmPassword.text ? 'Passwords must match' : null,
+                ),
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton(
+                    onPressed: _loading ? null : _resendForgotOtp,
+                    child: const Text(
+                      'Resend code',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ),
+              ],
             ],
             if (!isForgot) ...[
               const SizedBox(height: 12),
@@ -453,59 +529,9 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                     )
                     .toList(),
                 onChanged: (v) {
-                  if (v != null) {
-                    setState(() {
-                      _signupRole = v;
-                      if (v != AppRole.rider) _riderVehicleType = 'motorcycle';
-                    });
-                  }
+                  if (v != null) setState(() => _signupRole = v);
                 },
               ),
-              if (_signupRole == AppRole.vendor) ...[
-                const SizedBox(height: 14),
-                Text(
-                  'Pharmacy & health retail only',
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w800,
-                    color: BytzGoTheme.sheetText.withValues(alpha: 0.85),
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  'Register as a licensed pharmacy or health retailer. Restaurants and general shops are not accepted.',
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: BytzGoTheme.sheetMuted,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
-              if (_signupRole == AppRole.rider) ...[
-                const SizedBox(height: 14),
-                Text(
-                  'Your vehicle',
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w800,
-                    color: BytzGoTheme.sheetText.withValues(alpha: 0.85),
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  'We match you to Okada rides, Keke trips, or package jobs.',
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: BytzGoTheme.sheetMuted,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 10),
-                RiderVehicleTypePicker(
-                  value: _riderVehicleType,
-                  onChanged: (v) => setState(() => _riderVehicleType = v),
-                ),
-              ],
             ],
             const SizedBox(height: 22),
             RidePrimaryButton(
@@ -542,15 +568,34 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
               TextButton(
                 onPressed: () => context.go('/customer'),
                 child: const Text(
-                  'Browse pharmacies without signing in',
+                  'Browse shops without signing in',
                   style: TextStyle(fontWeight: FontWeight.w600),
                 ),
               ),
             ],
             if (isForgot)
               TextButton(
-                onPressed: () => _setMode(_AuthMode.signIn),
-                child: const Text('Back to sign in'),
+                onPressed: _loading
+                    ? null
+                    : () {
+                        if (_forgotStep == _ForgotStep.reset) {
+                          setState(() {
+                            _forgotStep = _ForgotStep.phone;
+                            _otp.clear();
+                            _newPassword.clear();
+                            _confirmPassword.clear();
+                            _error = null;
+                          });
+                        } else {
+                          _setMode(_AuthMode.signIn);
+                        }
+                      },
+                child: Text(
+                  _forgotStep == _ForgotStep.reset
+                      ? 'Use a different number'
+                      : 'Back to sign in',
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
               ),
             if (!isForgot && !Env.isGoogleSignInEnabled) ...[
               const SizedBox(height: 6),

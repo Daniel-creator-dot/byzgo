@@ -4,9 +4,9 @@ import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/json_parse.dart';
+import '../../shared/data_url_image.dart';
 import '../../shared/format.dart';
 import '../../shared/theme.dart';
-import '../../shared/widgets/rider_vehicle_type_picker.dart';
 import 'admin_repository.dart';
 
 /// Full driver dossier for admin (map tap / fleet).
@@ -157,18 +157,28 @@ class _AdminDriverProfileBodyState extends State<_AdminDriverProfileBody> {
       children: [
         Row(
           children: [
-            CircleAvatar(
-              radius: 28,
-              backgroundColor: BytzGoTheme.accent.withValues(alpha: 0.2),
-              child: Text(
-                (driver['name']?.toString() ?? '?').isNotEmpty
-                    ? driver['name'].toString()[0].toUpperCase()
-                    : '?',
-                style: const TextStyle(
-                  color: BytzGoTheme.accent,
-                  fontWeight: FontWeight.w900,
-                  fontSize: 22,
-                ),
+            ClipOval(
+              child: SizedBox(
+                width: 56,
+                height: 56,
+                child: driver['avatar_url'] != null &&
+                        driver['avatar_url'].toString().trim().isNotEmpty
+                    ? dataUrlImage(driver['avatar_url']?.toString(), height: 56, width: 56)
+                    : ColoredBox(
+                        color: BytzGoTheme.accent.withValues(alpha: 0.2),
+                        child: Center(
+                          child: Text(
+                            (driver['name']?.toString() ?? '?').isNotEmpty
+                                ? driver['name'].toString()[0].toUpperCase()
+                                : '?',
+                            style: const TextStyle(
+                              color: BytzGoTheme.accent,
+                              fontWeight: FontWeight.w900,
+                              fontSize: 22,
+                            ),
+                          ),
+                        ),
+                      ),
               ),
             ),
             const SizedBox(width: 14),
@@ -202,13 +212,6 @@ class _AdminDriverProfileBodyState extends State<_AdminDriverProfileBody> {
                       ),
                       if (driver['region'] != null)
                         _chip(driver['region'].toString(), Colors.white38),
-                      if (driver['rider_vehicle_type'] != null)
-                        _chip(
-                          RiderVehicleTypePicker.labelFor(
-                            driver['rider_vehicle_type']?.toString(),
-                          ).toUpperCase(),
-                          BytzGoTheme.accent,
-                        ),
                     ],
                   ),
                 ],
@@ -301,18 +304,65 @@ class _AdminDriverProfileBodyState extends State<_AdminDriverProfileBody> {
         if (docs.isNotEmpty) ...[
           const SizedBox(height: 16),
           _sectionTitle('KYC DOCUMENTS'),
+          const SizedBox(height: 8),
           ...docs.map((d) {
             final m = Map<String, dynamic>.from(d as Map);
-            return ListTile(
-              dense: true,
-              contentPadding: EdgeInsets.zero,
-              title: Text(
-                m['doc_type']?.toString().replaceAll('_', ' ').toUpperCase() ?? 'DOC',
-                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13),
-              ),
-              subtitle: Text(
-                'Status: ${m['review_status'] ?? 'pending'}',
-                style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 11),
+            final imageUrl = m['image_url']?.toString();
+            final label =
+                m['doc_type']?.toString().replaceAll('_', ' ').toUpperCase() ?? 'DOC';
+            final status = (m['review_status'] ?? 'pending').toString();
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          label,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w800,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                      _chip(status.toUpperCase(), status == 'approved'
+                          ? BytzGoTheme.accent
+                          : status == 'rejected'
+                              ? Colors.redAccent
+                              : Colors.orangeAccent),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: AspectRatio(
+                      aspectRatio: 16 / 10,
+                      child: imageUrl != null && imageUrl.trim().isNotEmpty
+                          ? GestureDetector(
+                              onTap: () => _previewImage(context, imageUrl, label),
+                              child: dataUrlImage(imageUrl),
+                            )
+                          : const ColoredBox(
+                              color: Color(0xFF1E293B),
+                              child: Center(
+                                child: Icon(Icons.image_not_supported_outlined,
+                                    color: Color(0xFF64748B)),
+                              ),
+                            ),
+                    ),
+                  ),
+                  if ((m['rejection_reason']?.toString() ?? '').isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(
+                        m['rejection_reason'].toString(),
+                        style: const TextStyle(color: Colors.redAccent, fontSize: 11),
+                      ),
+                    ),
+                ],
               ),
             );
           }),
@@ -385,6 +435,50 @@ class _AdminDriverProfileBodyState extends State<_AdminDriverProfileBody> {
           }),
         ],
       ],
+    );
+  }
+
+  void _previewImage(BuildContext context, String url, String title) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => Dialog(
+        backgroundColor: const Color(0xFF0B1220),
+        insetPadding: const EdgeInsets.all(16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      title,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: () => Navigator.pop(ctx),
+                    icon: const Icon(Icons.close, color: Colors.white70),
+                  ),
+                ],
+              ),
+            ),
+            ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.sizeOf(ctx).height * 0.7,
+              ),
+              child: InteractiveViewer(
+                child: dataUrlImage(url, fit: BoxFit.contain),
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
+        ),
+      ),
     );
   }
 

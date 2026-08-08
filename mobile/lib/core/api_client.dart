@@ -11,8 +11,8 @@ class ApiClient {
     _dio = Dio(
       BaseOptions(
         baseUrl: Env.apiBaseUrl,
-        connectTimeout: const Duration(seconds: 12),
-        receiveTimeout: const Duration(seconds: 20),
+        connectTimeout: const Duration(seconds: 20),
+        receiveTimeout: const Duration(seconds: 30),
         followRedirects: true,
         maxRedirects: 5,
         headers: {'Content-Type': 'application/json'},
@@ -21,27 +21,16 @@ class ApiClient {
     _dio.interceptors.add(
       InterceptorsWrapper(
         onError: (err, handler) async {
-          final opts = err.requestOptions;
-          final retries = (opts.extra['retry_count'] as int?) ?? 0;
-          final isTransient = err.type == DioExceptionType.connectionTimeout ||
-              err.type == DioExceptionType.connectionError ||
-              err.type == DioExceptionType.receiveTimeout;
-          if (isTransient && retries < 2 && opts.extra['auth_retry'] != true) {
-            opts.extra['retry_count'] = retries + 1;
-            await Future<void>.delayed(Duration(milliseconds: 300 * (retries + 1)));
-            try {
-              final response = await _dio.fetch<dynamic>(opts);
-              handler.resolve(response);
-              return;
-            } catch (_) {}
-          }
           final status = err.response?.statusCode;
           if (status == 431 || isHeaderTooLargeError(err)) {
             onUnauthorized?.call();
             handler.next(err);
             return;
           }
-          if (status == 401 || status == 403) {
+          // Only true auth failures log the user out.
+          // Business 403s (pending approval, commission overdue, go-online blocked)
+          // must NOT clear the session — that was logging approved riders out.
+          if (status == 401) {
             final opts = err.requestOptions;
             if (opts.extra['auth_retry'] != true && onRefreshToken != null) {
               opts.extra['auth_retry'] = true;
@@ -58,11 +47,9 @@ class ApiClient {
                 }
               } catch (_) {}
             }
-            // Only force logout on real auth failures. Business 403s (pending
-            // approval, missing docs, commission overdue, etc.) must stay signed in.
-            if (status == 401 || _isAuthForbidden(err)) {
-              onUnauthorized?.call();
-            }
+            onUnauthorized?.call();
+          } else if (status == 403 && _isAuthSessionForbidden(err)) {
+            onUnauthorized?.call();
           }
           handler.next(err);
         },
@@ -99,17 +86,18 @@ class ApiClient {
         msg.contains('header fields too large');
   }
 
-  /// True when a 403 means the session itself is invalid (not a business rule).
-  static bool _isAuthForbidden(DioException err) {
+  /// 403 responses that mean the JWT/session itself is invalid (not business rules).
+  static bool _isAuthSessionForbidden(DioException err) {
     final data = err.response?.data;
     final msg = data is Map
-        ? '${data['message'] ?? data['error'] ?? ''}'.toLowerCase()
+        ? (data['message'] ?? data['error'])?.toString().toLowerCase() ?? ''
         : '';
-    return msg.contains('session expired') ||
-        msg.contains('sign in required') ||
-        msg.contains('invalid token') ||
-        msg.contains('account disabled') ||
-        msg.contains('session is no longer valid');
+    return msg.contains('token') ||
+        msg.contains('jwt') ||
+        msg.contains('unauthorized') ||
+        msg.contains('session') ||
+        msg.contains('sign in') ||
+        msg.contains('disabled');
   }
 
   static String messageFromDio(DioException err, [String fallback = 'Something went wrong']) {
@@ -128,8 +116,11 @@ class ApiClient {
       final m = data['message'] ?? data['error'];
       if (m != null && m.toString().trim().isNotEmpty) return m.toString();
     }
-    if (status == 401 || (status == 403 && _isAuthForbidden(err))) {
+    if (status == 401) {
       return 'Your session expired. Please sign in again.';
+    }
+    if (status == 403) {
+      return 'You do not have permission for this action.';
     }
     if (err.type == DioExceptionType.connectionError ||
         err.type == DioExceptionType.connectionTimeout ||

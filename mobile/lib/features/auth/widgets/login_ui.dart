@@ -181,6 +181,7 @@ class AuthTextField extends StatelessWidget {
     this.keyboardType,
     this.obscureText = false,
     this.autocorrect = true,
+    this.readOnly = false,
     this.suffix,
     this.validator,
   });
@@ -191,6 +192,7 @@ class AuthTextField extends StatelessWidget {
   final TextInputType? keyboardType;
   final bool obscureText;
   final bool autocorrect;
+  final bool readOnly;
   final Widget? suffix;
   final String? Function(String?)? validator;
 
@@ -201,6 +203,7 @@ class AuthTextField extends StatelessWidget {
       keyboardType: keyboardType,
       obscureText: obscureText,
       autocorrect: autocorrect,
+      readOnly: readOnly,
       style: const TextStyle(
         color: BytzGoTheme.sheetText,
         fontWeight: FontWeight.w600,

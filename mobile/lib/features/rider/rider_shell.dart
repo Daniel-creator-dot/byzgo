@@ -8,9 +8,6 @@ import 'package:provider/provider.dart';
 import '../../core/api_client.dart';
 import '../../core/directions_service.dart';
 import '../../core/location_service.dart';
-import '../../core/incoming_ride_callkit.dart';
-import '../../core/pending_incoming_ride_action_store.dart';
-import '../../core/pending_incoming_ride_store.dart';
 import '../../core/push_notification_service.dart';
 import '../../core/session.dart';
 import '../../core/socket_service.dart';
@@ -31,6 +28,7 @@ import '../../shared/driver_tier.dart';
 import '../../shared/external_navigation.dart';
 import '../../shared/rider_trip.dart';
 import '../../shared/trip_chat_sheet.dart';
+import '../../shared/vehicle_type.dart';
 import '../../shared/trip_contact.dart';
 import '../../shared/responsive_layout.dart';
 import '../../shared/display_name.dart';
@@ -48,7 +46,6 @@ import '../../shared/widgets/customer_trip_identity.dart';
 import '../../shared/widgets/pulse_guide_hud.dart';
 import '../../shared/widgets/ride_ui.dart';
 import 'delivery_pin_dialog.dart';
-import 'rider_vehicle_selector.dart';
 import 'incoming_ride_alert.dart';
 import 'incoming_ride_overlay.dart';
 import 'incoming_ride_ring.dart';
@@ -120,6 +117,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
   String _withdrawMethod = 'momo';
   String _withdrawNetwork = 'mtn';
   String? _profileRegion;
+  String _profileVehicleType = VehicleType.bike;
   bool _withdrawing = false;
   bool _profileSaving = false;
   String? _walletMsg;
@@ -205,17 +203,18 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     PushNotificationService.instance.onIncomingRidePush = _handleIncomingRidePush;
-    IncomingRideCallKit.onRideAction = _handleIncomingRideCallAction;
     unawaited(PushNotificationService.instance.handleColdStartNotification());
     _isOnline = _user.isOnline == true;
     _profilePhone.text = _user.phone ?? '';
     _payPhone.text = _user.phone ?? '';
     _profileRegion = _user.region;
+    _profileVehicleType = VehicleType.all.contains(_user.vehicleType)
+        ? _user.vehicleType!
+        : VehicleType.bike;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _wireSocket();
       _refreshAll();
-      unawaited(_onAppResumed());
       unawaited(_loadCommission());
       _startLocationStream();
       if (_isOnline) {
@@ -231,41 +230,21 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _lifecycle = state;
-    if (state == AppLifecycleState.resumed && _isOnline) {
-      unawaited(_onAppResumed());
-    }
-  }
-
-  Future<void> _onAppResumed() async {
-    await _processPendingCallKitAction();
-    await PushNotificationService.instance.dispatchPendingIncomingRideIfAny();
-    _socket.ensureJoined();
-    await _refreshAll(silent: true);
-    if (!mounted || !_isOnline) return;
-
     final order = _incoming;
-    if (order != null) {
+    if (order == null) return;
+    if (state == AppLifecycleState.resumed) {
       unawaited(
         PushNotificationService.instance.cancelIncomingRide(order.id),
       );
-      unawaited(IncomingRideAlert.raise(order, useCallKit: false));
-      return;
+      // Rider unlocked phone — switch from banner sound to in-app ring + accept UI.
+      unawaited(IncomingRideAlert.raise(order, useNotificationSound: false));
     }
-
-    final pending = await PendingIncomingRideStore.load();
-    if (pending != null) {
-      _handleIncomingRidePush(pending);
-      return;
-    }
-
-    _trackOffers(_orders);
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     PushNotificationService.instance.onIncomingRidePush = null;
-    IncomingRideCallKit.onRideAction = null;
     _posSub?.cancel();
     _pollTimer?.cancel();
     _offerTimer?.cancel();
@@ -287,9 +266,12 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
   Order? _orderFromPushData(Map<String, String> data) {
     final orderId = data['orderId']?.trim() ?? '';
     if (orderId.isEmpty) return null;
-    // Never drop on stale push expiry alone — fetchIncomingOffer has the live TTL.
-    // (Retry/orphan redispatches used to send an outdated expiresAt in FCM data.)
     final expiresRaw = data['expiresAt']?.trim() ?? '';
+    if (expiresRaw.isNotEmpty) {
+      try {
+        if (DateTime.parse(expiresRaw).isBefore(DateTime.now())) return null;
+      } catch (_) {}
+    }
     final pickup = data['pickup']?.trim();
     final drop = data['address']?.trim();
     if ((pickup == null || pickup.isEmpty) && (drop == null || drop.isEmpty)) {
@@ -312,80 +294,9 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
     );
   }
 
-  void _handleIncomingRideCallAction(String action, Map<String, String> data) {
-    if (!_isOnline) return;
-    unawaited(_processCallKitAction(action, data));
-  }
-
-  Future<void> _processPendingCallKitAction() async {
-    final pending = await PendingIncomingRideActionStore.load();
-    if (pending == null) return;
-    await PendingIncomingRideActionStore.clear();
-    await _processCallKitAction(pending.action, pending.data);
-  }
-
-  Future<void> _processCallKitAction(
-    String action,
-    Map<String, String> data,
-  ) async {
-    if (!_isOnline || !mounted) return;
-    final orderId = data['orderId']?.trim() ?? '';
-    if (orderId.isEmpty) return;
-
-    if (action == 'decline') {
-      await IncomingRideCallKit.endCall(orderId);
-      if (_incoming?.id == orderId) {
-        await _declineRide();
-      } else {
-        try {
-          await _ordersRepo.declineOrder(orderId);
-        } catch (_) {}
-        await IncomingRideAlert.dismiss(orderId: orderId);
-      }
-      return;
-    }
-
-    if (action == 'timeout') {
-      // Native CallKit timed out — do NOT decline on the server. Declining
-      // permanently burns this rider for the order; let the wave expire instead.
-      await IncomingRideCallKit.endCall(orderId);
-      await IncomingRideAlert.dismiss(orderId: orderId);
-      if (_incoming?.id == orderId && mounted) {
-        setState(() => _incoming = null);
-      }
-      return;
-    }
-
-    if (action != 'accept') return;
-
-    await IncomingRideCallKit.endCall(orderId);
-    Order? order = _incoming?.id == orderId ? _incoming : null;
-    order ??= await () async {
-      try {
-        return await _ordersRepo.fetchIncomingOffer(orderId);
-      } catch (_) {
-        return null;
-      }
-    }();
-    order ??= _orderFromPushData(data);
-    if (!mounted || !_isOnline || order == null) {
-      await PendingIncomingRideActionStore.save('accept', data);
-      return;
-    }
-    if (_incoming?.id != orderId) {
-      setState(() {
-        _incoming = order;
-        _tab = _RiderTab.drive;
-        _driveSheet = _DriveSheet.requests;
-      });
-    }
-    await _acceptOrder(order);
-  }
-
   void _handleIncomingRidePush(Map<String, String> data) {
     if (!_isOnline || !mounted) return;
     final orderId = data['orderId']?.trim() ?? '';
-    if (orderId.isNotEmpty && _incoming?.id == orderId) return;
     if (orderId == 'test-push' || orderId == 'diagnose-test') {
       unawaited(
         IncomingRideRing.start(maxDuration: IncomingRideAlert.callRingDuration),
@@ -422,10 +333,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
       _driveSheet = _DriveSheet.requests;
     });
     final screenOff = _lifecycle != AppLifecycleState.resumed;
-    unawaited(IncomingRideAlert.raise(order, useCallKit: screenOff));
-    if (!screenOff) {
-      unawaited(PendingIncomingRideStore.clear());
-    }
+    unawaited(IncomingRideAlert.raise(order, useNotificationSound: screenOff));
   }
 
   void _trackOffers(List<Order> orders) {
@@ -502,10 +410,11 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
           unawaited(IncomingRideAlert.dismiss());
         }
       });
-      if (reason != null && reason.isNotEmpty && status == 'rejected') {
+      if (status == 'active' && wasPending) {
+        _snack('You are approved — go online from Drive to start receiving jobs',
+            success: true);
+      } else if (reason != null && reason.isNotEmpty && status == 'rejected') {
         _snack(reason);
-      } else if (wasPending && status == 'active') {
-        _snack('Approved — turn on Online to start accepting jobs', success: true);
       }
     };
     _socket.onRideIncoming = (order) {
@@ -513,11 +422,6 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
       _alertedOfferIds.add(order.id);
       _presentIncoming(order);
     };
-    final pending = _socket.consumePendingIncomingRide();
-    if (pending != null && _isOnline && isOfferableOrder(pending)) {
-      _alertedOfferIds.add(pending.id);
-      _presentIncoming(pending);
-    }
     _socket.onRideTaken = (orderId, {String? reason}) {
       if (!mounted) return;
       final wasIncoming = _incoming?.id == orderId;
@@ -613,7 +517,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
 
   void _startPolling() {
     _pollTimer?.cancel();
-    _pollTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+    _pollTimer = Timer.periodic(const Duration(seconds: 5), (_) {
       if (_isOnline && mounted) _refreshAll(silent: true);
     });
   }
@@ -704,10 +608,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
       });
       if (online) {
         _alertedOfferIds.clear();
-        await _socket.connect(
-          userId: _user.id,
-          token: context.read<Session>().token,
-        );
+        await _socket.connect(userId: _user.id);
         await PushNotificationService.instance.ensureRegistered(
           api: context.read<ApiClient>(),
           session: context.read<Session>(),
@@ -819,11 +720,12 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
     final order = _incoming;
     if (order == null) return;
     unawaited(IncomingRideAlert.dismiss(orderId: order.id));
-    if (mounted) setState(() => _incoming = null);
     try {
       await _ordersRepo.declineOrder(order.id);
-    } catch (_) {
-      // UI already dismissed — offer may have expired or been reassigned.
+      if (!mounted) return;
+      setState(() => _incoming = null);
+    } catch (e) {
+      _snack(OrdersRepository.errorMessage(e));
     }
   }
 
@@ -1181,8 +1083,6 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
                 ),
               ),
             ),
-          const SizedBox(height: 10),
-          const RiderVehicleSelector(),
           const SizedBox(height: 10),
           Row(
             children: [
@@ -2590,6 +2490,26 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
               .toList(),
           onChanged: (v) => setState(() => _profileRegion = v),
         ),
+        const SizedBox(height: 12),
+        DropdownButtonFormField<String>(
+          value: VehicleType.all.contains(_profileVehicleType)
+              ? _profileVehicleType
+              : VehicleType.bike,
+          dropdownColor: const Color(0xFF0F172A),
+          style: const TextStyle(color: Colors.white),
+          decoration: _darkInputDeco(hint: 'Vehicle type'),
+          items: VehicleType.all
+              .map(
+                (v) => DropdownMenuItem(
+                  value: v,
+                  child: Text(VehicleType.label(v)),
+                ),
+              )
+              .toList(),
+          onChanged: (v) {
+            if (v != null) setState(() => _profileVehicleType = v);
+          },
+        ),
         if (_profileMsg != null) ...[
           const SizedBox(height: 10),
           Text(_profileMsg!, style: const TextStyle(color: BytzGoTheme.accent)),
@@ -2682,6 +2602,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
       final result = await _auth.updateProfile(
         phone: _profilePhone.text.trim(),
         region: _profileRegion,
+        vehicleType: _profileVehicleType,
       );
       await _session.applyAuthResult(token: result.token, user: result.user);
       if (!mounted) return;

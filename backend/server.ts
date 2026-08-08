@@ -3,7 +3,6 @@ import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
-import compression from 'compression';
 import helmet from 'helmet';
 import { Pool } from 'pg';
 import bcrypt from 'bcryptjs';
@@ -210,65 +209,22 @@ if (corsAllowedOrigins.length) {
 } else {
   app.use(cors());
 }
-app.use(compression());
 // Product photos are stored as data URLs in JSON — need headroom beyond default 100kb.
 app.use(express.json({ limit: '12mb' }));
 app.use(express.urlencoded({ extended: true, limit: '12mb' }));
 
-app.get('/api/health', async (req, res) => {
-  const deep = req.query.deep === '1';
-  let dbOk = true;
-  try {
-    await pool.query('SELECT 1');
-  } catch {
-    dbOk = false;
-  }
-
+app.get('/api/health', async (_req, res) => {
   const storage = getStorageConfig();
-  if (!deep) {
-    return res.json({
-      ok: dbOk,
-      service: process.env.RENDER_SERVICE_NAME || 'byzgoback',
-      client: 'flutter',
-      fast: true,
-      fcm: firebaseAdminHasCredentials,
-      firebaseProject: FIREBASE_PROJECT_ID,
-      dispatch: {
-        offerTtlSec: OFFER_TTL_SEC,
-        ridersPerWave: ridersPerWave(1),
-        retryCycles: MAX_DISPATCH_RETRY_CYCLES,
-        noRiderRetryMs: NO_RIDER_RETRY_MS,
-        orphanRedispatch: true,
-        orphanIntervalSec: ORPHAN_REDISPATCH_INTERVAL_MS / 1000,
-        declineHandoff: true,
-        boltStyle: true,
-      },
-      database: {
-        ...dbConnectionDiagnostics(),
-        poolMax: (pool as any).options?.max ?? null,
-      },
-      media: {
-        storage: storage.configured ? 'supabase' : 'inline_fallback',
-        bucket: storage.bucket,
-        publicBaseUrl: storage.publicBaseUrl,
-      },
-    });
-  }
-
   let storageProbe: { ok: boolean; message?: string } = { ok: false, message: 'not configured' };
   if (storage.configured) {
     storageProbe = await probeStorage();
   }
   res.json({
-    ok: dbOk,
+    ok: true,
     service: process.env.RENDER_SERVICE_NAME || 'byzgoback',
     client: 'flutter',
     fcm: firebaseAdminHasCredentials,
     firebaseProject: FIREBASE_PROJECT_ID,
-    database: {
-      ...dbConnectionDiagnostics(),
-      poolMax: (pool as any).options?.max ?? null,
-    },
     push: {
       iosRequiresApnsKeyInFirebase: true,
       testEndpoint: '/api/push/test-incoming-ride',
@@ -319,7 +275,7 @@ function isRiderDocType(value: string): value is RiderDocType {
 }
 
 const USER_PUBLIC_FIELDS =
-  'id, name, email, role, balance, phone, cover_image, avatar_url, address, lat, lng, region, status, is_online, shop_category, rider_vehicle_type';
+  'id, name, email, role, balance, phone, cover_image, avatar_url, address, lat, lng, region, status, is_online, shop_category, vehicle_type';
 
 /** Minimal JWT — large payloads (e.g. base64 in token) trigger HTTP 431 on Render/nginx. */
 function signAuthToken(user: { id: string | number; role?: string }): string {
@@ -349,17 +305,7 @@ async function userForAuthResponse(row: Record<string, unknown> | null | undefin
   return u;
 }
 
-/** Marketplace is pharmacy & health retail only — restaurants and general shops are not supported. */
-const SHOP_CATEGORIES = ['pharmacy', 'health'] as const;
-
-function isAllowedShopCategory(raw: string | null | undefined): boolean {
-  const c = String(raw ?? '').trim().toLowerCase();
-  return (SHOP_CATEGORIES as readonly string[]).includes(c);
-}
-
-function defaultShopCategoryForRole(role: string | null | undefined): string | null {
-  return role === 'vendor' ? 'pharmacy' : null;
-}
+const SHOP_CATEGORIES = ['pharmacy', 'food', 'restaurant', 'fashion', 'groceries'] as const;
 const SHOP_OPEN_STATUSES = ['open', 'busy', 'closed'] as const;
 type ShopOpenStatus = (typeof SHOP_OPEN_STATUSES)[number];
 
@@ -419,276 +365,6 @@ async function vendorRowForClient(row: Record<string, unknown>) {
   };
 }
 
-const VEHICLE_STATUSES = ['active', 'maintenance', 'retired'] as const;
-const VEHICLE_TYPES = ['motorcycle', 'bicycle', 'car', 'van', 'keke'] as const;
-
-/** Customer-facing ride tiers (Nigeria/India-style okada + keke + package). */
-const RIDE_SERVICE_TYPES = ['package', 'okada', 'keke'] as const;
-type RideServiceType = (typeof RIDE_SERVICE_TYPES)[number];
-
-const RIDER_VEHICLE_TYPES = ['motorcycle', 'keke', 'bicycle'] as const;
-
-const RIDE_SERVICE_META: Record<
-  RideServiceType,
-  { rateKey: string; minKey: string; defaultRate: number; defaultMin: number; label: string; maxPassengers: number }
-> = {
-  package: {
-    rateKey: 'delivery_price_per_km',
-    minKey: 'delivery_min_fee',
-    defaultRate: 4,
-    defaultMin: 5,
-    label: 'Package',
-    maxPassengers: 0,
-  },
-  okada: {
-    rateKey: 'okada_price_per_km',
-    minKey: 'okada_min_fee',
-    defaultRate: 3.5,
-    defaultMin: 6,
-    label: 'Okada',
-    maxPassengers: 2,
-  },
-  keke: {
-    rateKey: 'keke_price_per_km',
-    minKey: 'keke_min_fee',
-    defaultRate: 2.5,
-    defaultMin: 5,
-    label: 'Keke',
-    maxPassengers: 4,
-  },
-};
-
-function normalizeRideServiceType(value: unknown): RideServiceType {
-  const s = String(value ?? 'package').trim().toLowerCase();
-  if (s === 'courier' || s === 'delivery' || s === 'package') return 'package';
-  if (s === 'okada' || s === 'bike' || s === 'motorbike' || s === 'ride') return 'okada';
-  if (s === 'keke' || s === 'tricycle' || s === 'napep' || s === 'auto' || s === 'rickshaw') {
-    return 'keke';
-  }
-  return (RIDE_SERVICE_TYPES as readonly string[]).includes(s) ? (s as RideServiceType) : 'package';
-}
-
-function normalizeRiderVehicleType(value: unknown): string {
-  const s = String(value ?? 'motorcycle').trim().toLowerCase();
-  if (s === 'okada' || s === 'motorbike') return 'motorcycle';
-  if (s === 'keke' || s === 'tricycle' || s === 'napep' || s === 'auto') return 'keke';
-  if ((RIDER_VEHICLE_TYPES as readonly string[]).includes(s)) return s;
-  return 'motorcycle';
-}
-
-/** Which online riders can take a given service (Gokada-style matching). */
-function riderServesService(riderVehicle: string | null | undefined, service: RideServiceType): boolean {
-  const v = normalizeRiderVehicleType(riderVehicle);
-  if (service === 'package') return v === 'motorcycle' || v === 'bicycle';
-  if (service === 'okada') return v === 'motorcycle';
-  if (service === 'keke') return v === 'keke';
-  return false;
-}
-
-/**
- * SQL vehicle filter. Empty/whitespace vehicle types are treated as motorcycle.
- * Legacy aliases (okada/motorbike/tricycle) are accepted so old rows still match.
- */
-function rideServiceSqlFilter(service: RideServiceType): string {
-  const v = `LOWER(TRIM(COALESCE(NULLIF(TRIM(u.rider_vehicle_type), ''), 'motorcycle')))`;
-  if (service === 'okada') {
-    return `AND (${v} IN ('motorcycle', 'okada', 'motorbike', 'bike'))`;
-  }
-  if (service === 'keke') {
-    return `AND (${v} IN ('keke', 'tricycle', 'napep', 'auto', 'rickshaw'))`;
-  }
-  return `AND (${v} IN ('motorcycle', 'okada', 'motorbike', 'bike', 'bicycle'))`;
-}
-
-async function getRideServiceRate(service: RideServiceType): Promise<number> {
-  const meta = RIDE_SERVICE_META[service];
-  const raw = await getSetting(meta.rateKey);
-  const parsed = parseFloat(raw || '');
-  return Math.max(0.01, Number.isFinite(parsed) && parsed > 0 ? parsed : meta.defaultRate);
-}
-
-async function getRideServiceMinFee(service: RideServiceType): Promise<number> {
-  const meta = RIDE_SERVICE_META[service];
-  const raw = await getSetting(meta.minKey);
-  const parsed = parseFloat(raw || '');
-  return Math.max(0, Number.isFinite(parsed) && parsed >= 0 ? parsed : meta.defaultMin);
-}
-
-type RidePromotionRow = {
-  id: string;
-  name: string;
-  code: string | null;
-  service_types: string;
-  customer_discount_percent: number;
-  customer_discount_fixed: number;
-  rider_bonus_amount: number;
-  target_region: string | null;
-  enabled: boolean;
-  starts_at: string | null;
-  ends_at: string | null;
-  redemption_count: number;
-  max_redemptions: number | null;
-  announced_at?: string | null;
-};
-
-let ridePromotionsSchemaReady = false;
-
-async function ensureRidePromotionsSchema() {
-  if (ridePromotionsSchemaReady) return;
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS ride_promotions (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      name VARCHAR(120) NOT NULL,
-      code VARCHAR(40),
-      service_types TEXT NOT NULL DEFAULT 'okada,keke,package',
-      customer_discount_percent DECIMAL(5,2) NOT NULL DEFAULT 0,
-      customer_discount_fixed DECIMAL(10,2) NOT NULL DEFAULT 0,
-      rider_bonus_amount DECIMAL(10,2) NOT NULL DEFAULT 0,
-      target_region VARCHAR(120),
-      enabled BOOLEAN NOT NULL DEFAULT true,
-      starts_at TIMESTAMPTZ,
-      ends_at TIMESTAMPTZ,
-      redemption_count INT NOT NULL DEFAULT 0,
-      max_redemptions INT,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-    ALTER TABLE orders ADD COLUMN IF NOT EXISTS promotion_id UUID;
-    ALTER TABLE orders ADD COLUMN IF NOT EXISTS promotion_discount DECIMAL(10,2) NOT NULL DEFAULT 0;
-    ALTER TABLE orders ADD COLUMN IF NOT EXISTS rider_bonus_amount DECIMAL(10,2) NOT NULL DEFAULT 0;
-    ALTER TABLE ride_promotions ADD COLUMN IF NOT EXISTS announced_at TIMESTAMPTZ;
-  `);
-  ridePromotionsSchemaReady = true;
-}
-
-function promotionCoversService(promo: RidePromotionRow, service: RideServiceType): boolean {
-  const types = String(promo.service_types || '')
-    .split(',')
-    .map((s) => s.trim().toLowerCase())
-    .filter(Boolean);
-  return types.length === 0 || types.includes(service);
-}
-
-function promotionCoversRegion(promo: RidePromotionRow, region?: string | null): boolean {
-  const target = String(promo.target_region || '').trim();
-  if (!target) return true;
-  return String(region || '').trim().toLowerCase() === target.toLowerCase();
-}
-
-function promotionIsActiveNow(promo: RidePromotionRow, now = new Date()): boolean {
-  if (!promo.enabled) return false;
-  if (promo.max_redemptions != null && promo.redemption_count >= promo.max_redemptions) return false;
-  if (promo.starts_at) {
-    const start = new Date(promo.starts_at);
-    if (!Number.isNaN(start.getTime()) && now < start) return false;
-  }
-  if (promo.ends_at) {
-    const end = new Date(promo.ends_at);
-    if (!Number.isNaN(end.getTime()) && now > end) return false;
-  }
-  return true;
-}
-
-async function findActiveRidePromotion(options: {
-  service: RideServiceType;
-  region?: string | null;
-  code?: string | null;
-}): Promise<RidePromotionRow | null> {
-  await ensureRidePromotionsSchema();
-  const code = String(options.code || '').trim().toUpperCase();
-  if (code) {
-    const byCode = await pool.query(
-      `SELECT * FROM ride_promotions WHERE UPPER(COALESCE(code, '')) = $1 LIMIT 1`,
-      [code]
-    );
-    const promo = byCode.rows[0] as RidePromotionRow | undefined;
-    if (
-      promo &&
-      promotionIsActiveNow(promo) &&
-      promotionCoversService(promo, options.service) &&
-      promotionCoversRegion(promo, options.region)
-    ) {
-      return promo;
-    }
-    return null;
-  }
-  const result = await pool.query(
-    `SELECT * FROM ride_promotions WHERE enabled = true ORDER BY updated_at DESC LIMIT 50`
-  );
-  for (const row of result.rows as RidePromotionRow[]) {
-    if (
-      promotionIsActiveNow(row) &&
-      promotionCoversService(row, options.service) &&
-      promotionCoversRegion(row, options.region)
-    ) {
-      return row;
-    }
-  }
-  return null;
-}
-
-function applyPromotionToFee(fee: number, promo: RidePromotionRow): { fee: number; discount: number } {
-  let next = fee;
-  const pct = Math.max(0, Math.min(100, Number(promo.customer_discount_percent) || 0));
-  const fixed = Math.max(0, Number(promo.customer_discount_fixed) || 0);
-  if (pct > 0) next = next * (1 - pct / 100);
-  if (fixed > 0) next = Math.max(0, next - fixed);
-  next = Math.round(next * 100) / 100;
-  return { fee: next, discount: Math.round((fee - next) * 100) / 100 };
-}
-
-function ridePromotionForClient(promo: RidePromotionRow | null) {
-  if (!promo) return null;
-  return {
-    id: promo.id,
-    name: promo.name,
-    code: promo.code,
-    service_types: promo.service_types,
-    customer_discount_percent: Number(promo.customer_discount_percent) || 0,
-    customer_discount_fixed: Number(promo.customer_discount_fixed) || 0,
-    rider_bonus_amount: Number(promo.rider_bonus_amount) || 0,
-    target_region: promo.target_region,
-    enabled: promo.enabled,
-    starts_at: promo.starts_at,
-    ends_at: promo.ends_at,
-    redemption_count: promo.redemption_count,
-    max_redemptions: promo.max_redemptions,
-    announced_at: promo.announced_at ?? null,
-  };
-}
-
-function normalizeVehicleStatus(value: unknown): string | null {
-  if (value == null || value === '') return null;
-  const s = String(value).trim().toLowerCase();
-  return (VEHICLE_STATUSES as readonly string[]).includes(s) ? s : null;
-}
-
-function normalizeVehicleType(value: unknown): string | null {
-  if (value == null || value === '') return null;
-  const s = String(value).trim().toLowerCase();
-  return (VEHICLE_TYPES as readonly string[]).includes(s) ? s : null;
-}
-
-function vehicleRowForClient(row: Record<string, unknown>) {
-  return {
-    id: row.id,
-    owner_id: row.owner_id,
-    plate_number: row.plate_number,
-    make: row.make ?? null,
-    model: row.model ?? null,
-    year: row.year != null ? Number(row.year) : null,
-    color: row.color ?? null,
-    vehicle_type: row.vehicle_type ?? 'motorcycle',
-    status: row.status ?? 'active',
-    assigned_rider_id: row.assigned_rider_id ?? null,
-    assigned_rider_name: row.assigned_rider_name ?? null,
-    assigned_rider_phone: row.assigned_rider_phone ?? null,
-    notes: row.notes ?? null,
-    created_at: row.created_at,
-    updated_at: row.updated_at,
-  };
-}
-
 const PRIMECARE_CANONICAL_EMAIL = 'vendor@bytzgo.net';
 
 function isPrimeCareVendorRow(row: { name?: string; email?: string }): boolean {
@@ -708,114 +384,10 @@ function dedupeVendorList<T extends { id: string; name?: string; email?: string 
   return [...rest, keeper];
 }
 
-/** Transaction pooler (6543) needs pgbouncer=true so node-pg avoids prepared statements. */
-function normalizeDatabaseUrl(raw: string | undefined): string {
-  if (!raw?.trim()) return '';
-  const url = raw.trim();
-  try {
-    const parsed = new URL(url.replace(/^postgresql:\/\//i, 'postgres://'));
-    const port = parsed.port || '5432';
-    if (port === '6543' && !parsed.searchParams.has('pgbouncer')) {
-      parsed.searchParams.set('pgbouncer', 'true');
-      return parsed.toString().replace(/^postgres:\/\//i, 'postgresql://');
-    }
-  } catch {
-    /* keep original */
-  }
-  return url;
-}
-
-function resolveDbSsl(): false | { rejectUnauthorized: boolean } {
-  const url = process.env.DATABASE_URL || '';
-  if (process.env.PG_SSL === 'false') return false;
-  if (process.env.PG_SSL === 'true' || url.includes('supabase.com')) {
-    return { rejectUnauthorized: false };
-  }
-  return false;
-}
-
-function assertProductionConfig() {
-  if (process.env.NODE_ENV !== 'production') return;
-  const missing: string[] = [];
-  if (!process.env.JWT_SECRET?.trim()) missing.push('JWT_SECRET');
-  if (!process.env.DATABASE_URL?.trim()) missing.push('DATABASE_URL');
-  if (missing.length) {
-    console.error(`FATAL: missing required production env: ${missing.join(', ')}`);
-    process.exit(1);
-  }
-  if ((process.env.JWT_SECRET?.length ?? 0) < 24) {
-    console.warn('[config] JWT_SECRET is short — use a long random value in production');
-  }
-}
-
-function resolvePoolMax(): number {
-  const requested = Number(process.env.PG_POOL_MAX) || 10;
-  const capped = Math.min(20, Math.max(2, requested));
-  // Supabase transaction pooler (6543) shares a small server-side pool — stay conservative.
-  const diag = dbConnectionDiagnostics();
-  if (diag.useTransactionPooler) return Math.min(capped, 10);
-  return capped;
-}
-
 const pool = new Pool({
-  connectionString: normalizeDatabaseUrl(process.env.DATABASE_URL),
-  ssl: resolveDbSsl(),
-  max: resolvePoolMax(),
-  min: 0,
-  idleTimeoutMillis: Number(process.env.PG_IDLE_TIMEOUT_MS) || 30_000,
-  connectionTimeoutMillis: Number(process.env.PG_CONNECT_TIMEOUT_MS) || 10_000,
-  allowExitOnIdle: true,
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.DATABASE_URL?.includes('supabase.com') ? { rejectUnauthorized: false } : false
 });
-
-pool.on('error', (err) => {
-  console.error('[pg] unexpected pool error:', err.message);
-});
-
-function dbConnectionDiagnostics(): {
-  pooler: boolean;
-  port: string | null;
-  supabaseRegion: string | null;
-  renderRegion: string | null;
-  regionAligned: boolean | null;
-  useTransactionPooler: boolean;
-} {
-  const raw = process.env.DATABASE_URL || '';
-  let host = '';
-  let port = '';
-  try {
-    const u = new URL(raw.replace(/^postgresql:\/\//, 'postgres://'));
-    host = u.hostname;
-    port = u.port || '5432';
-  } catch {
-    return {
-      pooler: false,
-      port: null,
-      supabaseRegion: null,
-      renderRegion: process.env.RENDER_REGION || null,
-      regionAligned: null,
-      useTransactionPooler: false,
-    };
-  }
-  const pooler = host.includes('pooler.supabase.com');
-  const supabaseRegion = host.match(/aws-\d+-([a-z]+-[a-z]+-\d+)/)?.[1] ?? null;
-  const renderRegion = process.env.RENDER_REGION || null;
-  let regionAligned: boolean | null = null;
-  if (renderRegion && supabaseRegion) {
-    const renderIsUs = ['oregon', 'ohio', 'virginia'].includes(renderRegion);
-    const renderIsEu = renderRegion === 'frankfurt';
-    const dbIsUs = supabaseRegion.startsWith('us-');
-    const dbIsEu = supabaseRegion.startsWith('eu-');
-    regionAligned = (renderIsUs && dbIsUs) || (renderIsEu && dbIsEu);
-  }
-  return {
-    pooler,
-    port,
-    supabaseRegion,
-    renderRegion,
-    regionAligned,
-    useTransactionPooler: pooler && port === '6543',
-  };
-}
 
 async function fetchRiderDocuments(userId: string, options?: { adminReview?: boolean }) {
   const result = await pool.query(
@@ -842,56 +414,11 @@ async function riderHasAllDocuments(userId: string): Promise<boolean> {
   return (result.rows[0]?.n ?? 0) >= RIDER_DOC_TYPES.length;
 }
 
-// Helper to get system settings from DB (60s in-memory cache)
-const SETTING_CACHE_MS = 60_000;
-const settingCache = new Map<string, { value: string | null; expires: number }>();
-
-async function getSettings(keys: string[]): Promise<Record<string, string | null>> {
-  const result: Record<string, string | null> = {};
-  const missing: string[] = [];
-  const now = Date.now();
-  for (const key of keys) {
-    const cached = settingCache.get(key);
-    if (cached && now < cached.expires) {
-      result[key] = cached.value;
-    } else {
-      missing.push(key);
-    }
-  }
-  if (missing.length) {
-    try {
-      const q = await pool.query(
-        'SELECT key, value FROM system_settings WHERE key = ANY($1)',
-        [missing]
-      );
-      const found = new Set<string>();
-      for (const row of q.rows) {
-        result[row.key] = row.value;
-        settingCache.set(row.key, { value: row.value, expires: now + SETTING_CACHE_MS });
-        found.add(row.key);
-      }
-      for (const key of missing) {
-        if (!found.has(key)) {
-          result[key] = null;
-          settingCache.set(key, { value: null, expires: now + SETTING_CACHE_MS });
-        }
-      }
-    } catch (err) {
-      console.error('Error fetching settings batch:', err);
-      for (const key of missing) result[key] = null;
-    }
-  }
-  return result;
-}
-
+// Helper to get system settings from DB
 async function getSetting(key: string) {
-  const cached = settingCache.get(key);
-  if (cached && Date.now() < cached.expires) return cached.value;
   try {
     const result = await pool.query('SELECT value FROM system_settings WHERE key = $1', [key]);
-    const value = result.rows[0]?.value ?? null;
-    settingCache.set(key, { value, expires: Date.now() + SETTING_CACHE_MS });
-    return value;
+    return result.rows[0]?.value;
   } catch (err) {
     console.error(`Error fetching setting ${key}:`, err);
     return null;
@@ -904,7 +431,6 @@ async function setSetting(key: string, value: string) {
      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
     [key, String(value)]
   );
-  settingCache.delete(key);
 }
 
 function parseOptionalPositiveAmount(raw: string | null | undefined): number | null {
@@ -1231,15 +757,6 @@ async function buildPublicPricingPayload() {
     surge_end_time: surge.end_time,
     surge_active: surge.surge_active,
     ghana_time: surge.ghana_time,
-    ride_services: await Promise.all(
-      RIDE_SERVICE_TYPES.map(async (id) => ({
-        id,
-        label: RIDE_SERVICE_META[id].label,
-        price_per_km: await getRideServiceRate(id),
-        min_fee: await getRideServiceMinFee(id),
-        max_passengers: RIDE_SERVICE_META[id].maxPassengers,
-      }))
-    ),
   };
 }
 
@@ -1252,16 +769,13 @@ function broadcastPricingUpdated() {
 }
 
 async function getSurgePricingState() {
-  const s = await getSettings([
-    'surge_enabled',
-    'surge_multiplier',
-    'surge_start_time',
-    'surge_end_time',
-  ]);
-  const enabled = s.surge_enabled === 'true';
-  const multiplier = Math.max(1, parseFloat(s.surge_multiplier || '1.25') || 1.25);
-  const startStr = s.surge_start_time || '17:00';
-  const endStr = s.surge_end_time || '21:00';
+  const enabled = (await getSetting('surge_enabled')) === 'true';
+  const multiplier = Math.max(
+    1,
+    parseFloat((await getSetting('surge_multiplier')) || '1.25') || 1.25
+  );
+  const startStr = (await getSetting('surge_start_time')) || '17:00';
+  const endStr = (await getSetting('surge_end_time')) || '21:00';
   const start = parseTimeToMinutes(startStr) ?? 17 * 60;
   const end = parseTimeToMinutes(endStr) ?? 21 * 60;
   const now = ghanaMinutesNow();
@@ -1307,6 +821,16 @@ function haversineDistanceKm(
   return Math.round(r * c * 1000) / 1000;
 }
 
+/** Okada (bike) vs Keke (tricycle) fare — mirrors mobile `okada_fare.dart`. */
+function okadaVehicleDeliveryFee(distanceKm: number, vehicleType?: string | null): number {
+  const isTricycle = vehicleType === 'tricycle';
+  const base = isTricycle ? 8.0 : 5.0;
+  const perKm = isTricycle ? 3.0 : 2.5;
+  const minimum = isTricycle ? 12.0 : 8.0;
+  const raw = base + distanceKm * perKm;
+  return Math.round(Math.max(minimum, raw) * 100) / 100;
+}
+
 async function calculateDeliveryFeeFromCoords(
   pickupLat: number,
   pickupLng: number,
@@ -1314,8 +838,7 @@ async function calculateDeliveryFeeFromCoords(
   destLng: number,
   pickupRegion?: string | null,
   destinationRegion?: string | null,
-  serviceType: RideServiceType = 'package',
-  options?: { promo_code?: string | null; region?: string | null }
+  vehicleType?: string | null
 ): Promise<{
   distance_km: number;
   delivery_fee: number;
@@ -1324,20 +847,34 @@ async function calculateDeliveryFeeFromCoords(
   base_delivery_fee: number;
   surge_active: boolean;
   surge_multiplier: number;
-  service_type: RideServiceType;
-  promotion_id: string | null;
-  promotion_discount: number;
-  rider_bonus_amount: number;
-  promotion: ReturnType<typeof ridePromotionForClient>;
 }> {
   const distance_km = haversineDistanceKm(pickupLat, pickupLng, destLat, destLng);
-  const globalRate = await getRideServiceRate(serviceType);
-  const serviceMin = await getRideServiceMinFee(serviceType);
+  const normalizedVehicle =
+    vehicleType === 'tricycle' || vehicleType === 'bike' ? vehicleType : null;
+
+  if (normalizedVehicle) {
+    const base = okadaVehicleDeliveryFee(distance_km, normalizedVehicle);
+    const { fee, surge } = await applySurgeToFee(base);
+    const globalRate = Math.max(
+      0.01,
+      parseFloat((await getSetting('delivery_price_per_km')) || '4') || 4
+    );
+    const effectiveRate = surge.surge_active
+      ? Math.round(globalRate * surge.multiplier * 100) / 100
+      : globalRate;
+    return {
+      distance_km,
+      delivery_fee: fee,
+      price_per_km: effectiveRate,
+      zone: null,
+      base_delivery_fee: base,
+      surge_active: surge.surge_active,
+      surge_multiplier: surge.multiplier,
+    };
+  }
+
+  const globalRate = Math.max(0.01, parseFloat((await getSetting('delivery_price_per_km')) || '4') || 4);
   const globalBounds = await getGlobalDeliveryBounds();
-  const effectiveBounds = {
-    min: Math.max(globalBounds.min, serviceMin),
-    max: globalBounds.max,
-  };
 
   let zone: any = null;
   if (destinationRegion) {
@@ -1356,31 +893,23 @@ async function calculateDeliveryFeeFromCoords(
   }
 
   const feeFromDistance = Math.round(distance_km * globalRate * 100) / 100;
-  const base = applyDeliveryFeeCaps(feeFromDistance, zone, effectiveBounds);
+  const base = applyDeliveryFeeCaps(feeFromDistance, zone, globalBounds);
   const { fee, surge } = await applySurgeToFee(base);
   const effectiveRate = surge.surge_active
     ? Math.round(globalRate * surge.multiplier * 100) / 100
     : globalRate;
   const zoneMin =
     zone && Number.isFinite(Number(zone.min_price)) && Number(zone.min_price) > 0
-      ? Math.max(Number(zone.min_price), serviceMin)
-      : effectiveBounds.min;
+      ? Number(zone.min_price)
+      : globalBounds.min;
   const zoneMax =
     zone?.max_price != null && Number.isFinite(Number(zone.max_price))
       ? Number(zone.max_price)
       : globalBounds.max;
 
-  const region = options?.region ?? destinationRegion ?? pickupRegion ?? null;
-  const promo = await findActiveRidePromotion({
-    service: serviceType,
-    region,
-    code: options?.promo_code,
-  });
-  const discounted = promo ? applyPromotionToFee(fee, promo) : { fee, discount: 0 };
-
   return {
     distance_km,
-    delivery_fee: discounted.fee,
+    delivery_fee: fee,
     price_per_km: effectiveRate,
     zone: zone?.name ?? null,
     base_delivery_fee: base,
@@ -1389,11 +918,6 @@ async function calculateDeliveryFeeFromCoords(
     zone_max_price: zoneMax,
     surge_active: surge.surge_active,
     surge_multiplier: surge.multiplier,
-    service_type: serviceType,
-    promotion_id: promo?.id ?? null,
-    promotion_discount: discounted.discount,
-    rider_bonus_amount: promo ? Number(promo.rider_bonus_amount) || 0 : 0,
-    promotion: ridePromotionForClient(promo),
   };
 }
 
@@ -1544,7 +1068,7 @@ const initDb = async () => {
         address TEXT,
         lat DOUBLE PRECISION,
         lng DOUBLE PRECISION,
-        role TEXT NOT NULL CHECK (role IN ('customer', 'vendor', 'rider', 'admin', 'owner')),
+        role TEXT NOT NULL CHECK (role IN ('customer', 'vendor', 'rider', 'admin')),
         balance DECIMAL(10,2) DEFAULT 0.00,
         status TEXT DEFAULT 'active',
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -1562,10 +1086,7 @@ const initDb = async () => {
         ALTER TABLE users ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active';
         ALTER TABLE users ADD COLUMN IF NOT EXISTS region TEXT;
         ALTER TABLE users ADD COLUMN IF NOT EXISTS is_online BOOLEAN DEFAULT false;
-        ALTER TABLE users ADD COLUMN IF NOT EXISTS shop_category TEXT DEFAULT 'pharmacy';
-        UPDATE users SET status = 'disabled'
-          WHERE role = 'vendor'
-            AND LOWER(COALESCE(shop_category, 'food')) NOT IN ('pharmacy', 'health');
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS shop_category TEXT DEFAULT 'food';
         ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT;
         ALTER TABLE users ADD COLUMN IF NOT EXISTS shop_open_status TEXT DEFAULT 'open';
         ALTER TABLE users ADD COLUMN IF NOT EXISTS shop_status_message TEXT;
@@ -1651,6 +1172,8 @@ const initDb = async () => {
         ALTER TABLE orders ADD COLUMN IF NOT EXISTS pulse_guide_lng DOUBLE PRECISION;
         ALTER TABLE orders ADD COLUMN IF NOT EXISTS pulse_guide_at TIMESTAMP WITH TIME ZONE;
         ALTER TABLE orders ADD COLUMN IF NOT EXISTS pulse_guide_phase TEXT;
+        ALTER TABLE orders ADD COLUMN IF NOT EXISTS vehicle_type TEXT;
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS vehicle_type TEXT DEFAULT 'bike';
       EXCEPTION WHEN others THEN NULL;
       END $$;
 
@@ -1767,7 +1290,7 @@ const initDb = async () => {
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         display_id TEXT NOT NULL UNIQUE,
         created_by UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        created_by_role TEXT NOT NULL CHECK (created_by_role IN ('customer', 'vendor', 'rider', 'admin', 'owner')),
+        created_by_role TEXT NOT NULL CHECK (created_by_role IN ('customer', 'vendor', 'rider', 'admin')),
         category TEXT NOT NULL CHECK (category IN ('order', 'payment', 'account', 'delivery', 'shop', 'other')),
         subject TEXT NOT NULL,
         status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'pending', 'resolved', 'closed')),
@@ -1795,34 +1318,6 @@ const initDb = async () => {
       CREATE INDEX IF NOT EXISTS idx_support_messages_ticket_id
         ON support_messages(ticket_id, created_at);
 
-      CREATE TABLE IF NOT EXISTS shop_conversations (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        customer_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        vendor_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        last_message_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-        last_message_preview TEXT,
-        customer_unread INT NOT NULL DEFAULT 0,
-        vendor_unread INT NOT NULL DEFAULT 0,
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(customer_id, vendor_id)
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_shop_conversations_customer
-        ON shop_conversations(customer_id, last_message_at DESC);
-      CREATE INDEX IF NOT EXISTS idx_shop_conversations_vendor
-        ON shop_conversations(vendor_id, last_message_at DESC);
-
-      CREATE TABLE IF NOT EXISTS shop_messages (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        conversation_id UUID NOT NULL REFERENCES shop_conversations(id) ON DELETE CASCADE,
-        sender_id UUID NOT NULL REFERENCES users(id),
-        body TEXT NOT NULL,
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_shop_messages_conversation
-        ON shop_messages(conversation_id, created_at);
-
       CREATE TABLE IF NOT EXISTS order_dispatch_offers (
         order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
         rider_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -1833,153 +1328,22 @@ const initDb = async () => {
         PRIMARY KEY (order_id, rider_id)
       );
 
-      CREATE INDEX IF NOT EXISTS idx_dispatch_offers_order_status
-        ON order_dispatch_offers (order_id, status, expires_at);
-
-      CREATE INDEX IF NOT EXISTS idx_users_rider_online
-        ON users (id)
-        WHERE role = 'rider' AND status = 'active' AND is_online = true;
-
-      CREATE INDEX IF NOT EXISTS idx_rider_locations_updated
-        ON rider_locations (updated_at DESC);
-
       DO $$ BEGIN
         ALTER TABLE orders ADD COLUMN IF NOT EXISTS dispatch_wave INTEGER;
         ALTER TABLE orders ADD COLUMN IF NOT EXISTS offer_expires_at TIMESTAMP WITH TIME ZONE;
       EXCEPTION WHEN others THEN NULL;
       END $$;
-
-      CREATE TABLE IF NOT EXISTS vehicles (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        owner_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        plate_number TEXT NOT NULL,
-        make TEXT,
-        model TEXT,
-        year INTEGER,
-        color TEXT,
-        vehicle_type TEXT NOT NULL DEFAULT 'motorcycle',
-        status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'maintenance', 'retired')),
-        assigned_rider_id UUID REFERENCES users(id) ON DELETE SET NULL,
-        notes TEXT,
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE (owner_id, plate_number)
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_vehicles_owner_id ON vehicles(owner_id, updated_at DESC);
-      CREATE INDEX IF NOT EXISTS idx_vehicles_assigned_rider ON vehicles(assigned_rider_id)
-        WHERE assigned_rider_id IS NOT NULL;
-
-      -- Performance indexes (orders, products, push tokens)
-      CREATE INDEX IF NOT EXISTS idx_orders_customer_created
-        ON orders (customer_id, created_at DESC);
-      CREATE INDEX IF NOT EXISTS idx_orders_vendor_created
-        ON orders (vendor_id, created_at DESC) WHERE vendor_id IS NOT NULL;
-      CREATE INDEX IF NOT EXISTS idx_orders_rider_created
-        ON orders (rider_id, created_at DESC) WHERE rider_id IS NOT NULL;
-      CREATE INDEX IF NOT EXISTS idx_orders_vendor_status
-        ON orders (vendor_id, status) WHERE vendor_id IS NOT NULL;
-      CREATE INDEX IF NOT EXISTS idx_orders_rider_status
-        ON orders (rider_id, status) WHERE rider_id IS NOT NULL;
-      CREATE INDEX IF NOT EXISTS idx_orders_status_scheduled
-        ON orders (status, scheduled_time) WHERE status = 'scheduled';
-      CREATE INDEX IF NOT EXISTS idx_orders_status_created
-        ON orders (status, created_at DESC);
-      CREATE INDEX IF NOT EXISTS idx_orders_customer_arrived
-        ON orders (customer_id, updated_at) WHERE status = 'arrived';
-      CREATE INDEX IF NOT EXISTS idx_orders_customer_rating
-        ON orders (customer_id) WHERE rating IS NOT NULL AND rating > 0;
-      CREATE INDEX IF NOT EXISTS idx_orders_rider_rating
-        ON orders (rider_id) WHERE rating IS NOT NULL AND rating > 0;
-      CREATE INDEX IF NOT EXISTS idx_products_vendor_stock
-        ON products (vendor_id, is_available, is_approved);
-      CREATE INDEX IF NOT EXISTS idx_users_vendors_active
-        ON users (role, status, region) WHERE role = 'vendor' AND status = 'active';
-      CREATE INDEX IF NOT EXISTS idx_fcm_tokens_user
-        ON fcm_tokens (user_id);
-      CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user
-        ON push_subscriptions (user_id);
-      CREATE INDEX IF NOT EXISTS idx_dispatch_offers_rider_active
-        ON order_dispatch_offers (rider_id, status, expires_at) WHERE status = 'offered';
-      CREATE INDEX IF NOT EXISTS idx_otps_phone_purpose
-        ON otps (phone, purpose, expires_at);
     `);
 
-    try {
-      await pool.query(`CREATE EXTENSION IF NOT EXISTS pg_trgm`);
-      await pool.query(`
-        CREATE INDEX IF NOT EXISTS idx_products_name_trgm
-          ON products USING gin (name gin_trgm_ops);
-        CREATE INDEX IF NOT EXISTS idx_products_category_trgm
-          ON products USING gin (category gin_trgm_ops);
-      `);
-    } catch (trgmErr) {
-      console.warn('[db] pg_trgm extension/index skipped:', (trgmErr as Error).message);
-    }
-
-    await pool.query(`
-      DO $$ BEGIN
-        ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
-        ALTER TABLE users ADD CONSTRAINT users_role_check
-          CHECK (role IN ('customer', 'vendor', 'rider', 'admin', 'owner'));
-      EXCEPTION WHEN others THEN NULL;
-      END $$;
-      DO $$ BEGIN
-        ALTER TABLE support_tickets DROP CONSTRAINT IF EXISTS support_tickets_created_by_role_check;
-        ALTER TABLE support_tickets ADD CONSTRAINT support_tickets_created_by_role_check
-          CHECK (created_by_role IN ('customer', 'vendor', 'rider', 'admin', 'owner'));
-      EXCEPTION WHEN others THEN NULL;
-      END $$;
-    `);
-
-    await pool.query(`
-      DO $$ BEGIN
-        ALTER TABLE orders ADD COLUMN IF NOT EXISTS service_type TEXT NOT NULL DEFAULT 'package';
-        ALTER TABLE orders ADD COLUMN IF NOT EXISTS passenger_count INTEGER NOT NULL DEFAULT 1;
-        ALTER TABLE users ADD COLUMN IF NOT EXISTS rider_vehicle_type TEXT DEFAULT 'motorcycle';
-      EXCEPTION WHEN others THEN NULL;
-      END $$;
-    `);
-
-    // Normalize legacy rider rows only — never force active riders online on boot
-    // (that sent quests to phantom "online" accounts with no socket/FCM listener).
+    // Seed SMS gateway configurations
     await pool.query(`
       UPDATE users SET status = 'active', is_online = false
       WHERE role = 'rider' AND status = 'offline';
+      UPDATE users SET is_online = true
+      WHERE role = 'rider' AND status = 'active';
       UPDATE users SET is_online = false
       WHERE role = 'rider' AND status IN ('pending', 'disabled', 'rejected');
-      UPDATE users SET rider_vehicle_type = 'motorcycle'
-      WHERE role = 'rider'
-        AND (rider_vehicle_type IS NULL OR TRIM(rider_vehicle_type) = '');
     `);
-
-    // One-time + recurring: clear zombie online flags (old boot seed + stale GPS).
-    await pruneStaleOnlineRiders().catch((err) =>
-      console.warn('[dispatch] startup prune failed:', err)
-    );
-    const phantomFix = await pool.query(
-      `SELECT value FROM system_settings WHERE key = 'dispatch_phantom_online_cleared_v2'`
-    );
-    if (!phantomFix.rows[0]) {
-      const cleared = await pool.query(
-        `UPDATE users SET is_online = false
-         WHERE role = 'rider' AND is_online = true
-           AND id NOT IN (
-             SELECT rider_id FROM rider_locations
-             WHERE updated_at > NOW() - INTERVAL '90 minutes'
-               AND ABS(lat) > 0.001 AND ABS(lng) > 0.001
-           )
-         RETURNING id`
-      );
-      await pool.query(
-        `INSERT INTO system_settings (key, value) VALUES ('dispatch_phantom_online_cleared_v2', $1)
-         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
-        [String(cleared.rowCount ?? 0)]
-      );
-      console.info(
-        `[dispatch] cleared ${cleared.rowCount ?? 0} phantom online rider flag(s) — drivers with live GPS stay online`
-      );
-    }
 
     await pool.query(`
       INSERT INTO system_settings (key, value)
@@ -2026,14 +1390,6 @@ const initDb = async () => {
       ON CONFLICT (key) DO NOTHING;
       INSERT INTO system_settings (key, value) VALUES ('surge_end_time', '21:00')
       ON CONFLICT (key) DO NOTHING;
-      INSERT INTO system_settings (key, value) VALUES ('okada_price_per_km', '3.5')
-      ON CONFLICT (key) DO NOTHING;
-      INSERT INTO system_settings (key, value) VALUES ('okada_min_fee', '6')
-      ON CONFLICT (key) DO NOTHING;
-      INSERT INTO system_settings (key, value) VALUES ('keke_price_per_km', '2.5')
-      ON CONFLICT (key) DO NOTHING;
-      INSERT INTO system_settings (key, value) VALUES ('keke_min_fee', '5')
-      ON CONFLICT (key) DO NOTHING;
     `);
     // Fix existing courier orders that were mislabeled as food
     await pool.query(`
@@ -2062,11 +1418,7 @@ const initDb = async () => {
   }
 };
 
-if (process.env.NODE_ENV !== 'production') {
-  initDb();
-} else {
-  console.log('Skipping initDb DDL in production (run migrations separately).');
-}
+initDb();
 
 let vapidPublicKey = '';
 
@@ -2110,23 +1462,16 @@ async function ensureVapidKeys() {
 function isOfferableOrder(order: any) {
   if (order?.rider_id) return false;
   if (order?.status === 'scheduled') return false;
-  // Riders dispatch only after pharmacy confirms (ready) or for courier jobs.
   if (order?.status === 'ready') return true;
+  // Marketplace shop orders (seeded vendors) start ready; legacy food may be pending until vendor marks ready.
+  if (
+    order?.status === 'pending' &&
+    order?.vendor_id &&
+    (order?.order_type === 'food' || order?.order_type === 'courier')
+  ) {
+    return true;
+  }
   return false;
-}
-
-function isPharmacyShopOrder(order: any): boolean {
-  return Boolean(order?.vendor_id) && String(order?.order_type || '') === 'food';
-}
-
-const VENDOR_PHARMACY_STATUS: Record<string, Set<string>> = {
-  pending: new Set(['preparing', 'ready', 'cancelled']),
-  preparing: new Set(['ready', 'cancelled']),
-};
-
-function vendorMaySetPharmacyStatus(from: string, to: string): boolean {
-  if (to === 'cancelled') return from === 'pending' || from === 'preparing';
-  return VENDOR_PHARMACY_STATUS[from]?.has(to) ?? false;
 }
 
 function generateDeliveryCode(): string {
@@ -2168,15 +1513,8 @@ async function activateDueScheduledOrders() {
   }
 }
 
-/** Close trips stuck at arrival (missing PIN / rider never completed). Throttled per customer. */
-const staleTripRepairLastRun = new Map<string, number>();
-const STALE_TRIP_REPAIR_INTERVAL_MS = 5 * 60_000;
-
+/** Close trips stuck at arrival (missing PIN / rider never completed). */
 async function repairStaleTripsForCustomer(customerId: string) {
-  const now = Date.now();
-  const last = staleTripRepairLastRun.get(customerId) ?? 0;
-  if (now - last < STALE_TRIP_REPAIR_INTERVAL_MS) return;
-  staleTripRepairLastRun.set(customerId, now);
   const stale = await pool.query(
     `UPDATE orders SET status = 'delivered', updated_at = CURRENT_TIMESTAMP
      WHERE customer_id = $1
@@ -2194,85 +1532,14 @@ async function repairStaleTripsForCustomer(customerId: string) {
     }
     broadcastOrderUpdated(order);
   }
-  // Cancel zombie searches: unassigned ready/pending older than 2 hours (was 3 days —
-  // those blocked the UI as "pending requests" forever after dispatch outages).
-  const cancelled = await pool.query(
+  await pool.query(
     `UPDATE orders SET status = 'cancelled', rider_id = NULL, updated_at = CURRENT_TIMESTAMP
      WHERE customer_id = $1
        AND status IN ('ready', 'pending', 'preparing')
        AND rider_id IS NULL
-       AND created_at < NOW() - INTERVAL '2 hours'
-     RETURNING id`,
+       AND created_at < NOW() - INTERVAL '3 days'`,
     [customerId]
   );
-  for (const row of cancelled.rows) {
-    clearDispatchTimer(row.id);
-    dispatchRetryCycles.delete(row.id);
-  }
-  // Free riders stuck on abandoned in-progress trips (no PIN / customer gone).
-  const abandoned = await pool.query(
-    `UPDATE orders SET status = 'cancelled', rider_id = NULL, updated_at = CURRENT_TIMESTAMP
-     WHERE customer_id = $1
-       AND status IN ('picked_up', 'arrived')
-       AND updated_at < NOW() - INTERVAL '2 hours'
-       AND payment_status IS DISTINCT FROM 'paid'
-       AND customer_payment_ack IS NULL
-     RETURNING id, rider_id`,
-    [customerId]
-  );
-  for (const row of abandoned.rows) {
-    clearDispatchTimer(row.id);
-    if (row.rider_id) {
-      io.to(String(row.rider_id)).emit('ride:taken', { orderId: row.id, reason: 'cancelled' });
-    }
-  }
-}
-
-/** Admin/ops: close all zombie waiting + abandoned in-progress trips. */
-async function closeStuckTripsGlobally(): Promise<{
-  cancelledReady: number;
-  cancelledAbandoned: number;
-}> {
-  const ready = await pool.query(
-    `UPDATE orders SET status = 'cancelled', rider_id = NULL, updated_at = CURRENT_TIMESTAMP
-     WHERE status IN ('ready', 'pending', 'preparing')
-       AND rider_id IS NULL
-       AND created_at < NOW() - INTERVAL '2 hours'
-     RETURNING id`
-  );
-  for (const row of ready.rows) {
-    clearDispatchTimer(row.id);
-    dispatchRetryCycles.delete(row.id);
-  }
-  const abandoned = await pool.query(
-    `UPDATE orders SET status = 'cancelled', rider_id = NULL, updated_at = CURRENT_TIMESTAMP
-     WHERE status IN ('picked_up', 'arrived')
-       AND updated_at < NOW() - INTERVAL '2 hours'
-       AND (payment_status IS DISTINCT FROM 'paid')
-       AND customer_payment_ack IS NULL
-     RETURNING id, rider_id`
-  );
-  for (const row of abandoned.rows) {
-    clearDispatchTimer(row.id);
-    dispatchRetryCycles.delete(row.id);
-    if (row.rider_id) {
-      io.to(String(row.rider_id)).emit('ride:taken', { orderId: row.id, reason: 'cancelled' });
-      io.to(String(row.rider_id)).emit('order:updated', {
-        id: row.id,
-        status: 'cancelled',
-        rider_id: null,
-      });
-    }
-  }
-  await pool.query(
-    `UPDATE order_dispatch_offers SET status = 'expired'
-     WHERE status = 'offered'
-       AND order_id IN (SELECT id FROM orders WHERE status IN ('cancelled', 'delivered'))`
-  );
-  return {
-    cancelledReady: ready.rowCount ?? 0,
-    cancelledAbandoned: abandoned.rowCount ?? 0,
-  };
 }
 
 const deliveryCodeAttempts = new Map<string, { attempts: number; lockedUntil: number }>();
@@ -2281,21 +1548,6 @@ const TRIP_CONTACT_STATUSES = new Set(['pending', 'preparing', 'ready', 'picked_
 
 function tripAllowsContact(order: any): boolean {
   return Boolean(order?.rider_id) && TRIP_CONTACT_STATUSES.has(order.status);
-}
-
-/** Shop orders: customer ↔ pharmacy chat while order is active (even before a rider is assigned). */
-function shopOrderAllowsContact(order: any): boolean {
-  return Boolean(order?.vendor_id) && TRIP_CONTACT_STATUSES.has(order.status);
-}
-
-function orderAllowsChat(order: any, userId: string): boolean {
-  const isCustomer = String(order.customer_id) === String(userId);
-  const isRider = order.rider_id && String(order.rider_id) === String(userId);
-  const isVendor = order.vendor_id && String(order.vendor_id) === String(userId);
-  if (isVendor && shopOrderAllowsContact(order)) return true;
-  if (isCustomer && order.vendor_id && shopOrderAllowsContact(order)) return true;
-  if ((isCustomer || isRider) && tripAllowsContact(order)) return true;
-  return false;
 }
 
 /** Human-friendly name for chat, push, and UI (hides email stubs and broken placeholders). */
@@ -2317,7 +1569,7 @@ function displayUserName(
     if (role === 'rider') return 'Your biker';
     if (role === 'customer') return 'Customer';
     if (role === 'admin') return 'BytzGo Support';
-    if (role === 'vendor') return 'Pharmacy partner';
+    if (role === 'vendor') return 'Shop partner';
     return fallback;
   }
 
@@ -2354,102 +1606,6 @@ function formatOrderMessage(row: any, viewerId: string) {
     createdAt: row.created_at,
     isMine: row.sender_id === viewerId,
   };
-}
-
-function formatShopMessage(row: any, viewerId: string) {
-  return {
-    id: row.id,
-    conversationId: row.conversation_id,
-    senderId: row.sender_id,
-    senderName: displayUserName(row.sender_name, {
-      role: row.sender_role,
-      fallback: 'Pharmacy',
-    }),
-    senderRole: row.sender_role || null,
-    body: row.body,
-    createdAt: row.created_at,
-    isMine: String(row.sender_id) === String(viewerId),
-  };
-}
-
-async function assertShopConversationAccess(conversationId: string, userId: string) {
-  const res = await pool.query(
-    `SELECT c.*, cu.name AS customer_name, vu.name AS vendor_name, vu.shop_category
-     FROM shop_conversations c
-     JOIN users cu ON cu.id = c.customer_id
-     JOIN users vu ON vu.id = c.vendor_id
-     WHERE c.id = $1`,
-    [conversationId]
-  );
-  if (res.rowCount === 0) {
-    const err: any = new Error('Conversation not found');
-    err.status = 404;
-    throw err;
-  }
-  const row = res.rows[0];
-  if (String(row.customer_id) !== String(userId) && String(row.vendor_id) !== String(userId)) {
-    const err: any = new Error('Unauthorized');
-    err.status = 403;
-    throw err;
-  }
-  return row;
-}
-
-function formatShopConversation(row: any, viewerId: string, role: string) {
-  const isVendor = role === 'vendor';
-  return {
-    id: row.id,
-    customerId: row.customer_id,
-    vendorId: row.vendor_id,
-    customerName: displayUserName(row.customer_name, { role: 'customer', fallback: 'Customer' }),
-    vendorName: displayUserName(row.vendor_name, { role: 'vendor', fallback: 'Pharmacy' }),
-    shopCategory: row.shop_category || 'pharmacy',
-    lastMessageAt: row.last_message_at,
-    lastMessagePreview: row.last_message_preview || '',
-    unreadCount: isVendor ? row.vendor_unread || 0 : row.customer_unread || 0,
-    peerName: isVendor
-      ? displayUserName(row.customer_name, { role: 'customer', fallback: 'Customer' })
-      : displayUserName(row.vendor_name, { role: 'vendor', fallback: 'Pharmacy' }),
-  };
-}
-
-async function emitShopMessage(conversation: any, row: any, senderId: string) {
-  const customerPayload = formatShopMessage(row, conversation.customer_id);
-  const vendorPayload = formatShopMessage(row, conversation.vendor_id);
-  io.to(conversation.customer_id).emit('shop:message', {
-    conversationId: conversation.id,
-    message: customerPayload,
-  });
-  io.to(conversation.vendor_id).emit('shop:message', {
-    conversationId: conversation.id,
-    message: vendorPayload,
-  });
-  const preview = String(row.body || '').slice(0, 180);
-  await pool.query(
-    `UPDATE shop_conversations
-     SET last_message_at = CURRENT_TIMESTAMP,
-         last_message_preview = $2,
-         customer_unread = customer_unread + CASE WHEN $3 = customer_id THEN 0 ELSE 1 END,
-         vendor_unread = vendor_unread + CASE WHEN $3 = vendor_id THEN 0 ELSE 1 END
-     WHERE id = $1`,
-    [conversation.id, preview, senderId]
-  );
-  const recipientId =
-    String(senderId) === String(conversation.customer_id)
-      ? conversation.vendor_id
-      : conversation.customer_id;
-  const senderName = displayUserName(row.sender_name, {
-    role: row.sender_role,
-    fallback: 'Pharmacy',
-  });
-  void sendPushToUserIds([recipientId], {
-    title: `Message from ${senderName}`,
-    body: preview.length > 140 ? `${preview.slice(0, 137)}…` : preview,
-    type: 'shop-message',
-    conversationId: conversation.id,
-    channelId: 'shop_messages',
-    highPriority: true,
-  });
 }
 
 const SUPPORT_CATEGORIES = new Set(['order', 'payment', 'account', 'delivery', 'shop', 'other']);
@@ -2627,7 +1783,7 @@ async function emitSupportMessage(ticket: any, messageRow: any, senderId: string
 
 async function assertOrderChatAccess(orderId: string, userId: string) {
   const orderRes = await pool.query(
-    'SELECT id, customer_id, rider_id, vendor_id, status FROM orders WHERE id = $1',
+    'SELECT id, customer_id, rider_id, status FROM orders WHERE id = $1',
     [orderId]
   );
   if (orderRes.rowCount === 0) {
@@ -2636,17 +1792,14 @@ async function assertOrderChatAccess(orderId: string, userId: string) {
     throw err;
   }
   const order = orderRes.rows[0];
-  if (!orderAllowsChat(order, userId)) {
-    const err: any = new Error(
-      order.vendor_id
-        ? 'Chat is only available during an active pharmacy order or trip'
-        : 'Chat is only available during an active trip'
-    );
-    err.status = order.customer_id !== userId && order.rider_id !== userId && order.vendor_id !== userId ? 403 : 400;
-    if (order.customer_id !== userId && order.rider_id !== userId && order.vendor_id !== userId) {
-      err.message = 'Unauthorized';
-      err.status = 403;
-    }
+  if (order.customer_id !== userId && order.rider_id !== userId) {
+    const err: any = new Error('Unauthorized');
+    err.status = 403;
+    throw err;
+  }
+  if (!tripAllowsContact(order)) {
+    const err: any = new Error('Chat is only available during an active trip');
+    err.status = 400;
     throw err;
   }
   return order;
@@ -2678,17 +1831,11 @@ async function sanitizeOrderForRole(order: any, role: string, userId: string) {
   if (o.rider_name) o.riderName = o.rider_name;
   if (o.vendor_name) o.vendorName = o.vendor_name;
 
-  if (tripAllowsContact(o) || shopOrderAllowsContact(o)) {
+  if (tripAllowsContact(o)) {
     if (isBooker && (role === 'customer' || role === 'vendor') && o.rider_phone) {
       o.riderPhone = o.rider_phone;
     }
     if (role === 'rider' && o.rider_id === userId && o.customer_phone) {
-      o.customerPhone = o.customer_phone;
-    }
-    if (isBooker && role === 'customer' && o.vendor_phone) {
-      o.vendorPhone = o.vendor_phone;
-    }
-    if (role === 'vendor' && o.vendor_id === userId && o.customer_phone) {
       o.customerPhone = o.customer_phone;
     }
   }
@@ -2746,7 +1893,7 @@ const ORDER_CONTACT_SELECT = `
    WHERE o3.rider_id = ru.id AND o3.rating IS NOT NULL AND o3.rating > 0) AS rider_avg_rating,
   (SELECT COUNT(*)::int FROM orders o4
    WHERE o4.rider_id = ru.id AND o4.rating IS NOT NULL AND o4.rating > 0) AS rider_rating_count,
-  vu.name AS vendor_name, vu.phone AS vendor_phone`;
+  vu.name AS vendor_name`;
 
 function isCustomerPaymentReady(order: any): boolean {
   if (order.payment_status === 'paid') return true;
@@ -2855,22 +2002,14 @@ async function settleOrderPayment(order: any) {
         order.delivery_fee && Number(order.delivery_fee) > 0
           ? Number(order.delivery_fee)
           : moneyRound((total * settings.totalPercent) / 100);
-      const bonus = Number(order.rider_bonus_amount) || 0;
-      const totalRiderCredit = moneyRound(riderAmount + bonus);
       const rRes = await pool.query(
         'UPDATE users SET balance = balance + $1 WHERE id = $2 RETURNING balance',
-        [totalRiderCredit, order.rider_id]
+        [riderAmount, order.rider_id]
       );
       await pool.query(
         'INSERT INTO wallet_transactions (user_id, amount, type, reference) VALUES ($1, $2, $3, $4)',
         [order.rider_id, riderAmount, 'payment', `Order #${order.id.slice(0, 8)} delivery fee`]
       );
-      if (bonus > 0) {
-        await pool.query(
-          'INSERT INTO wallet_transactions (user_id, amount, type, reference) VALUES ($1, $2, $3, $4)',
-          [order.rider_id, bonus, 'bonus', `Promo bonus · Order #${order.id.slice(0, 8)}`]
-        );
-      }
       await emitWalletUpdated(order.rider_id, 'rider');
     }
     await recordTripCommission(order);
@@ -2923,46 +2062,27 @@ async function settleOrderPayment(order: any) {
   }
 }
 
-/** Seconds a rider can accept after push/socket (aligned with app UI countdown). */
-const OFFER_TTL_SEC = Math.min(
-  120,
-  Math.max(15, Number(process.env.DISPATCH_OFFER_TTL_SEC) || 60)
-);
-/** Bolt-style: one nearest rider per step so a timeout does not burn the whole fleet. */
-function ridersPerWave(_wave: number): number {
-  return 1;
-}
+/** Seconds a rider can accept after push/socket (must allow time to unlock phone). */
+const OFFER_TTL_SEC = 90;
+/** Bolt-style: ping one nearest rider at a time. */
+const RIDERS_PER_WAVE = 1;
+/** Max sequential offers before giving up (each step = next nearest rider). */
 const MAX_DISPATCH_WAVES = 15;
-const LOCATION_FRESH_MAX_AGE_MIN = 45;
-const ONLINE_STALE_GPS_MAX_AGE_MIN = 90;
-const DISPATCH_RADIUS_KM_TIERS = [6, 12, 25] as const;
-const NEARBY_RIDERS_MAX_KM = DISPATCH_RADIUS_KM_TIERS[0];
-const EARLY_GLOBAL_FALLBACK_WAVE = 1;
-const MAX_DISPATCH_RETRY_CYCLES = 8;
-const NO_RIDER_RETRY_MS = 5_000;
-const ORPHAN_KICK_THROTTLE_MS = 8_000;
-const ORPHAN_REDISPATCH_INTERVAL_MS = 10_000;
-const CLOSE_STUCK_INTERVAL_MS = 5 * 60_000;
-
-const dispatchRetryCycles = new Map<string, number>();
-const dispatchWaveTimers = new Map<string, NodeJS.Timeout>();
-let lastOrphanKickAt = 0;
-
-type NearbyRider = { id: string; distanceKm: number };
-
-function dispatchShort(id: string | undefined | null): string {
-  return id && id.length >= 8 ? `${id.slice(0, 8)}…` : String(id ?? '?');
-}
-
-function widestDispatchRadiusKm(): number {
-  return DISPATCH_RADIUS_KM_TIERS[DISPATCH_RADIUS_KM_TIERS.length - 1];
-}
+/** Max age for rider GPS row; profile lat/lng still used when socket GPS is stale. */
+const LOCATION_MAX_AGE_MIN = 45;
+/** Expanding pickup radius (km) as dispatch steps progress. */
+const DISPATCH_RADIUS_KM_TIERS = [4, 8, 15] as const;
+const NEARBY_RIDERS_MAX_KM = 6;
 
 function dispatchRadiusKm(wave: number): number {
   if (wave <= 5) return DISPATCH_RADIUS_KM_TIERS[0];
   if (wave <= 10) return DISPATCH_RADIUS_KM_TIERS[1];
   return DISPATCH_RADIUS_KM_TIERS[2];
 }
+
+type NearbyRider = { id: string; distanceKm: number };
+
+const dispatchWaveTimers = new Map<string, NodeJS.Timeout>();
 
 function clearDispatchTimer(orderId: string) {
   const t = dispatchWaveTimers.get(orderId);
@@ -2972,40 +2092,6 @@ function clearDispatchTimer(orderId: string) {
   }
 }
 
-function scheduleDispatchWave(orderId: string, nextWave: number, delayMs: number, reason: string) {
-  clearDispatchTimer(orderId);
-  const timer = setTimeout(() => {
-    void (async () => {
-      dispatchWaveTimers.delete(orderId);
-      const fresh = await pool.query('SELECT * FROM orders WHERE id = $1', [orderId]);
-      const latest = fresh.rows[0];
-      if (!latest || !isOfferableOrder(latest)) return;
-      await advanceDispatchWave(latest, nextWave);
-    })().catch((err) =>
-      console.error(`[dispatch] ${reason} wave ${nextWave} failed for ${dispatchShort(orderId)}:`, err)
-    );
-  }, delayMs);
-  dispatchWaveTimers.set(orderId, timer);
-}
-
-function kickOrphanRedispatch(reason: string) {
-  const now = Date.now();
-  if (now - lastOrphanKickAt < ORPHAN_KICK_THROTTLE_MS) return;
-  lastOrphanKickAt = now;
-  void redispatchOrphanReadyOrders().catch((err) =>
-    console.warn(`[dispatch] orphan kick (${reason}) failed:`, err)
-  );
-}
-
-async function riderHasFcmToken(riderId: string): Promise<boolean> {
-  const r = await pool.query(`SELECT 1 FROM fcm_tokens WHERE user_id = $1 LIMIT 1`, [riderId]);
-  return (r.rowCount ?? 0) > 0;
-}
-
-function riderSocketRoomSize(riderId: string): number {
-  return io.sockets.adapter.rooms.get(String(riderId))?.size ?? 0;
-}
-
 function normalizeRegion(region?: string | null): string | null {
   if (!region || typeof region !== 'string') return null;
   const t = region.trim();
@@ -3013,17 +2099,12 @@ function normalizeRegion(region?: string | null): string | null {
 }
 
 /** Active online riders; widens to all riders if regional filter matches nobody. */
-async function getActiveRiderIds(
-  region?: string | null,
-  serviceType: RideServiceType | null = 'package'
-): Promise<string[]> {
-  const serviceFilter = serviceType == null ? '' : rideServiceSqlFilter(serviceType);
+async function getActiveRiderIds(region?: string | null): Promise<string[]> {
   const norm = normalizeRegion(region);
   if (norm) {
     const regional = await pool.query(
       `SELECT id FROM users
        WHERE role = 'rider' AND status = 'active' AND is_online = true
-       ${serviceFilter}
        AND (
          region IS NULL OR TRIM(region) = ''
          OR LOWER(TRIM(region)) = $1
@@ -3035,7 +2116,7 @@ async function getActiveRiderIds(
     }
   }
   const all = await pool.query(
-    `SELECT id FROM users WHERE role = 'rider' AND status = 'active' AND is_online = true ${serviceFilter}`
+    `SELECT id FROM users WHERE role = 'rider' AND status = 'active' AND is_online = true`
   );
   return all.rows.map((r: { id: string }) => r.id);
 }
@@ -3053,71 +2134,6 @@ async function seedRiderLocationFromProfile(riderId: string) {
   );
 }
 
-async function getAvailableOnlineRiders(
-  riderIds: string[],
-  limit: number
-): Promise<NearbyRider[]> {
-  if (!riderIds.length || limit <= 0) return [];
-  const res = await pool.query(
-    `SELECT u.id FROM users u
-     LEFT JOIN rider_locations rl ON rl.rider_id = u.id
-     LEFT JOIN LATERAL (
-       SELECT 1 AS ok FROM fcm_tokens t WHERE t.user_id = u.id LIMIT 1
-     ) tok ON true
-     WHERE u.id = ANY($1::uuid[])
-     AND NOT EXISTS (
-       SELECT 1 FROM orders busy
-       WHERE busy.rider_id = u.id
-       AND busy.status IN ('ready', 'picked_up', 'arrived')
-     )
-     ORDER BY
-       CASE WHEN rl.updated_at > NOW() - INTERVAL '1 minute' * $3 THEN 0 ELSE 1 END,
-       CASE WHEN tok.ok IS NOT NULL THEN 0 ELSE 1 END,
-       rl.updated_at DESC NULLS LAST
-     LIMIT $2`,
-    [riderIds, limit, LOCATION_FRESH_MAX_AGE_MIN]
-  );
-  return res.rows.map((row: { id: string }) => ({ id: row.id, distanceKm: 0 }));
-}
-
-/** Mark zombie "online" riders offline so they stop eating dispatch waves. */
-async function pruneStaleOnlineRiders(): Promise<number> {
-  const result = await pool.query(
-    `SELECT u.id FROM users u
-     WHERE u.role = 'rider'
-       AND u.is_online = true
-       AND u.status = 'active'
-       AND NOT EXISTS (
-         SELECT 1 FROM rider_locations rl
-         WHERE rl.rider_id = u.id
-           AND rl.updated_at > NOW() - INTERVAL '1 minute' * $1
-           AND ABS(rl.lat) > 0.001 AND ABS(rl.lng) > 0.001
-       )`,
-    [ONLINE_STALE_GPS_MAX_AGE_MIN]
-  );
-  const staleIds = result.rows
-    .map((row: { id: string }) => row.id)
-    .filter((id: string) => riderSocketRoomSize(id) === 0);
-  if (!staleIds.length) return 0;
-
-  const pruned = await pool.query(
-    `UPDATE users SET is_online = false
-     WHERE id = ANY($1::uuid[]) AND is_online = true
-     RETURNING id`,
-    [staleIds]
-  );
-  const n = pruned.rowCount ?? 0;
-  if (n > 0) {
-    console.info(
-      `[dispatch] pruned ${n} stale online rider(s) (GPS > ${ONLINE_STALE_GPS_MAX_AGE_MIN}m, no socket)`
-    );
-    for (const row of pruned.rows) {
-      io.to(String(row.id)).emit('status:updated', { status: 'active', is_online: false });
-    }
-  }
-  return n;
-}
-
 async function getPickupPoint(order: any): Promise<{ lat: number; lng: number } | null> {
   if (order.pickup_lat != null && order.pickup_lng != null) {
     const lat = parseFloat(order.pickup_lat);
@@ -3133,38 +2149,12 @@ async function getPickupPoint(order: any): Promise<{ lat: number; lng: number } 
   return null;
 }
 
-/** Riders already offered / declined / accepted — skip for the current cycle. */
 async function getOfferedRiderIds(orderId: string): Promise<string[]> {
   const r = await pool.query(
-    `SELECT rider_id FROM order_dispatch_offers
-     WHERE order_id = $1 AND status IN ('offered', 'declined', 'accepted', 'expired')`,
+    `SELECT rider_id FROM order_dispatch_offers WHERE order_id = $1`,
     [orderId]
   );
   return r.rows.map((row: { rider_id: string }) => row.rider_id);
-}
-
-/** Clear timed-out offers so the same online riders can be offered again. Keeps declines. */
-async function clearExpiredDispatchOffers(orderId: string): Promise<number> {
-  const r = await pool.query(
-    `DELETE FROM order_dispatch_offers
-     WHERE order_id = $1 AND status = 'expired'
-     RETURNING rider_id`,
-    [orderId]
-  );
-  return r.rowCount ?? 0;
-}
-
-async function maybeRestartDispatchAfterExhaustion(order: any, reason: string): Promise<boolean> {
-  const cycles = dispatchRetryCycles.get(order.id) ?? 0;
-  if (cycles >= MAX_DISPATCH_RETRY_CYCLES) return false;
-  const cleared = await clearExpiredDispatchOffers(order.id);
-  if (cleared <= 0) return false;
-  dispatchRetryCycles.set(order.id, cycles + 1);
-  console.info(
-    `[dispatch] ${dispatchShort(order.id)}: ${reason} — cleared ${cleared} expired, retry ${cycles + 1}/${MAX_DISPATCH_RETRY_CYCLES}`
-  );
-  await advanceDispatchWave(order, 1);
-  return true;
 }
 
 async function queryNearestActiveRiders(
@@ -3173,24 +2163,21 @@ async function queryNearestActiveRiders(
   excludeRiderIds: string[],
   limit: number,
   maxRadiusKm: number,
-  useRegionFilter: boolean,
-  serviceType: RideServiceType = 'package'
+  useRegionFilter: boolean
 ): Promise<NearbyRider[]> {
   const norm = normalizeRegion(region);
-  const serviceFilter = rideServiceSqlFilter(serviceType);
-  // Postgres requires contiguous $1..$N — never skip a parameter index.
+  const regionClause = useRegionFilter && norm
+    ? `AND (u.region IS NULL OR TRIM(u.region) = '' OR LOWER(TRIM(u.region)) = $7)`
+    : '';
   const params: unknown[] = [
     pickup.lat,
     pickup.lng,
     excludeRiderIds.length ? excludeRiderIds : [],
     limit,
-    LOCATION_FRESH_MAX_AGE_MIN,
+    LOCATION_MAX_AGE_MIN,
     maxRadiusKm,
   ];
   if (useRegionFilter && norm) params.push(norm);
-  const regionClause = useRegionFilter && norm
-    ? `AND (u.region IS NULL OR TRIM(u.region) = '' OR LOWER(TRIM(u.region)) = $7)`
-    : '';
 
   const result = await pool.query(
     `SELECT id, distance_km FROM (
@@ -3202,32 +2189,29 @@ async function queryNearestActiveRiders(
           ))
         )) AS distance_km
        FROM users u
-       INNER JOIN rider_locations rl ON rl.rider_id = u.id
+       LEFT JOIN rider_locations rl ON rl.rider_id = u.id
        CROSS JOIN LATERAL (
          SELECT
-           CASE
-             WHEN ABS(rl.lat) > 0.001
-               AND rl.updated_at > NOW() - INTERVAL '1 minute' * $5
-               THEN rl.lat
-             ELSE NULL
-           END AS lat,
-           CASE
-             WHEN ABS(rl.lng) > 0.001
-               AND rl.updated_at > NOW() - INTERVAL '1 minute' * $5
-               THEN rl.lng
-             ELSE NULL
-           END AS lng
+           COALESCE(rl.lat, u.lat::double precision) AS lat,
+           COALESCE(rl.lng, u.lng::double precision) AS lng
        ) eff
        WHERE u.role = 'rider' AND u.status = 'active' AND u.is_online = true
        AND eff.lat IS NOT NULL AND eff.lng IS NOT NULL
        AND ABS(eff.lat) > 0.001 AND ABS(eff.lng) > 0.001
+       AND (
+         rl.updated_at > NOW() - INTERVAL '1 minute' * $5
+         OR (
+           u.lat IS NOT NULL AND u.lng IS NOT NULL
+           AND (rl.rider_id IS NULL OR rl.updated_at IS NULL
+             OR rl.updated_at <= NOW() - INTERVAL '1 minute' * $5)
+         )
+       )
        AND (COALESCE(array_length($3::uuid[], 1), 0) = 0 OR NOT (u.id = ANY($3::uuid[])))
        AND NOT EXISTS (
          SELECT 1 FROM orders busy
          WHERE busy.rider_id = u.id
          AND busy.status IN ('ready', 'picked_up', 'arrived')
        )
-       ${serviceFilter}
        ${regionClause}
      ) ranked
      WHERE distance_km <= $6
@@ -3246,138 +2230,65 @@ async function getNearestActiveRiders(
   region: string | null,
   excludeRiderIds: string[],
   limit: number,
-  maxRadiusKm: number = DISPATCH_RADIUS_KM_TIERS[0],
-  serviceType: RideServiceType = 'package'
+  maxRadiusKm: number = DISPATCH_RADIUS_KM_TIERS[0]
 ): Promise<NearbyRider[]> {
-  try {
-    let riders = await queryNearestActiveRiders(
+  let riders = await queryNearestActiveRiders(
+    pickup,
+    region,
+    excludeRiderIds,
+    limit,
+    maxRadiusKm,
+    true
+  );
+  if (riders.length === 0 && normalizeRegion(region)) {
+    riders = await queryNearestActiveRiders(
       pickup,
       region,
       excludeRiderIds,
       limit,
       maxRadiusKm,
-      true,
-      serviceType
-    );
-    if (riders.length === 0 && normalizeRegion(region)) {
-      riders = await queryNearestActiveRiders(
-        pickup,
-        region,
-        excludeRiderIds,
-        limit,
-        maxRadiusKm,
-        false,
-        serviceType
-      );
-    }
-    return riders;
-  } catch (err) {
-    console.error('[dispatch] nearby query failed — using online fallback:', err);
-    return [];
-  }
-}
-
-/**
- * Shared Bolt matcher: nearest by fresh GPS → same-service online → any online.
- */
-async function findDispatchCandidates(opts: {
-  order: any;
-  exclude: string[];
-  limit: number;
-  radiusKm: number;
-  allowGlobalFallback: boolean;
-}): Promise<{ candidates: NearbyRider[]; usedGlobalFallback: boolean; usedVehicleBypass: boolean }> {
-  const { order, exclude, limit, radiusKm, allowGlobalFallback } = opts;
-  const serviceType = normalizeRideServiceType(order.service_type);
-  const pickup = await getPickupPoint(order);
-
-  let candidates: NearbyRider[] = [];
-  let usedGlobalFallback = false;
-  let usedVehicleBypass = false;
-
-  if (pickup) {
-    candidates = await getNearestActiveRiders(
-      pickup,
-      order.region,
-      exclude,
-      limit,
-      radiusKm,
-      serviceType
+      false
     );
   }
-
-  if ((!candidates.length && allowGlobalFallback) || !pickup) {
-    const fallbackIds = (await getActiveRiderIds(order.region, serviceType)).filter(
-      (id) => !exclude.includes(id)
-    );
-    const online = await getAvailableOnlineRiders(fallbackIds, limit);
-    if (online.length) {
-      candidates = online;
-      usedGlobalFallback = Boolean(pickup);
-    }
-  }
-
-  if (!candidates.length) {
-    const anyOnline = (await getActiveRiderIds(order.region, null)).filter(
-      (id) => !exclude.includes(id)
-    );
-    const bypass = await getAvailableOnlineRiders(anyOnline, limit);
-    if (bypass.length) {
-      candidates = bypass;
-      usedVehicleBypass = true;
-      usedGlobalFallback = true;
-    }
-  }
-
-  return { candidates, usedGlobalFallback, usedVehicleBypass };
-}
-
-async function markRiderOfferStatus(
-  orderId: string,
-  riderId: string,
-  wave: number,
-  status: 'expired' | 'declined'
-) {
-  await pool.query(
-    `INSERT INTO order_dispatch_offers (order_id, rider_id, wave, status, offered_at, expires_at)
-     VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP, NOW())
-     ON CONFLICT (order_id, rider_id) DO UPDATE SET
-       wave = EXCLUDED.wave,
-       status = EXCLUDED.status,
-       offered_at = CURRENT_TIMESTAMP,
-       expires_at = NOW()`,
-    [orderId, riderId, wave, status]
-  );
+  return riders;
 }
 
 async function emitOffersToRiders(order: any, candidates: NearbyRider[], wave: number) {
-  const customerId = order?.customer_id ?? null;
-  let eligible = candidates.filter((c) => !customerId || c.id !== customerId);
+  const eligibleIds = await filterIncomingRideRecipientIds(
+    candidates.map((c) => c.id),
+    order?.customer_id ?? null
+  );
+  const eligible = candidates.filter((c) => eligibleIds.includes(c.id));
   if (!eligible.length) return 0;
-
-  const deliverable: NearbyRider[] = [];
-  for (const c of eligible) {
-    const roomSize = riderSocketRoomSize(c.id);
-    const hasFcm = roomSize > 0 ? true : await riderHasFcmToken(c.id);
-    if (roomSize > 0 || hasFcm) {
-      deliverable.push(c);
-      continue;
-    }
-    console.warn(
-      `[dispatch] ${dispatchShort(order.id)}: skip ${dispatchShort(c.id)} (no socket, no FCM)`
-    );
-    await markRiderOfferStatus(order.id, c.id, wave, 'expired');
-  }
-  eligible = deliverable;
-  if (!eligible.length) {
-    scheduleDispatchWave(order.id, wave + 1, 250, 'skip-undeliverable');
-    return 0;
-  }
 
   const expiresAt = new Date(Date.now() + OFFER_TTL_SEC * 1000);
   const orderPayload = { ...order };
   const expiresIso = expiresAt.toISOString();
-  const started = Date.now();
+
+  // FCM first (lock-screen alarm), then socket (in-app ring) — never block on DB.
+  void sendPushToRiders(order, eligible, { skipRecipientFilter: true }).catch((err) =>
+    console.warn('[push] incoming ride send failed:', err)
+  );
+
+  for (const { id: riderId, distanceKm } of eligible) {
+    const dist =
+      Number.isFinite(distanceKm) && distanceKm >= 0
+        ? Math.round(distanceKm * 10) / 10
+        : null;
+    const payload = {
+      ...orderPayload,
+      expiresAt: expiresIso,
+      dispatchWave: wave,
+      offerDistanceKm: dist,
+      pickupDistanceKm: dist,
+    };
+    io.to(String(riderId)).emit('ride:incoming', payload);
+  }
+
+  const next = eligible[0];
+  console.info(
+    `[dispatch] order ${order.id} step ${wave}: offered to ${next.id.slice(0, 8)}… (${next.distanceKm.toFixed(1)} km)`,
+  );
 
   await Promise.all(
     eligible.map(({ id: riderId }) =>
@@ -3397,48 +2308,6 @@ async function emitOffersToRiders(order: any, candidates: NearbyRider[], wave: n
   await pool.query(
     `UPDATE orders SET dispatch_wave = $1, offer_expires_at = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3`,
     [wave, expiresAt, order.id]
-  );
-
-  order.offer_expires_at = expiresAt;
-  order.dispatch_wave = wave;
-  orderPayload.offer_expires_at = expiresAt;
-  orderPayload.expiresAt = expiresIso;
-  orderPayload.expires_at = expiresIso;
-
-  void sendPushToRiders(order, eligible, {
-    skipRecipientFilter: true,
-    expiresAt: expiresIso,
-  }).catch((err) => console.warn('[push] incoming ride send failed:', err));
-
-  for (const { id: riderId, distanceKm } of eligible) {
-    const dist =
-      Number.isFinite(distanceKm) && distanceKm >= 0
-        ? Math.round(distanceKm * 10) / 10
-        : null;
-    const payload = {
-      ...orderPayload,
-      expiresAt: expiresIso,
-      expires_at: expiresIso,
-      offer_expires_at: expiresAt,
-      dispatchWave: wave,
-      offerDistanceKm: dist,
-      pickupDistanceKm: dist,
-    };
-    if (riderSocketRoomSize(riderId) === 0) {
-      console.warn(
-        `[dispatch] ${dispatchShort(order.id)}: ${dispatchShort(riderId)} no socket — FCM/poll`
-      );
-    }
-    try {
-      io.to(String(riderId)).emit('ride:incoming', payload);
-    } catch (err) {
-      console.warn(`[dispatch] socket emit failed for ${dispatchShort(riderId)}:`, err);
-    }
-  }
-
-  const next = eligible[0];
-  console.info(
-    `[dispatch] ${dispatchShort(order.id)} wave ${wave}: offered ${eligible.length} → ${dispatchShort(next.id)} (${next.distanceKm.toFixed(1)} km) ${Date.now() - started}ms`
   );
 
   clearDispatchTimer(order.id);
@@ -3468,95 +2337,77 @@ async function handleWaveExpired(orderId: string, wave: number) {
   );
   if (open.rows[0].c > 0) return;
 
-  const serviceType = normalizeRideServiceType(order.service_type);
-  const [exclude, onlineIds] = await Promise.all([
-    getOfferedRiderIds(orderId),
-    getActiveRiderIds(order.region, serviceType),
-  ]);
-  const remaining = onlineIds.filter((id) => !exclude.includes(id));
-  if (remaining.length === 0 && onlineIds.length > 0) {
-    const restarted = await maybeRestartDispatchAfterExhaustion(
-      order,
-      'all online riders timed out'
-    );
-    if (restarted) return;
-  }
-
   await advanceDispatchWave(order, wave + 1);
 }
 
 async function advanceDispatchWave(order: any, wave: number) {
   if (!isOfferableOrder(order)) return;
-  if (wave > MAX_DISPATCH_WAVES) {
-    await maybeRestartDispatchAfterExhaustion(order, `exhausted ${MAX_DISPATCH_WAVES} waves`);
-    return;
-  }
+  if (wave > MAX_DISPATCH_WAVES) return;
 
   const exclude = await getOfferedRiderIds(order.id);
+  const pickup = await getPickupPoint(order);
   const radiusKm = dispatchRadiusKm(wave);
-  const limit = ridersPerWave(wave);
-  const serviceType = normalizeRideServiceType(order.service_type);
 
-  const { candidates, usedGlobalFallback, usedVehicleBypass } = await findDispatchCandidates({
-    order,
-    exclude,
-    limit,
-    radiusKm,
-    allowGlobalFallback:
-      wave >= EARLY_GLOBAL_FALLBACK_WAVE || radiusKm >= widestDispatchRadiusKm(),
-  });
+  const widestRadiusKm = DISPATCH_RADIUS_KM_TIERS[DISPATCH_RADIUS_KM_TIERS.length - 1];
 
-  if (usedVehicleBypass) {
-    console.warn(
-      `[dispatch] ${dispatchShort(order.id)} wave ${wave}: no ${serviceType} match — any online rider`
+  let candidates: NearbyRider[] = [];
+  let usedGlobalFallback = false;
+
+  if (pickup) {
+    candidates = await getNearestActiveRiders(
+      pickup,
+      order.region,
+      exclude,
+      RIDERS_PER_WAVE,
+      radiusKm
     );
-  } else if (usedGlobalFallback) {
-    console.info(
-      `[dispatch] ${dispatchShort(order.id)} wave ${wave}: none within ${radiusKm}km — global fallback`
+    // Centralized fallback: once we've widened to the largest radius and still
+    // find nobody nearby, offer the job to ANY online rider (region first, then
+    // global) regardless of distance / location freshness. This guarantees a
+    // request reaches available riders across platforms even when the rider's
+    // GPS is stale, missing, or far from the pickup.
+    if (candidates.length === 0 && radiusKm >= widestRadiusKm) {
+      const fallbackIds = (await getActiveRiderIds(order.region)).filter(
+        (id) => !exclude.includes(id)
+      );
+      candidates = fallbackIds
+        .slice(0, RIDERS_PER_WAVE)
+        .map((id) => ({ id, distanceKm: 0 }));
+      usedGlobalFallback = candidates.length > 0;
+    }
+  } else {
+    const fallback = (await getActiveRiderIds(order.region)).filter(
+      (id) => !exclude.includes(id)
     );
+    candidates = fallback
+      .slice(0, RIDERS_PER_WAVE)
+      .map((id) => ({ id, distanceKm: 0 }));
   }
 
-  if (!candidates.length) {
-    const onlineIds = await getActiveRiderIds(order.region, null);
-    const remaining = onlineIds.filter((id) => !exclude.includes(id));
-    if (remaining.length === 0 && onlineIds.length > 0) {
-      const restarted = await maybeRestartDispatchAfterExhaustion(
-        order,
-        `no unpinged riders at wave ${wave}`
-      );
-      if (restarted) return;
-    }
-    console.warn(
-      `[dispatch] ${dispatchShort(order.id)} wave ${wave}: ${
-        onlineIds.length === 0 ? 'zero online riders' : `none within ${radiusKm}km`
-      } — retry in ${NO_RIDER_RETRY_MS}ms`
-    );
-    await pool.query(
-      `UPDATE orders SET dispatch_wave = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
-      [wave, order.id]
-    );
-    order.dispatch_wave = wave;
-
+  if (candidates.length === 0) {
     if (wave < MAX_DISPATCH_WAVES) {
-      scheduleDispatchWave(order.id, wave + 1, NO_RIDER_RETRY_MS, 'empty-hunt');
-    } else {
-      const restarted = await maybeRestartDispatchAfterExhaustion(
-        order,
-        `no riders after ${MAX_DISPATCH_WAVES} attempts`
+      console.warn(
+        `[dispatch] order ${order.id} step ${wave}: no riders within ${radiusKm}km — widening search`
       );
-      if (!restarted) {
-        console.warn(
-          `[dispatch] ${dispatchShort(order.id)}: giving up after ${MAX_DISPATCH_WAVES} attempts`
-        );
-      }
+      await advanceDispatchWave(order, wave + 1);
+    } else {
+      console.warn(
+        `[dispatch] order ${order.id}: no riders available (nearby or online) after ${MAX_DISPATCH_WAVES} attempts`
+      );
     }
     return;
+  }
+
+  if (usedGlobalFallback) {
+    console.info(
+      `[dispatch] order ${order.id} step ${wave}: no rider within ${radiusKm}km — falling back to any online rider`
+    );
   }
 
   await emitOffersToRiders(order, candidates, wave);
 }
 
-async function startOrderDispatch(order: any, opts?: { freshCycle?: boolean }) {
+async function startOrderDispatch(order: any) {
   if (!isOfferableOrder(order)) return;
   clearDispatchTimer(order.id);
   await pool.query(
@@ -3564,93 +2415,36 @@ async function startOrderDispatch(order: any, opts?: { freshCycle?: boolean }) {
      WHERE order_id = $1 AND status = 'offered'`,
     [order.id]
   );
-  if (opts?.freshCycle) {
-    await clearExpiredDispatchOffers(order.id);
-    dispatchRetryCycles.delete(order.id);
-  }
   await advanceDispatchWave(order, 1);
 }
 
-/** Re-offer ready trips that never reached a rider. */
-async function redispatchOrphanReadyOrders() {
-  const orphans = await pool.query(
-    `SELECT o.*
-     FROM orders o
-     WHERE o.status = 'ready'
-       AND o.rider_id IS NULL
-       AND o.created_at > NOW() - INTERVAL '6 hours'
-       AND NOT EXISTS (
-         SELECT 1 FROM order_dispatch_offers d
-         WHERE d.order_id = o.id AND d.status = 'offered' AND d.expires_at > NOW()
-       )
-     ORDER BY o.created_at ASC
-     LIMIT 20`
-  );
-  if (orphans.rows.length > 0) {
-    console.info(`[dispatch] orphan re-dispatch: ${orphans.rows.length} ready order(s)`);
-  }
-  for (const order of orphans.rows) {
-    try {
-      console.info(`[dispatch] re-dispatching orphan ${dispatchShort(order.id)}`);
-      await startOrderDispatch(order, { freshCycle: true });
-    } catch (err) {
-      console.error(`[dispatch] orphan failed for ${dispatchShort(order.id)}:`, err);
-    }
-  }
-}
-
-/** Bolt-style: rider rejects → instantly offer the next nearest. */
 async function recordRiderDecline(orderId: string, riderId: string) {
-  const orderRes = await pool.query('SELECT * FROM orders WHERE id = $1', [orderId]);
-  const order = orderRes.rows[0];
-  if (!order || !isOfferableOrder(order)) return;
-
-  const wave = order.dispatch_wave || 1;
-  clearDispatchTimer(orderId);
-
-  await markRiderOfferStatus(orderId, riderId, wave, 'declined');
   await pool.query(
-    `UPDATE order_dispatch_offers SET status = 'expired'
-     WHERE order_id = $1 AND status = 'offered' AND rider_id IS DISTINCT FROM $2`,
+    `UPDATE order_dispatch_offers SET status = 'declined'
+     WHERE order_id = $1 AND rider_id = $2`,
     [orderId, riderId]
   );
 
-  console.info(
-    `[dispatch] ${dispatchShort(riderId)} declined ${dispatchShort(orderId)} — next nearest now`
+  const fresh = await pool.query('SELECT * FROM orders WHERE id = $1', [orderId]);
+  const order = fresh.rows[0];
+  if (!order || !isOfferableOrder(order)) return;
+
+  const wave = order.dispatch_wave || 1;
+  const open = await pool.query(
+    `SELECT COUNT(*)::int AS c FROM order_dispatch_offers
+     WHERE order_id = $1 AND wave = $2 AND status = 'offered'`,
+    [orderId, wave]
   );
 
-  const nextWave = wave + 1;
-  if (nextWave > MAX_DISPATCH_WAVES) {
-    await maybeRestartDispatchAfterExhaustion(
-      order,
-      `exhausted after declines (${MAX_DISPATCH_WAVES})`
-    );
-    return;
+  if (open.rows[0].c === 0) {
+    clearDispatchTimer(orderId);
+    // Sequential Bolt flow: try next nearest rider after decline.
+    await advanceDispatchWave(order, wave + 1);
   }
-
-  const exclude = await getOfferedRiderIds(order.id);
-  const { candidates } = await findDispatchCandidates({
-    order,
-    exclude,
-    limit: 1,
-    radiusKm: widestDispatchRadiusKm(),
-    allowGlobalFallback: true,
-  });
-
-  if (candidates.length > 0) {
-    await emitOffersToRiders(order, candidates, nextWave);
-    return;
-  }
-
-  console.warn(
-    `[dispatch] ${dispatchShort(order.id)}: decline handoff empty — hunting wave ${nextWave}`
-  );
-  await advanceDispatchWave(order, nextWave);
 }
 
 async function notifyRideTaken(orderId: string, winnerRiderId: string) {
   clearDispatchTimer(orderId);
-  dispatchRetryCycles.delete(orderId);
 
   const offers = await pool.query(
     `SELECT rider_id FROM order_dispatch_offers WHERE order_id = $1`,
@@ -3676,7 +2470,6 @@ async function notifyRideTaken(orderId: string, winnerRiderId: string) {
 /** Customer cancelled before a rider accepted — dismiss incoming UI for offered riders. */
 async function notifyRideCancelled(orderId: string) {
   clearDispatchTimer(orderId);
-  dispatchRetryCycles.delete(orderId);
   const offers = await pool.query(
     `SELECT DISTINCT rider_id FROM order_dispatch_offers WHERE order_id = $1`,
     [orderId]
@@ -3694,8 +2487,7 @@ type PushAlert = {
   type: string;
   orderId?: string;
   ticketId?: string;
-  conversationId?: string;
-  channelId?: 'incoming_rides_alarm' | 'trip_updates' | 'support_updates' | 'shop_messages';
+  channelId?: 'incoming_rides_alarm' | 'trip_updates' | 'support_updates';
   highPriority?: boolean;
   expiresAt?: string;
   status?: string;
@@ -3734,7 +2526,6 @@ async function sendPushToUserIds(userIds: string[], alert: PushAlert) {
   const payload = JSON.stringify({
     type: alert.type,
     orderId: alert.orderId ?? '',
-    conversationId: alert.conversationId ?? '',
     title: alert.title,
     body: alert.body,
   });
@@ -3771,15 +2562,8 @@ async function sendPushToUserIds(userIds: string[], alert: PushAlert) {
   if (!firebaseAdminHasCredentials) return;
 
   try {
-    // Prefer the newest token per platform — old reinstall tokens poison delivery.
     const fcmRes = await pool.query(
-      `SELECT DISTINCT ON (user_id, LOWER(COALESCE(NULLIF(TRIM(platform), ''), 'android')))
-         token, platform, user_id, updated_at
-       FROM fcm_tokens
-       WHERE user_id = ANY($1::uuid[])
-       ORDER BY user_id,
-         LOWER(COALESCE(NULLIF(TRIM(platform), ''), 'android')),
-         updated_at DESC NULLS LAST`,
+      `SELECT token, platform FROM fcm_tokens WHERE user_id = ANY($1::uuid[])`,
       [ids]
     );
     const rows = fcmRes.rows.filter((r: { token: string }) => r.token);
@@ -3816,20 +2600,18 @@ async function sendPushToUserIds(userIds: string[], alert: PushAlert) {
     const apnsExpires =
       incomingRide && alert.expiresAt
         ? String(Math.floor(new Date(alert.expiresAt).getTime() / 1000))
-        : String(Math.floor(Date.now() / 1000) + 120);
-    // Was 30s — FCM often delivers after that window, so Android/iOS never rang.
-    const androidTtlMs = incomingRide || high ? 120 * 1000 : 3600 * 1000;
+        : String(Math.floor(Date.now() / 1000) + 90);
 
     const messages = rows.map((row: { token: string; platform?: string }) => {
       const platform = String(row.platform || '').toLowerCase();
       const isIos = platform === 'ios' || platform === 'macos';
-      const isAndroid = platform === 'android' || (!isIos && !platform);
-      // Android incoming: data + high-priority notification so OEM kill-switches
-      // still show a tray alert if the background isolate fails.
+      const isAndroid = platform === 'android';
+      // Android incoming jobs: data-only (Flutter shows one loud local alarm).
+      // iOS / unknown platform: APNs alert+sound only (no FCM notification key — avoids silent iOS banners).
       const androidIncomingRide = incomingRide && isAndroid;
-      const iosIncomingRide = incomingRide && isIos;
+      const iosIncomingRide = incomingRide && (isIos || !isAndroid);
       const loudAlert = iosIncomingRide || (high && !androidIncomingRide);
-      const includeNotification = !incomingRide || iosIncomingRide || androidIncomingRide;
+      const includeNotification = !incomingRide;
       return {
         token: row.token,
         ...(includeNotification
@@ -3843,72 +2625,55 @@ async function sendPushToUserIds(userIds: string[], alert: PushAlert) {
         data: dataPayload,
         android: {
           priority: high ? 'high' : 'normal',
-          ttl: androidTtlMs,
-          ...(androidIncomingRide || (high && isAndroid)
-            ? {
+          ttl: high ? 30 * 1000 : 3600 * 1000,
+          ...(androidIncomingRide || (incomingRide && !isAndroid)
+            ? {}
+            : {
                 notification: {
-                  channelId: incomingRide ? 'incoming_rides_alarm' : channelId,
+                  channelId,
                   sound: 'default',
                   priority: high ? ('max' as const) : ('default' as const),
                   visibility: 'public',
                   defaultVibrateTimings: true,
                   ...(high && alert.orderId ? { tag: `ride-${alert.orderId}` } : {}),
                 },
-              }
-            : {}),
+              }),
         },
         apns: {
           headers: {
-            'apns-priority': iosIncomingRide || loudAlert ? '10' : '5',
-            'apns-push-type': iosIncomingRide || loudAlert ? 'alert' : 'background',
-            ...(iosIncomingRide || incomingRide ? { 'apns-expiration': apnsExpires } : {}),
+            'apns-priority': loudAlert ? '10' : '5',
+            'apns-push-type': loudAlert ? 'alert' : 'background',
+            ...(iosIncomingRide ? { 'apns-expiration': apnsExpires } : {}),
           },
           payload: {
-            aps: iosIncomingRide
-              ? {
-                  alert: { title: alert.title, body: alert.body },
-                  sound: 'default',
-                  'interruption-level': 'time-sensitive',
-                  category: 'incoming_ride_offer',
-                  contentAvailable: true,
-                }
-              : loudAlert
+            aps: {
+              ...(loudAlert
                 ? {
                     alert: { title: alert.title, body: alert.body },
                     sound: 'default',
-                    'interruption-level': 'time-sensitive',
+                    badge: iosIncomingRide ? 1 : undefined,
+                    'interruption-level': iosIncomingRide ? 'time-sensitive' : 'active',
                   }
                 : {
                     contentAvailable: true,
-                  },
+                  }),
+            },
           },
         },
       };
     });
 
     const result = await admin.messaging().sendEach(messages);
-    const deadTokens: string[] = [];
-    result.responses.forEach((r, i) => {
-      if (r.success) return;
-      const code = String(r.error?.code || '');
-      if (
-        code.includes('registration-token-not-registered') ||
-        code.includes('invalid-registration-token') ||
-        code.includes('invalid-argument')
-      ) {
-        deadTokens.push(rows[i].token);
-      }
-      if (incomingRide) {
-        console.warn(
-          `[push] incoming-ride FCM failed token[${i}] (${rows[i].platform}):`,
-          r.error?.code,
-          r.error?.message
-        );
-      }
-    });
-    if (deadTokens.length) {
-      await pool.query(`DELETE FROM fcm_tokens WHERE token = ANY($1::text[])`, [deadTokens]);
-      console.info(`[push] removed ${deadTokens.length} dead FCM token(s)`);
+    if (incomingRide && result.failureCount > 0) {
+      result.responses.forEach((r, i) => {
+        if (!r.success) {
+          console.warn(
+            `[push] incoming-ride FCM failed token[${i}]:`,
+            r.error?.code,
+            r.error?.message
+          );
+        }
+      });
     }
   } catch (err) {
     console.warn('[push] FCM send failed:', err);
@@ -3918,7 +2683,7 @@ async function sendPushToUserIds(userIds: string[], alert: PushAlert) {
 async function sendPushToRiders(
   order: any,
   riders: NearbyRider[],
-  opts?: { skipRecipientFilter?: boolean; expiresAt?: string }
+  opts?: { skipRecipientFilter?: boolean }
 ) {
   let eligible = riders;
   if (!opts?.skipRecipientFilter) {
@@ -3931,11 +2696,9 @@ async function sendPushToRiders(
   if (!eligible.length) return;
   const pickup = order.pickup_address || order.pickup || 'Pickup';
   const dropoff = order.address || 'Drop-off';
-  const expiresAt =
-    opts?.expiresAt ||
-    (order.offer_expires_at
-      ? new Date(order.offer_expires_at).toISOString()
-      : new Date(Date.now() + OFFER_TTL_SEC * 1000).toISOString());
+  const expiresAt = order.offer_expires_at
+    ? new Date(order.offer_expires_at).toISOString()
+    : new Date(Date.now() + OFFER_TTL_SEC * 1000).toISOString();
   await Promise.all(
     eligible.map(({ id, distanceKm }) => {
       const distLabel =
@@ -3978,20 +2741,7 @@ async function notifyCustomerTripPush(order: any) {
   const shopLabel = shopTrip ? shopLabelForOrder(order) : '';
   let title = 'BytzGO';
   let body = '';
-  if (shopTrip && !order.rider_id) {
-    if (status === 'pending') {
-      title = 'Order sent to pharmacy';
-      body = `${shopLabel} is checking your items`;
-    } else if (status === 'preparing') {
-      title = 'Preparing your order';
-      body = `${shopLabel} is packing your medicines`;
-    } else if (status === 'ready') {
-      title = 'Order confirmed';
-      body = 'Finding a rider to pick up from the pharmacy';
-    } else {
-      return;
-    }
-  } else if (order.rider_id && ['pending', 'ready', 'preparing'].includes(status)) {
+  if (order.rider_id && ['pending', 'ready', 'preparing'].includes(status)) {
     if (shopTrip) {
       title = 'Rider heading to shop';
       body = `Your rider is going to ${shopLabel} to pick up your order`;
@@ -4013,11 +2763,6 @@ async function notifyCustomerTripPush(order: any) {
   } else if (status === 'delivered') {
     title = 'Delivered';
     body = 'Your delivery is complete';
-  } else if (status === 'cancelled') {
-    title = shopTrip ? 'Order cancelled' : 'Trip cancelled';
-    body = shopTrip
-      ? 'The pharmacy could not fulfil this order'
-      : 'Your trip was cancelled';
   } else {
     return;
   }
@@ -4043,13 +2788,6 @@ async function broadcastRideOfferToRiders(order: any) {
 ensureVapidKeys().catch((err) => console.error('[push] VAPID setup failed:', err));
 
 // Middleware
-const AUTH_STATUS_CACHE_MS = 60_000;
-const authStatusCache = new Map<string, { ok: boolean; expires: number }>();
-
-function invalidateAuthStatus(userId: string) {
-  authStatusCache.delete(String(userId));
-}
-
 const authenticateToken = (req: any, res: any, next: any) => {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
@@ -4067,21 +2805,11 @@ const authenticateToken = (req: any, res: any, next: any) => {
     if (err) {
       return res.status(403).json({ message: 'Session expired. Please sign in again.' });
     }
-
-    const cached = authStatusCache.get(user.id);
-    if (cached && Date.now() < cached.expires) {
-      if (!cached.ok) {
-        return res.status(403).json({ error: 'Account disabled or not found' });
-      }
-      req.user = user;
-      return next();
-    }
-
+    
+    // Check if user is still active in DB
     try {
       const result = await pool.query('SELECT status FROM users WHERE id = $1', [user.id]);
-      const ok = result.rowCount !== 0 && result.rows[0].status !== 'disabled';
-      authStatusCache.set(user.id, { ok, expires: Date.now() + AUTH_STATUS_CACHE_MS });
-      if (!ok) {
+      if (result.rowCount === 0 || result.rows[0].status === 'disabled') {
         return res.status(403).json({ error: 'Account disabled or not found' });
       }
       req.user = user;
@@ -4142,7 +2870,7 @@ async function getSmsConfig() {
   const dbBase = await getSetting('sms_base_url');
   const dbSender = await getSetting('sms_sender_id');
   return {
-    apiKey: envKey || dbKey || (process.env.NODE_ENV === 'production' ? '' : DEFAULT_SMS_API_KEY),
+    apiKey: envKey || dbKey || DEFAULT_SMS_API_KEY,
     baseUrl: envBase || dbBase || 'https://www.inteksms.top/api/v1',
     senderId: envSender || dbSender || 'bytzee',
     source: envKey ? 'env' : dbKey ? 'database' : 'default',
@@ -4234,152 +2962,6 @@ async function sendSMS(phone: string, message: string) {
       throw new Error('Invalid SMS API key. Update SMS_API_KEY in Render/host env or Admin → Settings.');
     }
     throw new Error(detail);
-  }
-}
-
-const smsPause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-type ApprovalSmsKind = 'rider' | 'vendor' | 'owner' | 'product';
-
-function approvalSmsBody(kind: ApprovalSmsKind, extra?: { productName?: string }): string {
-  switch (kind) {
-    case 'rider':
-      return 'BytzGo: Your rider account is approved! Open the app, go online, and start accepting trips.';
-    case 'vendor':
-      return 'BytzGo: Your store is approved! Log in to the vendor app to add menu items and receive orders.';
-    case 'owner':
-      return 'BytzGo: Your fleet owner account is approved. Log in to manage vehicles and drivers.';
-    case 'product':
-      return `BytzGo: Your menu item "${extra?.productName || 'item'}" is approved and is now live for customers.`;
-    default:
-      return 'BytzGo: Your account is approved. Open the app to get started.';
-  }
-}
-
-function roleToApprovalKind(role: string): ApprovalSmsKind | null {
-  if (role === 'rider') return 'rider';
-  if (role === 'vendor') return 'vendor';
-  if (role === 'owner') return 'owner';
-  return null;
-}
-
-/** Text user when admin approves their account or menu item. Best-effort; never throws. */
-async function notifyApprovalSms(
-  userId: string,
-  kind: ApprovalSmsKind,
-  extra?: { productName?: string }
-): Promise<void> {
-  if (process.env.APPROVAL_SMS === 'false') return;
-  try {
-    const userRes = await pool.query('SELECT phone FROM users WHERE id = $1', [userId]);
-    const phone = userRes.rows[0]?.phone;
-    if (!phone || !isValidGhanaPhone(phone)) {
-      console.warn(`[approval-sms] No valid phone for user ${userId}`);
-      return;
-    }
-    await sendSMS(phone, approvalSmsBody(kind, extra));
-    console.info(`[approval-sms] Sent ${kind} approval SMS to user ${userId}`);
-  } catch (err: any) {
-    console.warn(`[approval-sms] Failed for user ${userId}:`, err?.message || err);
-  }
-}
-
-function buildPromotionCustomerSms(promo: RidePromotionRow): string {
-  const bits = [`BytzGo promo: ${promo.name}.`];
-  const pct = Number(promo.customer_discount_percent) || 0;
-  const fixed = Number(promo.customer_discount_fixed) || 0;
-  if (pct > 0) bits.push(`${pct}% off`);
-  if (fixed > 0) bits.push(`GHS${fixed.toFixed(0)} off`);
-  const services = String(promo.service_types || '')
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .join(', ');
-  if (services) bits.push(services);
-  if (promo.code) bits.push(`Code ${promo.code}.`);
-  if (promo.target_region) bits.push(`Valid in ${promo.target_region}.`);
-  bits.push('Book on the BytzGo app.');
-  return bits.join(' ').slice(0, 160);
-}
-
-function buildPromotionRiderSms(promo: RidePromotionRow): string {
-  const bonus = Number(promo.rider_bonus_amount) || 0;
-  if (bonus <= 0) return '';
-  const region = promo.target_region ? ` in ${promo.target_region}` : '';
-  return `BytzGo rider bonus: Earn extra GHS${bonus.toFixed(0)} per trip${region}. Open the rider app and go online.`;
-}
-
-/** Broadcast promotion SMS to customers (and riders when bonus applies). Best-effort background job. */
-async function announcePromotionSms(
-  promo: RidePromotionRow,
-  options?: { force?: boolean }
-): Promise<{ sent: number; skipped: boolean }> {
-  if (process.env.PROMO_SMS === 'false') return { sent: 0, skipped: true };
-  if (!promo.enabled || !promotionIsActiveNow(promo)) {
-    return { sent: 0, skipped: true };
-  }
-  if (!options?.force && promo.announced_at) {
-    return { sent: 0, skipped: true };
-  }
-
-  const maxRecipients = Math.min(
-    Math.max(1, parseInt(process.env.PROMO_SMS_MAX_RECIPIENTS || '500', 10) || 500),
-    2000
-  );
-  const region = promo.target_region?.trim() || null;
-  const customerBody = buildPromotionCustomerSms(promo);
-  const riderBody = buildPromotionRiderSms(promo);
-  let sent = 0;
-
-  const fetchPhones = async (role: string) => {
-    const params: unknown[] = [role];
-    let sql = `SELECT DISTINCT phone FROM users
-      WHERE role = $1 AND status = 'active' AND phone IS NOT NULL AND TRIM(phone) <> ''`;
-    if (region) {
-      sql += ` AND LOWER(TRIM(region)) = LOWER(TRIM($2))`;
-      params.push(region);
-    }
-    sql += ` LIMIT $${params.length + 1}`;
-    params.push(maxRecipients);
-    return pool.query(sql, params);
-  };
-
-  try {
-    const customers = await fetchPhones('customer');
-    for (const row of customers.rows) {
-      if (!isValidGhanaPhone(row.phone)) continue;
-      try {
-        await sendSMS(row.phone, customerBody);
-        sent++;
-        await smsPause(120);
-      } catch (err: any) {
-        console.warn('[promo-sms] customer send failed:', err?.message || err);
-      }
-    }
-
-    if (riderBody) {
-      const riders = await fetchPhones('rider');
-      for (const row of riders.rows) {
-        if (!isValidGhanaPhone(row.phone)) continue;
-        try {
-          await sendSMS(row.phone, riderBody);
-          sent++;
-          await smsPause(120);
-        } catch (err: any) {
-          console.warn('[promo-sms] rider send failed:', err?.message || err);
-        }
-      }
-    }
-
-    await pool.query(
-      `UPDATE ride_promotions SET announced_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
-      [promo.id]
-    );
-    console.info(`[promo-sms] Announced promotion ${promo.id} (${promo.name}) to ${sent} phones`);
-    return { sent, skipped: false };
-  } catch (err: any) {
-    console.warn('[promo-sms] Broadcast failed:', err?.message || err);
-    return { sent, skipped: false };
   }
 }
 
@@ -4651,7 +3233,7 @@ app.post('/api/auth/reset-password-otp', async (req, res) => {
 });
 
 app.post('/api/auth/register', async (req, res) => {
-  const { name, email, password, role, phone, adminInviteSecret, otp, vehicle_type, rider_vehicle_type } = req.body;
+  const { name, email, password, role, phone, adminInviteSecret, otp } = req.body;
   if (role === 'admin') {
     const expected = process.env.ADMIN_INVITE_SECRET;
     if (!expected || adminInviteSecret !== expected) {
@@ -4672,25 +3254,13 @@ app.post('/api/auth/register', async (req, res) => {
       }
     }
   }
-  let riderVehicle: string | null = null;
-  if (role === 'rider') {
-    if (!vehicle_type && !rider_vehicle_type) {
-      return res.status(400).json({
-        message: 'Choose your vehicle type: Okada (motorcycle), Keke (tricycle), or Bicycle.',
-      });
-    }
-    riderVehicle = normalizeRiderVehicleType(vehicle_type ?? rider_vehicle_type);
-  }
   try {
     const hashedPassword = await bcrypt.hash(password, 10);
-    const userStatus = role === 'vendor' || role === 'rider' || role === 'owner' ? 'pending' : 'active';
+    const userStatus = role === 'vendor' || role === 'rider' ? 'pending' : 'active';
     const storePhone = phone ? formatGhanaPhone(phone) : phone;
-    const vendorShopCategory = defaultShopCategoryForRole(role);
     const result = await pool.query(
-      `INSERT INTO users (name, email, password, role, status, phone, rider_vehicle_type, shop_category)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       RETURNING id, name, email, role, balance, phone, status, rider_vehicle_type, shop_category`,
-      [name, email, hashedPassword, role, userStatus, storePhone, riderVehicle, vendorShopCategory]
+      'INSERT INTO users (name, email, password, role, status, phone) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, name, email, role, balance, phone, status',
+      [name, email, hashedPassword, role, userStatus, storePhone]
     );
     if (role === 'customer' && phone) {
       await pool.query('DELETE FROM otps WHERE phone = ANY($1) AND purpose = $2', [
@@ -4775,7 +3345,7 @@ app.post('/api/auth/google', async (req, res) => {
       message: 'Google sign-in is disabled. Sign in with your phone or email and password.',
     });
   }
-  const { credential, role, vehicle_type, rider_vehicle_type } = req.body;
+  const { credential, role } = req.body;
   try {
     const payload = await verifyGoogleIdToken(credential);
     if (!payload || !payload.email) {
@@ -4795,22 +3365,10 @@ app.post('/api/auth/google', async (req, res) => {
       if (newRole === 'admin') {
         return res.status(403).json({ message: 'Admin accounts cannot be created via Google sign-in.' });
       }
-      const userStatus = (newRole === 'vendor' || newRole === 'rider' || newRole === 'owner') ? 'pending' : 'active';
-      if (newRole === 'rider' && !vehicle_type && !rider_vehicle_type) {
-        return res.status(400).json({
-          message: 'Choose your vehicle type: Okada (motorcycle), Keke (tricycle), or Bicycle.',
-        });
-      }
-      const riderVehicle =
-        newRole === 'rider'
-          ? normalizeRiderVehicleType(vehicle_type ?? rider_vehicle_type)
-          : null;
-      const vendorShopCategory = defaultShopCategoryForRole(newRole);
+      const userStatus = (newRole === 'vendor' || newRole === 'rider') ? 'pending' : 'active';
       result = await pool.query(
-        `INSERT INTO users (name, email, google_id, role, status, rider_vehicle_type, shop_category)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
-         RETURNING id, name, email, role, balance, phone, status, rider_vehicle_type, shop_category`,
-        [displayName, payload.email, googleId, newRole, userStatus, riderVehicle, vendorShopCategory]
+        'INSERT INTO users (name, email, google_id, role, status) VALUES ($1, $2, $3, $4, $5) RETURNING id, name, email, role, balance, phone, status',
+        [displayName, payload.email, googleId, newRole, userStatus]
       );
       user = result.rows[0];
     } else {
@@ -4839,7 +3397,7 @@ app.post('/api/auth/google', async (req, res) => {
 
 // Apple Sign-In (iOS)
 app.post('/api/auth/apple', async (req, res) => {
-  const { credential, role, email: clientEmail, name: clientName, vehicle_type, rider_vehicle_type } = req.body;
+  const { credential, role, email: clientEmail, name: clientName } = req.body;
   try {
     if (!credential || typeof credential !== 'string') {
       return res.status(400).json({ message: 'Apple identity token required' });
@@ -4871,27 +3429,15 @@ app.post('/api/auth/apple', async (req, res) => {
       if (newRole === 'admin') {
         return res.status(403).json({ message: 'Admin accounts cannot be created via Apple sign-in.' });
       }
-      const userStatus = (newRole === 'vendor' || newRole === 'rider' || newRole === 'owner') ? 'pending' : 'active';
-      if (newRole === 'rider' && !vehicle_type && !rider_vehicle_type) {
-        return res.status(400).json({
-          message: 'Choose your vehicle type: Okada (motorcycle), Keke (tricycle), or Bicycle.',
-        });
-      }
-      const riderVehicle =
-        newRole === 'rider'
-          ? normalizeRiderVehicleType(vehicle_type ?? rider_vehicle_type)
-          : null;
+      const userStatus = (newRole === 'vendor' || newRole === 'rider') ? 'pending' : 'active';
       const displayName = displayUserName(
         (typeof clientName === 'string' && clientName.trim()) ||
           email.split('@')[0],
         { fallback: 'BytzGo member' },
       );
-      const vendorShopCategory = defaultShopCategoryForRole(newRole);
       result = await pool.query(
-        `INSERT INTO users (name, email, apple_id, role, status, rider_vehicle_type, shop_category)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
-         RETURNING id, name, email, role, balance, phone, status, rider_vehicle_type, shop_category`,
-        [displayName, email, appleId, newRole, userStatus, riderVehicle, vendorShopCategory],
+        'INSERT INTO users (name, email, apple_id, role, status) VALUES ($1, $2, $3, $4, $5) RETURNING id, name, email, role, balance, phone, status',
+        [displayName, email, appleId, newRole, userStatus],
       );
       user = result.rows[0];
     } else {
@@ -4940,11 +3486,10 @@ app.post('/api/auth/supabase', async (req, res) => {
     let result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
     let user = result.rows[0];
     if (!user) {
-      const userStatus = role === 'vendor' || role === 'rider' || role === 'owner' ? 'pending' : 'active';
-      const vendorShopCategory = defaultShopCategoryForRole(role);
+      const userStatus = role === 'vendor' || role === 'rider' ? 'pending' : 'active';
       result = await pool.query(
-        'INSERT INTO users (name, email, google_id, role, status, shop_category) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, name, email, role, balance, phone, status, shop_category',
-        [name, email, googleId, role || 'customer', userStatus, vendorShopCategory]
+        'INSERT INTO users (name, email, google_id, role, status) VALUES ($1, $2, $3, $4, $5) RETURNING id, name, email, role, balance, phone, status',
+        [name, email, googleId, role || 'customer', userStatus]
       );
       user = result.rows[0];
     } else {
@@ -4994,9 +3539,6 @@ app.delete('/api/auth/account', authenticateToken, async (req: any, res) => {
     }
 
     await client.query('BEGIN');
-    if (row.role === 'owner') {
-      await client.query('DELETE FROM vehicles WHERE owner_id = $1', [userId]);
-    }
     if (row.role === 'vendor') {
       await client.query('DELETE FROM products WHERE vendor_id = $1', [userId]);
       await client.query('UPDATE orders SET vendor_id = NULL WHERE vendor_id = $1', [userId]);
@@ -5011,11 +3553,6 @@ app.delete('/api/auth/account', authenticateToken, async (req: any, res) => {
     await client.query('DELETE FROM order_messages WHERE sender_id = $1', [userId]);
     await client.query('DELETE FROM support_messages WHERE sender_id = $1', [userId]);
     await client.query('DELETE FROM support_tickets WHERE created_by = $1', [userId]);
-    await client.query(
-      `DELETE FROM shop_conversations
-       WHERE customer_id = $1 OR vendor_id = $1`,
-      [userId]
-    );
     await client.query('DELETE FROM order_dispatch_offers WHERE rider_id = $1', [userId]);
     await client.query('DELETE FROM wallet_transactions WHERE user_id = $1', [userId]);
     await client.query('DELETE FROM fcm_tokens WHERE user_id = $1', [userId]);
@@ -5053,7 +3590,8 @@ app.get('/api/auth/me', authenticateToken, async (req: any, res) => {
 
 // Profile Update
 app.patch('/api/auth/profile', authenticateToken, async (req: any, res) => {
-  const { email, phone, cover_image, avatar_url, address, lat, lng, region, shop_category } = req.body;
+  const { email, phone, cover_image, avatar_url, address, lat, lng, region, shop_category, vehicle_type } =
+    req.body;
   const dbCover = normalizeImageRefForDb(cover_image);
   const dbAvatar = normalizeImageRefForDb(avatar_url);
   let normalizedCategory: string | null = null;
@@ -5066,6 +3604,14 @@ app.patch('/api/auth/profile', authenticateToken, async (req: any, res) => {
     }
     normalizedCategory = c;
   }
+  let normalizedVehicle: string | null = null;
+  if (vehicle_type != null && String(vehicle_type).trim()) {
+    const v = String(vehicle_type).trim().toLowerCase();
+    if (v !== 'bike' && v !== 'tricycle') {
+      return res.status(400).json({ message: 'vehicle_type must be bike or tricycle' });
+    }
+    normalizedVehicle = v;
+  }
   try {
     const result = await pool.query(
       `UPDATE users SET 
@@ -5077,8 +3623,9 @@ app.patch('/api/auth/profile', authenticateToken, async (req: any, res) => {
         lat = COALESCE($6, lat),
         lng = COALESCE($7, lng),
         region = COALESCE($8, region),
-        shop_category = COALESCE($9, shop_category)
-       WHERE id = $10 
+        shop_category = COALESCE($9, shop_category),
+        vehicle_type = COALESCE($10, vehicle_type)
+       WHERE id = $11 
        RETURNING ${USER_PUBLIC_FIELDS}`,
       [
         email,
@@ -5090,6 +3637,7 @@ app.patch('/api/auth/profile', authenticateToken, async (req: any, res) => {
         lng,
         region,
         normalizedCategory,
+        normalizedVehicle,
         req.user.id,
       ]
     );
@@ -5127,8 +3675,10 @@ app.patch('/api/auth/status', authenticateToken, async (req: any, res) => {
         return res.status(400).json({ message: 'Riders can only go online or offline.' });
       }
       const isOnline = status === 'active';
-      // Admin approval (`status === 'active'`) is the gate for working — KYC photos
-      // are collected for review but must not block an already-approved rider.
+      const hasDocs = await riderHasAllDocuments(req.user.id);
+      if (isOnline && !hasDocs) {
+        return res.status(403).json({ message: 'Upload your licence, Ghana card, and photo before going online.' });
+      }
       if (isOnline && (await riderHasOverdueCommission(req.user.id))) {
         const settings = await getCommissionSettings();
         return res.status(403).json({
@@ -5141,29 +3691,7 @@ app.patch('/api/auth/status', authenticateToken, async (req: any, res) => {
         [isOnline, req.user.id]
       );
       const user = result.rows[0];
-      if (isOnline) {
-        await seedRiderLocationFromProfile(user.id);
-        // Refresh last-known GPS timestamp so the 90m prune grace starts now —
-        // otherwise Go Online + stale pin gets kicked offline before location:update.
-        await pool.query(
-          `UPDATE rider_locations
-           SET updated_at = CURRENT_TIMESTAMP
-           WHERE rider_id = $1 AND ABS(lat) > 0.001 AND ABS(lng) > 0.001`,
-          [user.id]
-        );
-        // If profile has no pin, adopt last-known GPS so dispatch can match this rider.
-        await pool.query(
-          `UPDATE users u
-           SET lat = rl.lat, lng = rl.lng
-           FROM rider_locations rl
-           WHERE rl.rider_id = u.id
-             AND u.id = $1
-             AND rl.lat IS NOT NULL AND ABS(rl.lat) > 0.001
-             AND (u.lat IS NULL OR ABS(u.lat::double precision) < 0.001)`,
-          [user.id]
-        );
-        kickOrphanRedispatch('rider-online');
-      }
+      if (isOnline) await seedRiderLocationFromProfile(user.id);
       const token = signAuthToken(user);
       res.json({ user: await userForAuthResponse(user), token });
       io.to(String(user.id)).emit('status:updated', { status: user.status, is_online: user.is_online });
@@ -5175,33 +3703,12 @@ app.patch('/api/auth/status', authenticateToken, async (req: any, res) => {
       [status, req.user.id]
     );
     const user = result.rows[0];
-    invalidateAuthStatus(user.id);
     const token = signAuthToken(user);
     res.json({ user: await userForAuthResponse(user), token });
     io.to(String(user.id)).emit('status:updated', { status });
   } catch (err: any) {
     console.error('Status update error:', err);
     res.status(500).json({ message: 'Status update failed' });
-  }
-});
-
-
-/** Rider declares okada (motorcycle) or keke (tricycle) for job matching. */
-app.patch('/api/rider/vehicle-type', authenticateToken, async (req: any, res) => {
-  if (req.user.role !== 'rider') {
-    return res.status(403).json({ message: 'Riders only' });
-  }
-  const vehicleType = normalizeRiderVehicleType(req.body?.vehicle_type ?? req.body?.rider_vehicle_type);
-  try {
-    const result = await pool.query(
-      `UPDATE users SET rider_vehicle_type = $1 WHERE id = $2 RETURNING ${USER_PUBLIC_FIELDS}`,
-      [vehicleType, req.user.id]
-    );
-    const user = result.rows[0];
-    res.json({ user: await userForAuthResponse(user), rider_vehicle_type: vehicleType });
-  } catch (err) {
-    console.error('Rider vehicle type error:', err);
-    res.status(500).json({ message: 'Failed to update vehicle type' });
   }
 });
 
@@ -5510,10 +4017,12 @@ app.post(
         [req.user.id, docType, imageRef, imageResult.contentType]
       );
 
+      // Only send new / rejected riders back to review — never demote an
+      // already-approved (active) driver when they replace a photo.
       if (await riderHasAllDocuments(req.user.id)) {
         await pool.query(
           `UPDATE users SET status = 'pending', is_online = false
-           WHERE id = $1 AND role = 'rider' AND status NOT IN ('disabled')`,
+           WHERE id = $1 AND role = 'rider' AND status IN ('pending', 'rejected')`,
           [req.user.id]
         );
       }
@@ -5542,7 +4051,8 @@ app.post('/api/rider/documents/submit', authenticateToken, async (req: any, res)
       return res.status(400).json({ message: 'Upload licence, Ghana card, and profile photo first.' });
     }
     await pool.query(
-      `UPDATE users SET status = 'pending', is_online = false WHERE id = $1 AND role = 'rider'`,
+      `UPDATE users SET status = 'pending', is_online = false
+       WHERE id = $1 AND role = 'rider' AND status IN ('pending', 'rejected')`,
       [req.user.id]
     );
     await pool.query(
@@ -5715,7 +4225,7 @@ app.get('/api/riders/nearby', authenticateToken, async (req: any, res) => {
        FROM rider_locations rl
        WHERE rl.rider_id = ANY($1::uuid[])
          AND rl.updated_at > NOW() - INTERVAL '1 minute' * $2`,
-      [riderIds, LOCATION_FRESH_MAX_AGE_MIN]
+      [riderIds, LOCATION_MAX_AGE_MIN]
     );
     const locById = new Map<string, { lat: number; lng: number }>();
     for (const row of locs.rows) {
@@ -6096,8 +4606,7 @@ app.get('/api/vendors', async (req, res) => {
       `SELECT id, name, email, phone, cover_image, address, lat, lng, region, shop_category,
               shop_open_status, shop_status_message, shop_discount_label, shop_discount_percent,
               shop_promo_updated_at, shop_story_image, shop_story_posted_at, shop_story_expires_at
-       FROM users WHERE role = $1 AND status = 'active'
-         AND LOWER(COALESCE(shop_category, 'pharmacy')) IN ('pharmacy', 'health')`;
+       FROM users WHERE role = $1 AND status = 'active'`;
     const params: any[] = ['vendor'];
     const { category } = req.query;
     
@@ -6105,12 +4614,10 @@ app.get('/api/vendors', async (req, res) => {
       query += ' AND (region = $2 OR region IS NULL)';
       params.push(region);
     }
-    if (category && typeof category === 'string' && isAllowedShopCategory(category)) {
-      query += ` AND LOWER(COALESCE(shop_category, 'pharmacy')) = LOWER($${params.length + 1})`;
+    if (category && typeof category === 'string') {
+      query += ` AND LOWER(COALESCE(shop_category, 'food')) = LOWER($${params.length + 1})`;
       params.push(category.trim());
     }
-
-    query += ' ORDER BY name ASC LIMIT 200';
     
     const result = await pool.query(query, params);
     const vendors = await Promise.all(
@@ -6119,94 +4626,6 @@ app.get('/api/vendors', async (req, res) => {
     res.json(vendors);
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
-  }
-});
-
-/** Find pharmacies & health retailers that stock a medicine (customer drug search). */
-app.get('/api/pharmacy-search', async (req, res) => {
-  const q = String(req.query.q || '').trim();
-  if (q.length < 2) return res.json([]);
-  const { region, category } = req.query;
-  try {
-    const params: any[] = [`%${q}%`];
-    let sql = `
-      SELECT
-        u.id, u.name, u.email, u.phone, u.cover_image, u.address, u.lat, u.lng, u.region, u.shop_category,
-        u.shop_open_status, u.shop_status_message, u.shop_discount_label, u.shop_discount_percent,
-        u.shop_promo_updated_at, u.shop_story_image, u.shop_story_posted_at, u.shop_story_expires_at,
-        p.id AS product_id, p.name AS product_name, p.price AS product_price,
-        p.category AS product_category, p.image_url AS product_image_url
-      FROM products p
-      INNER JOIN users u ON u.id = p.vendor_id
-      WHERE u.role = 'vendor'
-        AND u.status = 'active'
-        AND LOWER(COALESCE(u.shop_category, 'pharmacy')) IN ('pharmacy', 'health')
-        AND p.is_available = true
-        AND p.is_approved = true
-        AND (
-          p.name ILIKE $1
-          OR p.category ILIKE $1
-          OR COALESCE(p.description, '') ILIKE $1
-        )`;
-    if (region && typeof region === 'string') {
-      params.push(region);
-      sql += ` AND (u.region = $${params.length} OR u.region IS NULL)`;
-    }
-    if (category && typeof category === 'string' && isAllowedShopCategory(category)) {
-      params.push(category.trim());
-      sql += ` AND LOWER(COALESCE(u.shop_category, 'pharmacy')) = LOWER($${params.length})`;
-    }
-    sql += ` ORDER BY u.name ASC, p.name ASC LIMIT 200`;
-    const result = await pool.query(sql, params);
-    const grouped = new Map<string, { vendor: Record<string, unknown>; matches: any[] }>();
-    for (const row of result.rows) {
-      const vendorId = String(row.id);
-      if (!grouped.has(vendorId)) {
-        grouped.set(vendorId, {
-          vendor: {
-            id: row.id,
-            name: row.name,
-            email: row.email,
-            phone: row.phone,
-            cover_image: row.cover_image,
-            address: row.address,
-            lat: row.lat,
-            lng: row.lng,
-            region: row.region,
-            shop_category: row.shop_category,
-            shop_open_status: row.shop_open_status,
-            shop_status_message: row.shop_status_message,
-            shop_discount_label: row.shop_discount_label,
-            shop_discount_percent: row.shop_discount_percent,
-            shop_promo_updated_at: row.shop_promo_updated_at,
-            shop_story_image: row.shop_story_image,
-            shop_story_posted_at: row.shop_story_posted_at,
-            shop_story_expires_at: row.shop_story_expires_at,
-          },
-          matches: [],
-        });
-      }
-      grouped.get(vendorId)!.matches.push({
-        id: row.product_id,
-        vendor_id: row.id,
-        name: row.product_name,
-        price: row.product_price,
-        category: row.product_category,
-        image_url: row.product_image_url,
-        is_available: true,
-        is_approved: true,
-      });
-    }
-    const hits = await Promise.all(
-      Array.from(grouped.values()).map(async (entry) => {
-        const vendor = await vendorRowForClient(entry.vendor);
-        return { vendor, matches: entry.matches.slice(0, 5) };
-      })
-    );
-    res.json(hits);
-  } catch (err) {
-    console.error('Pharmacy search error:', err);
-    res.status(500).json({ message: 'Search failed' });
   }
 });
 
@@ -6231,13 +4650,6 @@ app.get('/api/products', async (req, res) => {
     if (vendor_id) {
       query += ' AND vendor_id = $' + (params.length + 1);
       params.push(vendor_id);
-    } else {
-      const limit = Math.min(
-        Math.max(parseInt(String(req.query.limit || '500'), 10) || 500, 1),
-        1000
-      );
-      query += ` LIMIT $${params.length + 1}`;
-      params.push(limit);
     }
     const result = await pool.query(query, params);
     res.json(result.rows);
@@ -6539,232 +4951,6 @@ app.get('/api/vendor/products', authenticateToken, async (req: any, res) => {
   }
 });
 
-/** Fleet owner — dashboard + vehicle registry */
-app.get('/api/owner/dashboard', authenticateToken, async (req: any, res) => {
-  if (req.user.role !== 'owner') return res.status(403).json({ message: 'Fleet owners only' });
-  try {
-    const ownerId = req.user.id;
-    const [statsRes, vehiclesRes] = await Promise.all([
-      pool.query(
-        `SELECT
-          (SELECT COUNT(*)::int FROM vehicles WHERE owner_id = $1) AS total_vehicles,
-          (SELECT COUNT(*)::int FROM vehicles WHERE owner_id = $1 AND status = 'active') AS active_vehicles,
-          (SELECT COUNT(*)::int FROM vehicles WHERE owner_id = $1 AND assigned_rider_id IS NOT NULL) AS assigned_vehicles,
-          (SELECT COUNT(*)::int FROM vehicles WHERE owner_id = $1 AND status = 'maintenance') AS maintenance_vehicles`,
-        [ownerId]
-      ),
-      pool.query(
-        `SELECT v.*, r.name AS assigned_rider_name, r.phone AS assigned_rider_phone
-         FROM vehicles v
-         LEFT JOIN users r ON r.id = v.assigned_rider_id
-         WHERE v.owner_id = $1
-         ORDER BY v.updated_at DESC, v.plate_number ASC
-         LIMIT 100`,
-        [ownerId]
-      ),
-    ]);
-    const userRes = await pool.query(
-      `SELECT id, name, email, phone, status, balance, created_at FROM users WHERE id = $1`,
-      [ownerId]
-    );
-    res.json({
-      owner: userRes.rows[0],
-      stats: statsRes.rows[0],
-      vehicles: vehiclesRes.rows.map(vehicleRowForClient),
-    });
-  } catch (err) {
-    console.error('Owner dashboard error:', err);
-    res.status(500).json({ message: 'Server error' });
-  }
-});
-
-app.get('/api/owner/vehicles', authenticateToken, async (req: any, res) => {
-  if (req.user.role !== 'owner') return res.status(403).json({ message: 'Fleet owners only' });
-  try {
-    const result = await pool.query(
-      `SELECT v.*, r.name AS assigned_rider_name, r.phone AS assigned_rider_phone
-       FROM vehicles v
-       LEFT JOIN users r ON r.id = v.assigned_rider_id
-       WHERE v.owner_id = $1
-       ORDER BY v.updated_at DESC, v.plate_number ASC`,
-      [req.user.id]
-    );
-    res.json(result.rows.map(vehicleRowForClient));
-  } catch (err) {
-    console.error('Owner vehicles list error:', err);
-    res.status(500).json({ message: 'Server error' });
-  }
-});
-
-app.post('/api/owner/vehicles', authenticateToken, async (req: any, res) => {
-  if (req.user.role !== 'owner') return res.status(403).json({ message: 'Fleet owners only' });
-  const ownerRes = await pool.query('SELECT status FROM users WHERE id = $1', [req.user.id]);
-  if (ownerRes.rows[0]?.status !== 'active') {
-    return res.status(403).json({
-      message: 'Your owner account is pending approval. You can add vehicles after admin approves your account.',
-    });
-  }
-  const plate = String(req.body.plate_number || '').trim().toUpperCase();
-  if (!plate || plate.length < 3) {
-    return res.status(400).json({ message: 'Enter a valid plate number' });
-  }
-  const status = normalizeVehicleStatus(req.body.status) ?? 'active';
-  const vehicleType = normalizeVehicleType(req.body.vehicle_type) ?? 'motorcycle';
-  const yearRaw = req.body.year;
-  const year =
-    yearRaw != null && String(yearRaw).trim() !== '' ? parseInt(String(yearRaw), 10) : null;
-  if (year != null && (Number.isNaN(year) || year < 1980 || year > new Date().getFullYear() + 1)) {
-    return res.status(400).json({ message: 'Enter a valid vehicle year' });
-  }
-  try {
-    const result = await pool.query(
-      `INSERT INTO vehicles (
-         owner_id, plate_number, make, model, year, color, vehicle_type, status, notes
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       RETURNING *`,
-      [
-        req.user.id,
-        plate,
-        String(req.body.make || '').trim() || null,
-        String(req.body.model || '').trim() || null,
-        year,
-        String(req.body.color || '').trim() || null,
-        vehicleType,
-        status,
-        String(req.body.notes || '').trim() || null,
-      ]
-    );
-    res.status(201).json(vehicleRowForClient(result.rows[0]));
-  } catch (err: any) {
-    if (err?.code === '23505') {
-      return res.status(409).json({ message: 'You already registered a vehicle with this plate number' });
-    }
-    console.error('Create vehicle error:', err);
-    res.status(500).json({ message: 'Failed to add vehicle' });
-  }
-});
-
-app.patch('/api/owner/vehicles/:id', authenticateToken, async (req: any, res) => {
-  if (req.user.role !== 'owner') return res.status(403).json({ message: 'Fleet owners only' });
-  const { id } = req.params;
-  try {
-    const existing = await pool.query(
-      'SELECT * FROM vehicles WHERE id = $1 AND owner_id = $2',
-      [id, req.user.id]
-    );
-    if (!existing.rows[0]) return res.status(404).json({ message: 'Vehicle not found' });
-
-    const plate = req.body.plate_number != null
-      ? String(req.body.plate_number).trim().toUpperCase()
-      : existing.rows[0].plate_number;
-    if (!plate || plate.length < 3) {
-      return res.status(400).json({ message: 'Enter a valid plate number' });
-    }
-    const status = req.body.status != null
-      ? normalizeVehicleStatus(req.body.status) ?? existing.rows[0].status
-      : existing.rows[0].status;
-    const vehicleType = req.body.vehicle_type != null
-      ? normalizeVehicleType(req.body.vehicle_type) ?? existing.rows[0].vehicle_type
-      : existing.rows[0].vehicle_type;
-    let year = existing.rows[0].year;
-    if (req.body.year !== undefined) {
-      const yearRaw = req.body.year;
-      year =
-        yearRaw != null && String(yearRaw).trim() !== ''
-          ? parseInt(String(yearRaw), 10)
-          : null;
-      if (year != null && (Number.isNaN(year) || year < 1980 || year > new Date().getFullYear() + 1)) {
-        return res.status(400).json({ message: 'Enter a valid vehicle year' });
-      }
-    }
-
-    let assignedRiderId = existing.rows[0].assigned_rider_id;
-    if (req.body.assigned_rider_id !== undefined) {
-      const raw = req.body.assigned_rider_id;
-      if (raw == null || raw === '') {
-        assignedRiderId = null;
-      } else {
-        const riderId = String(raw).trim();
-        const riderRes = await pool.query(
-          `SELECT id FROM users WHERE id = $1 AND role = 'rider' AND status = 'active'`,
-          [riderId]
-        );
-        if (!riderRes.rows[0]) {
-          return res.status(400).json({ message: 'Assigned rider must be an active BytzGo driver' });
-        }
-        assignedRiderId = riderId;
-      }
-    }
-
-    const result = await pool.query(
-      `UPDATE vehicles SET
-         plate_number = $1,
-         make = $2,
-         model = $3,
-         year = $4,
-         color = $5,
-         vehicle_type = $6,
-         status = $7,
-         notes = $8,
-         assigned_rider_id = $9,
-         updated_at = CURRENT_TIMESTAMP
-       WHERE id = $10 AND owner_id = $11
-       RETURNING *`,
-      [
-        plate,
-        req.body.make !== undefined
-          ? String(req.body.make || '').trim() || null
-          : existing.rows[0].make,
-        req.body.model !== undefined
-          ? String(req.body.model || '').trim() || null
-          : existing.rows[0].model,
-        year,
-        req.body.color !== undefined
-          ? String(req.body.color || '').trim() || null
-          : existing.rows[0].color,
-        vehicleType,
-        status,
-        req.body.notes !== undefined
-          ? String(req.body.notes || '').trim() || null
-          : existing.rows[0].notes,
-        assignedRiderId,
-        id,
-        req.user.id,
-      ]
-    );
-    const joined = await pool.query(
-      `SELECT v.*, r.name AS assigned_rider_name, r.phone AS assigned_rider_phone
-       FROM vehicles v
-       LEFT JOIN users r ON r.id = v.assigned_rider_id
-       WHERE v.id = $1`,
-      [result.rows[0].id]
-    );
-    res.json(vehicleRowForClient(joined.rows[0]));
-  } catch (err: any) {
-    if (err?.code === '23505') {
-      return res.status(409).json({ message: 'You already registered a vehicle with this plate number' });
-    }
-    console.error('Update vehicle error:', err);
-    res.status(500).json({ message: 'Failed to update vehicle' });
-  }
-});
-
-app.delete('/api/owner/vehicles/:id', authenticateToken, async (req: any, res) => {
-  if (req.user.role !== 'owner') return res.status(403).json({ message: 'Fleet owners only' });
-  const { id } = req.params;
-  try {
-    const result = await pool.query(
-      'DELETE FROM vehicles WHERE id = $1 AND owner_id = $2 RETURNING id',
-      [id, req.user.id]
-    );
-    if (!result.rows[0]) return res.status(404).json({ message: 'Vehicle not found' });
-    res.json({ success: true });
-  } catch (err) {
-    console.error('Delete vehicle error:', err);
-    res.status(500).json({ message: 'Failed to delete vehicle' });
-  }
-});
-
 app.delete('/api/products/:id', authenticateToken, async (req: any, res) => {
   const { id } = req.params;
   if (req.user.role !== 'vendor' && req.user.role !== 'admin') return res.sendStatus(403);
@@ -6823,10 +5009,10 @@ app.post('/api/admin/vendors', authenticateToken, async (req: any, res) => {
   if (String(password).length < 6) {
     return res.status(400).json({ message: 'Password must be at least 6 characters' });
   }
-  let shopCat = 'pharmacy';
+  let shopCat = 'food';
   if (shop_category != null && String(shop_category).trim()) {
     const c = String(shop_category).trim().toLowerCase();
-    if (!isAllowedShopCategory(c)) {
+    if (!(SHOP_CATEGORIES as readonly string[]).includes(c)) {
       return res.status(400).json({
         message: `shop_category must be one of: ${SHOP_CATEGORIES.join(', ')}`,
       });
@@ -6963,7 +5149,6 @@ app.get('/api/admin/pending-riders', authenticateToken, async (req: any, res) =>
   try {
     const result = await pool.query(
       `SELECT u.id, u.name, u.email, u.phone, u.region, u.status, u.is_online, u.created_at,
-        u.rider_vehicle_type,
         COALESCE(
           json_agg(
             json_build_object(
@@ -7011,142 +5196,6 @@ app.get('/api/admin/pending-riders', authenticateToken, async (req: any, res) =>
   }
 });
 
-/** Admin: live dispatch diagnostics — why quests may not reach riders. */
-app.get('/api/admin/dispatch/status', authenticateToken, async (req: any, res) => {
-  if (req.user.role !== 'admin') return res.sendStatus(403);
-  try {
-    const [online, ready, openOffers, tokens] = await Promise.all([
-      pool.query(
-        `SELECT u.id, u.name, u.phone, u.region, u.is_online, u.rider_vehicle_type,
-                u.lat AS profile_lat, u.lng AS profile_lng,
-                rl.lat AS gps_lat, rl.lng AS gps_lng, rl.updated_at AS gps_at,
-                EXISTS(SELECT 1 FROM fcm_tokens t WHERE t.user_id = u.id) AS has_fcm
-         FROM users u
-         LEFT JOIN rider_locations rl ON rl.rider_id = u.id
-         WHERE u.role = 'rider' AND u.status = 'active' AND u.is_online = true
-         ORDER BY rl.updated_at DESC NULLS LAST
-         LIMIT 50`
-      ),
-      pool.query(
-        `SELECT id, status, service_type, region, created_at, pickup_lat, pickup_lng, rider_id, dispatch_wave, offer_expires_at
-         FROM orders
-         WHERE status = 'ready' AND rider_id IS NULL
-           AND created_at > NOW() - INTERVAL '6 hours'
-         ORDER BY created_at DESC
-         LIMIT 20`
-      ),
-      pool.query(
-        `SELECT d.order_id, d.rider_id, d.status, d.wave, d.expires_at, d.offered_at
-         FROM order_dispatch_offers d
-         JOIN orders o ON o.id = d.order_id
-         WHERE o.status = 'ready' AND o.rider_id IS NULL
-           AND d.offered_at > NOW() - INTERVAL '2 hours'
-         ORDER BY d.offered_at DESC
-         LIMIT 40`
-      ),
-      pool.query(
-        `SELECT COUNT(DISTINCT user_id)::int AS riders_with_token
-         FROM fcm_tokens t
-         JOIN users u ON u.id = t.user_id
-         WHERE u.role = 'rider'`
-      ),
-    ]);
-
-    const onlineRiders = online.rows.map((r: any) => ({
-      id: r.id,
-      name: r.name,
-      phone: r.phone,
-      region: r.region,
-      vehicle: r.rider_vehicle_type || 'motorcycle',
-      hasFcm: r.has_fcm === true,
-      hasGps: r.gps_lat != null || r.profile_lat != null,
-      gpsAgeMin:
-        r.gps_at != null
-          ? Math.round((Date.now() - new Date(r.gps_at).getTime()) / 60000)
-          : null,
-      socketRooms: io.sockets.adapter.rooms.get(String(r.id))?.size ?? 0,
-    }));
-
-    res.json({
-      offerTtlSec: OFFER_TTL_SEC,
-      ridersPerWave: ridersPerWave(1),
-      onlineRiderCount: onlineRiders.length,
-      onlineRiders,
-      readyUnassignedOrders: ready.rows,
-      recentOffers: openOffers.rows,
-      ridersWithFcmToken: tokens.rows[0]?.riders_with_token ?? 0,
-      hint:
-        onlineRiders.length === 0
-          ? 'No riders are online. Ask a driver to open the app and tap Go Online.'
-          : onlineRiders.every((r: any) => r.socketRooms === 0 && !r.hasFcm)
-            ? 'Online riders have no live socket and no FCM token — they will not see quests.'
-            : 'Dispatch looks ready. Book a test ride while a rider is online.',
-    });
-  } catch (err) {
-    console.error('[admin/dispatch/status]', err);
-    res.status(500).json({ message: 'Failed to load dispatch status' });
-  }
-});
-
-/** Admin: kick zombie online riders (no fresh GPS) and re-dispatch waiting trips. */
-app.post('/api/admin/dispatch/prune', authenticateToken, async (req: any, res) => {
-  if (req.user.role !== 'admin') return res.sendStatus(403);
-  try {
-    const pruned = await pruneStaleOnlineRiders();
-    await redispatchOrphanReadyOrders();
-    const status = await pool.query(
-      `SELECT COUNT(*)::int AS online
-       FROM users WHERE role = 'rider' AND status = 'active' AND is_online = true`
-    );
-    res.json({
-      ok: true,
-      pruned,
-      onlineRemaining: status.rows[0]?.online ?? 0,
-      message: `Pruned ${pruned} stale rider(s). Waiting trips re-dispatched.`,
-    });
-  } catch (err) {
-    console.error('[admin/dispatch/prune]', err);
-    res.status(500).json({ message: 'Prune failed' });
-  }
-});
-
-/** Admin: cancel zombie waiting searches + abandoned in-progress trips. */
-app.post('/api/admin/dispatch/close-stuck', authenticateToken, async (req: any, res) => {
-  if (req.user.role !== 'admin') return res.sendStatus(403);
-  try {
-    const result = await closeStuckTripsGlobally();
-    res.json({
-      ok: true,
-      ...result,
-      message: `Closed ${result.cancelledReady} waiting + ${result.cancelledAbandoned} abandoned trip(s).`,
-    });
-  } catch (err) {
-    console.error('[admin/dispatch/close-stuck]', err);
-    res.status(500).json({ message: 'Close stuck trips failed' });
-  }
-});
-
-/** Admin: force re-dispatch of a ready order to online riders. */
-app.post('/api/admin/dispatch/:orderId/redispatch', authenticateToken, async (req: any, res) => {
-  if (req.user.role !== 'admin') return res.sendStatus(403);
-  try {
-    await pruneStaleOnlineRiders();
-    const orderRes = await pool.query('SELECT * FROM orders WHERE id = $1', [req.params.orderId]);
-    const order = orderRes.rows[0];
-    if (!order) return res.status(404).json({ message: 'Order not found' });
-    if (!isOfferableOrder(order)) {
-      return res.status(400).json({
-        message: `Order is not offerable (status=${order.status}, rider=${order.rider_id || 'none'})`,
-      });
-    }
-    await startOrderDispatch(order, { freshCycle: true });
-    res.json({ ok: true, message: 'Re-dispatched to online riders' });
-  } catch (err) {
-    console.error('[admin/dispatch/redispatch]', err);
-    res.status(500).json({ message: 'Re-dispatch failed' });
-  }
-});
-
 app.patch('/api/admin/riders/:id/approve', authenticateToken, async (req: any, res) => {
   if (req.user.role !== 'admin') return res.sendStatus(403);
   const { id } = req.params;
@@ -7160,7 +5209,6 @@ app.patch('/api/admin/riders/:id/approve', authenticateToken, async (req: any, r
        RETURNING id, name, email, role, status, is_online, phone, region`,
       [id]
     );
-    invalidateAuthStatus(id);
     await pool.query(
       `UPDATE rider_documents SET review_status = 'approved', rejection_reason = NULL,
         reviewed_by = $2, reviewed_at = CURRENT_TIMESTAMP
@@ -7169,7 +5217,6 @@ app.patch('/api/admin/riders/:id/approve', authenticateToken, async (req: any, r
     );
     res.json(result.rows[0]);
     io.to(id).emit('status:updated', { status: 'active', is_online: false });
-    void notifyApprovalSms(id, 'rider');
   } catch (err) {
     console.error('Approve rider error:', err);
     res.status(500).json({ message: 'Failed to approve rider' });
@@ -7190,7 +5237,6 @@ app.patch('/api/admin/riders/:id/reject', authenticateToken, async (req: any, re
        RETURNING id, name, email, role, status, is_online, phone, region`,
       [id]
     );
-    invalidateAuthStatus(id);
     await pool.query(
       `UPDATE rider_documents SET review_status = 'rejected', rejection_reason = $2,
         reviewed_by = $3, reviewed_at = CURRENT_TIMESTAMP
@@ -7202,67 +5248,6 @@ app.patch('/api/admin/riders/:id/reject', authenticateToken, async (req: any, re
   } catch (err) {
     console.error('Reject rider error:', err);
     res.status(500).json({ message: 'Failed to reject rider' });
-  }
-});
-
-app.get('/api/admin/pending-owners', authenticateToken, async (req: any, res) => {
-  if (req.user.role !== 'admin') return res.sendStatus(403);
-  try {
-    const result = await pool.query(
-      `SELECT u.id, u.name, u.email, u.phone, u.region, u.status, u.created_at,
-        (SELECT COUNT(*)::int FROM vehicles v WHERE v.owner_id = u.id) AS vehicle_count
-       FROM users u
-       WHERE u.role = 'owner' AND u.status IN ('pending', 'rejected')
-       ORDER BY u.created_at DESC`
-    );
-    res.json(result.rows);
-  } catch (err) {
-    console.error('Pending owners error:', err);
-    res.status(500).json({ message: 'Failed to fetch pending fleet owners' });
-  }
-});
-
-app.patch('/api/admin/owners/:id/approve', authenticateToken, async (req: any, res) => {
-  if (req.user.role !== 'admin') return res.sendStatus(403);
-  const { id } = req.params;
-  try {
-    const check = await pool.query('SELECT id, role FROM users WHERE id = $1', [id]);
-    if (!check.rows[0] || check.rows[0].role !== 'owner') {
-      return res.status(404).json({ message: 'Fleet owner not found' });
-    }
-    const result = await pool.query(
-      `UPDATE users SET status = 'active' WHERE id = $1
-       RETURNING id, name, email, role, status, phone, region`,
-      [id]
-    );
-    res.json(result.rows[0]);
-    io.to(id).emit('status:updated', { status: 'active' });
-    void notifyApprovalSms(id, 'owner');
-  } catch (err) {
-    console.error('Approve owner error:', err);
-    res.status(500).json({ message: 'Failed to approve fleet owner' });
-  }
-});
-
-app.patch('/api/admin/owners/:id/reject', authenticateToken, async (req: any, res) => {
-  if (req.user.role !== 'admin') return res.sendStatus(403);
-  const { id } = req.params;
-  const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
-  try {
-    const check = await pool.query('SELECT id, role FROM users WHERE id = $1', [id]);
-    if (!check.rows[0] || check.rows[0].role !== 'owner') {
-      return res.status(404).json({ message: 'Fleet owner not found' });
-    }
-    const result = await pool.query(
-      `UPDATE users SET status = 'rejected' WHERE id = $1
-       RETURNING id, name, email, role, status, phone, region`,
-      [id]
-    );
-    res.json(result.rows[0]);
-    io.to(id).emit('status:updated', { status: 'rejected', reason: reason || 'Application rejected' });
-  } catch (err) {
-    console.error('Reject owner error:', err);
-    res.status(500).json({ message: 'Failed to reject fleet owner' });
   }
 });
 
@@ -7333,199 +5318,6 @@ app.post('/api/admin/sms-test', authenticateToken, async (req: any, res) => {
   } catch (err: any) {
     console.error('[admin/sms-test]', err.message);
     res.status(502).json({ message: err.message || 'SMS test failed' });
-  }
-});
-
-const SMS_BLAST_MAX_RECIPIENTS = 300;
-const SMS_BLAST_MAX_LENGTH = 480;
-
-type SmsBlastAudience =
-  | 'customers'
-  | 'riders'
-  | 'riders_active'
-  | 'riders_online'
-  | 'vendors'
-  | 'owners'
-  | 'all'
-  | 'custom';
-
-function normalizeSmsAudience(value: unknown): SmsBlastAudience | null {
-  const s = String(value ?? '').trim().toLowerCase();
-  const allowed: SmsBlastAudience[] = [
-    'customers',
-    'riders',
-    'riders_active',
-    'riders_online',
-    'vendors',
-    'owners',
-    'all',
-    'custom',
-  ];
-  return (allowed as string[]).includes(s) ? (s as SmsBlastAudience) : null;
-}
-
-async function countSmsAudience(audience: SmsBlastAudience, region?: string | null): Promise<number> {
-  const phones = await resolveSmsAudiencePhones(audience, { region });
-  return phones.length;
-}
-
-async function resolveSmsAudiencePhones(
-  audience: SmsBlastAudience,
-  opts: { phones?: string[]; region?: string | null } = {}
-): Promise<string[]> {
-  const region = opts.region?.trim() || null;
-  const regionClause = region
-    ? `AND LOWER(TRIM(COALESCE(region, ''))) = LOWER($1)`
-    : '';
-  const regionParam = region ? [region] : [];
-
-  if (audience === 'custom') {
-    const raw = Array.isArray(opts.phones) ? opts.phones : [];
-    const set = new Set<string>();
-    for (const p of raw) {
-      if (typeof p !== 'string' || !p.trim()) continue;
-      if (!isValidGhanaPhone(p)) continue;
-      set.add(formatGhanaPhone(p));
-    }
-    return [...set];
-  }
-
-  let roleFilter = '';
-  let statusFilter = '';
-  if (audience === 'customers') roleFilter = `role = 'customer'`;
-  else if (audience === 'riders') roleFilter = `role = 'rider'`;
-  else if (audience === 'riders_active') {
-    roleFilter = `role = 'rider'`;
-    statusFilter = `AND status = 'active'`;
-  } else if (audience === 'riders_online') {
-    roleFilter = `role = 'rider'`;
-    statusFilter = `AND status = 'active' AND is_online = true`;
-  } else if (audience === 'vendors') roleFilter = `role = 'vendor'`;
-  else if (audience === 'owners') roleFilter = `role = 'owner'`;
-  else if (audience === 'all') roleFilter = `role IN ('customer', 'rider', 'vendor', 'owner', 'admin')`;
-  else return [];
-
-  const result = await pool.query(
-    `SELECT DISTINCT phone FROM users
-     WHERE phone IS NOT NULL AND TRIM(phone) <> ''
-     AND ${roleFilter}
-     ${statusFilter}
-     ${regionClause}`,
-    regionParam
-  );
-
-  const set = new Set<string>();
-  for (const row of result.rows) {
-    const phone = row.phone?.toString().trim();
-    if (!phone || !isValidGhanaPhone(phone)) continue;
-    set.add(formatGhanaPhone(phone));
-  }
-  return [...set];
-}
-
-/** Audience counts for admin SMS blast UI. */
-app.get('/api/admin/sms/audience', authenticateToken, async (req: any, res) => {
-  if (req.user.role !== 'admin') return res.sendStatus(403);
-  const region = typeof req.query.region === 'string' ? req.query.region.trim() : null;
-  try {
-    const audiences: SmsBlastAudience[] = [
-      'customers',
-      'riders',
-      'riders_active',
-      'riders_online',
-      'vendors',
-      'owners',
-      'all',
-    ];
-    const counts: Record<string, number> = {};
-    for (const a of audiences) {
-      counts[a] = await countSmsAudience(a, region);
-    }
-    const cfg = await getSmsConfig();
-    res.json({
-      counts,
-      region: region || null,
-      sms_configured: Boolean(cfg.apiKey && cfg.apiKey.length > 8),
-      sender_id: cfg.senderId,
-      max_recipients: SMS_BLAST_MAX_RECIPIENTS,
-      max_message_length: SMS_BLAST_MAX_LENGTH,
-    });
-  } catch (err: any) {
-    console.error('[admin/sms/audience]', err);
-    res.status(500).json({ message: 'Failed to load SMS audience' });
-  }
-});
-
-/** Promotional / ops SMS blast to customers, riders, vendors, or custom numbers. */
-app.post('/api/admin/sms/blast', authenticateToken, async (req: any, res) => {
-  if (req.user.role !== 'admin') return res.sendStatus(403);
-
-  const audience = normalizeSmsAudience(req.body?.audience);
-  const message = String(req.body?.message ?? '').trim();
-  const region =
-    typeof req.body?.region === 'string' && req.body.region.trim()
-      ? req.body.region.trim()
-      : null;
-  const customPhones = Array.isArray(req.body?.phones) ? req.body.phones : [];
-
-  if (!audience) {
-    return res.status(400).json({
-      message:
-        'Choose audience: customers, riders, riders_active, riders_online, vendors, owners, all, or custom.',
-    });
-  }
-  if (!message || message.length < 3) {
-    return res.status(400).json({ message: 'Enter a message (at least 3 characters).' });
-  }
-  if (message.length > SMS_BLAST_MAX_LENGTH) {
-    return res.status(400).json({
-      message: `Message too long (max ${SMS_BLAST_MAX_LENGTH} characters).`,
-    });
-  }
-
-  try {
-    let phones = await resolveSmsAudiencePhones(audience, { phones: customPhones, region });
-    if (!phones.length) {
-      return res.status(400).json({ message: 'No valid phone numbers found for this audience.' });
-    }
-    if (phones.length > SMS_BLAST_MAX_RECIPIENTS) {
-      phones = phones.slice(0, SMS_BLAST_MAX_RECIPIENTS);
-    }
-
-    const results: { phone: string; ok: boolean; error?: string }[] = [];
-    let sent = 0;
-    let failed = 0;
-
-    for (const phone of phones) {
-      try {
-        await sendSMS(phone, message);
-        sent += 1;
-        results.push({ phone, ok: true });
-      } catch (err: any) {
-        failed += 1;
-        results.push({ phone, ok: false, error: err?.message || 'Send failed' });
-      }
-      // Gentle throttle for INTEK gateway
-      await new Promise((r) => setTimeout(r, 120));
-    }
-
-    console.info(
-      `[admin/sms/blast] admin=${req.user.id} audience=${audience} sent=${sent} failed=${failed}`,
-    );
-
-    res.json({
-      success: failed === 0,
-      audience,
-      region,
-      message_preview: message.slice(0, 80) + (message.length > 80 ? '…' : ''),
-      total: phones.length,
-      sent,
-      failed,
-      results: results.slice(0, 50),
-    });
-  } catch (err: any) {
-    console.error('[admin/sms/blast]', err);
-    res.status(502).json({ message: err.message || 'SMS blast failed' });
   }
 });
 
@@ -7887,7 +5679,7 @@ app.get('/api/admin/riders/:id/profile', authenticateToken, async (req: any, res
   try {
     const userRes = await pool.query(
       `SELECT u.id, u.name, u.email, u.phone, u.region, u.status, u.is_online, u.balance,
-              u.lat, u.lng, u.address, u.avatar_url, u.created_at, u.rider_vehicle_type,
+              u.lat, u.lng, u.address, u.avatar_url, u.created_at,
               rl.lat AS live_lat, rl.lng AS live_lng, rl.updated_at AS location_updated_at
        FROM users u
        LEFT JOIN rider_locations rl ON rl.rider_id = u.id
@@ -7897,11 +5689,7 @@ app.get('/api/admin/riders/:id/profile', authenticateToken, async (req: any, res
     const user = userRes.rows[0];
     if (!user) return res.status(404).json({ message: 'Driver not found' });
 
-    const docsRes = await pool.query(
-      `SELECT doc_type, review_status, rejection_reason, uploaded_at, reviewed_at
-       FROM rider_documents WHERE user_id = $1 ORDER BY doc_type`,
-      [id]
-    );
+    const documents = await fetchRiderDocuments(id, { adminReview: true });
 
     const statsRes = await pool.query(
       `SELECT
@@ -7972,8 +5760,9 @@ app.get('/api/admin/riders/:id/profile', authenticateToken, async (req: any, res
         is_online: user.is_online === true,
         balance: parseFloat(user.balance),
         address: user.address,
-        avatar_url: user.avatar_url,
-        rider_vehicle_type: user.rider_vehicle_type ?? 'motorcycle',
+        avatar_url: await resolveImageUrlForClient(user.avatar_url, {
+          adminReview: true,
+        }),
         created_at: user.created_at,
         profile_lat: user.lat != null ? parseFloat(user.lat) : null,
         profile_lng: user.lng != null ? parseFloat(user.lng) : null,
@@ -7990,7 +5779,7 @@ app.get('/api/admin/riders/:id/profile', authenticateToken, async (req: any, res
       commission_policy: settings,
       commission_totals: commissionTotals,
       settlements,
-      documents: docsRes.rows,
+      documents,
       recent_trips: recentTripsRes.rows,
     });
   } catch (err) {
@@ -8004,7 +5793,6 @@ app.patch('/api/admin/users/:id/status', authenticateToken, async (req: any, res
   const { status } = req.body;
   const { id } = req.params;
   try {
-    const before = await pool.query('SELECT status, role FROM users WHERE id = $1', [id]);
     const isRiderActivate = status === 'active';
     const result = await pool.query(
       `UPDATE users SET status = $1,
@@ -8014,7 +5802,6 @@ app.patch('/api/admin/users/:id/status', authenticateToken, async (req: any, res
     );
     if (result.rows[0]) {
       const row = result.rows[0];
-      invalidateAuthStatus(id);
       if (row.role === 'rider' && status === 'active') {
         await pool.query(
           `UPDATE rider_documents SET review_status = 'approved', rejection_reason = NULL,
@@ -8024,10 +5811,6 @@ app.patch('/api/admin/users/:id/status', authenticateToken, async (req: any, res
       }
       res.json(row);
       io.to(id).emit('status:updated', { status, is_online: row.is_online });
-      if (status === 'active' && before.rows[0]?.status !== 'active') {
-        const kind = roleToApprovalKind(row.role);
-        if (kind) void notifyApprovalSms(id, kind);
-      }
     } else {
       res.status(404).json({ message: 'User not found' });
     }
@@ -8039,6 +5822,7 @@ app.patch('/api/admin/users/:id/status', authenticateToken, async (req: any, res
 // Order Routes
 app.get('/api/orders', authenticateToken, async (req: any, res) => {
   try {
+    await activateDueScheduledOrders();
     if (req.user.role === 'customer') {
       await repairStaleTripsForCustomer(req.user.id);
     }
@@ -8058,11 +5842,6 @@ app.get('/api/orders', authenticateToken, async (req: any, res) => {
       if (rider?.status !== 'active') {
         return res.json([]);
       }
-      // Online riders polling for jobs also kick orphan re-dispatch — self-heals
-      // if create-time broadcast was missed (deploy restart, emit error, etc.).
-      if (rider?.is_online === true) {
-        kickOrphanRedispatch('rider-poll');
-      }
 
       query = `
         SELECT o.*, odo.expires_at AS rider_offer_expires_at, odo.wave AS rider_offer_wave,
@@ -8076,29 +5855,24 @@ app.get('/api/orders', authenticateToken, async (req: any, res) => {
         WHERE (
           o.rider_id = $1
         ) OR (
-          o.status = 'ready'
+          (
+            o.status = 'ready'
+            OR (
+              o.status = 'pending'
+              AND o.vendor_id IS NOT NULL
+              AND o.order_type IN ('food', 'courier')
+            )
+          )
           AND o.rider_id IS NULL
           AND odo.order_id IS NOT NULL
           AND $2 = true
         )
-        ORDER BY o.created_at DESC
-        LIMIT $3 OFFSET $4`;
-      const riderLimit = Math.min(
-        Math.max(parseInt(String(req.query.limit || '80'), 10) || 80, 1),
-        150
-      );
-      const riderOffset = Math.max(parseInt(String(req.query.offset || '0'), 10) || 0, 0);
-      params.push(req.user.id, rider?.is_online === true, riderLimit, riderOffset);
+        ORDER BY o.created_at DESC`;
+      params.push(req.user.id, rider?.is_online === true);
     }
 
     if (req.user.role !== 'rider') {
-      const limit = Math.min(
-        Math.max(parseInt(String(req.query.limit || '120'), 10) || 120, 1),
-        300
-      );
-      const offset = Math.max(parseInt(String(req.query.offset || '0'), 10) || 0, 0);
-      query += ` ORDER BY o.created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
-      params.push(limit, offset);
+      query += ' ORDER BY o.created_at DESC';
     }
 
     const result = await pool.query(query, params);
@@ -8147,10 +5921,8 @@ app.post('/api/orders', authenticateToken, async (req: any, res) => {
     payment_reference,
     payment_method,
     delivery_fee,
-    service_type,
-    serviceType,
-    passenger_count,
-    passengerCount,
+    vehicle_type,
+    vehicleType,
   } = req.body;
   
   let paymentStatus = 'pending';
@@ -8201,11 +5973,6 @@ app.post('/api/orders', authenticateToken, async (req: any, res) => {
   }
 
   const finalOrderType = orderType || order_type || 'food';
-  const finalServiceType = normalizeRideServiceType(service_type ?? serviceType);
-  const maxPax = RIDE_SERVICE_META[finalServiceType].maxPassengers;
-  const rawPax = parseInt(String(passenger_count ?? passengerCount ?? 1), 10) || 1;
-  const finalPassengerCount =
-    finalServiceType === 'package' ? 0 : Math.max(1, Math.min(maxPax, rawPax));
   try {
     let finalPickup = pickup;
     let pickupLat = null;
@@ -8250,9 +6017,9 @@ app.post('/api/orders', authenticateToken, async (req: any, res) => {
     }
 
     let finalDeliveryFee = Number(delivery_fee) || 0;
-    let orderPromotionId: string | null = null;
-    let orderPromotionDiscount = 0;
-    let orderRiderBonus = 0;
+    const orderVehicleType = String(vehicle_type || vehicleType || 'bike').trim().toLowerCase();
+    const normalizedOrderVehicle =
+      orderVehicleType === 'tricycle' ? 'tricycle' : 'bike';
     if (
       pickupLat != null &&
       pickupLng != null &&
@@ -8282,13 +6049,9 @@ app.post('/api/orders', authenticateToken, async (req: any, res) => {
         Number(lng),
         finalRegion,
         finalRegion,
-        finalServiceType,
-        { promo_code: req.body.promo_code ?? req.body.promoCode, region: finalRegion }
+        normalizedOrderVehicle
       );
       finalDeliveryFee = quote.delivery_fee;
-      orderPromotionId = quote.promotion_id;
-      orderPromotionDiscount = quote.promotion_discount;
-      orderRiderBonus = quote.rider_bonus_amount;
       const itemsSubtotal = Array.isArray(items)
         ? items.reduce(
             (sum: number, it: any) =>
@@ -8319,107 +6082,24 @@ app.post('/api/orders', authenticateToken, async (req: any, res) => {
     const scheduledRaw = scheduledTime || scheduled_time || null;
     const scheduledDate = parseScheduledTimeInput(scheduledRaw);
     const scheduled = scheduledDate ? scheduledDate.toISOString() : null;
-    const isPharmacyShopOrder =
-      Boolean(vendorId) && finalOrderType === 'food';
     const initialStatus = isFutureScheduled(scheduledDate)
       ? 'scheduled'
-      : isPharmacyShopOrder
-        ? 'pending'
-        : finalOrderType === 'courier'
-          ? 'ready'
-          : 'pending';
+      : finalOrderType === 'courier' || (vendorId && finalOrderType === 'food')
+        ? 'ready'
+        : 'pending';
 
     const result = await pool.query(
-      `INSERT INTO orders (
-        customer_id, vendor_id, items, total, status, address, pickup_address, order_type,
-        scheduled_time, lat, lng, pickup_lat, pickup_lng, region, payment_status, payment_method,
-        delivery_fee, service_type, passenger_count, promotion_id, promotion_discount, rider_bonus_amount
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22) RETURNING *`,
-      [
-        req.user.id,
-        vendorId,
-        JSON.stringify(items),
-        total,
-        initialStatus,
-        address || 'Customer Address',
-        finalPickup || 'Pickup',
-        finalOrderType,
-        scheduled,
-        lat,
-        lng,
-        pickupLat,
-        pickupLng,
-        finalRegion,
-        paymentStatus,
-        finalPaymentMethod,
-        finalDeliveryFee,
-        finalServiceType,
-        finalServiceType === 'package' ? 0 : finalPassengerCount,
-        orderPromotionId,
-        orderPromotionDiscount,
-        orderRiderBonus,
-      ]
+      'INSERT INTO orders (customer_id, vendor_id, items, total, status, address, pickup_address, order_type, scheduled_time, lat, lng, pickup_lat, pickup_lng, region, payment_status, payment_method, delivery_fee, vehicle_type) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) RETURNING *',
+      [req.user.id, vendorId, JSON.stringify(items), total, initialStatus, address || 'Customer Address', finalPickup || 'Pickup', finalOrderType, scheduled, lat, lng, pickupLat, pickupLng, finalRegion, paymentStatus, finalPaymentMethod, finalDeliveryFee, normalizedOrderVehicle]
     );
     const order = result.rows[0];
-    if (orderPromotionId) {
-      await pool.query(
-        `UPDATE ride_promotions
-         SET redemption_count = redemption_count + 1, updated_at = CURRENT_TIMESTAMP
-         WHERE id = $1`,
-        [orderPromotionId]
-      );
+    res.json(order);
+    io.emit('order:new', order); // Notify vendors/admin
+    if (order.customer_id) {
+      io.to(String(order.customer_id)).emit('order:new', order);
     }
-
-    // Dispatch BEFORE responding so Android/iOS never get a "ready" trip with zero offers.
-    // Fire-and-forget previously raced crashes / emit errors and left customers hanging.
-    let responseOrder = order;
     if (isOfferableOrder(order)) {
-      try {
-        await broadcastRideOfferToRiders(order);
-        const refreshed = await pool.query('SELECT * FROM orders WHERE id = $1', [order.id]);
-        if (refreshed.rows[0]) responseOrder = refreshed.rows[0];
-        const offerCount = await pool.query(
-          `SELECT COUNT(*)::int AS c FROM order_dispatch_offers
-           WHERE order_id = $1 AND status = 'offered' AND expires_at > NOW()`,
-          [order.id]
-        );
-        console.info(
-          `[dispatch] create-time offer for ${order.id}: wave=${responseOrder.dispatch_wave ?? 'null'} openOffers=${offerCount.rows[0]?.c ?? 0}`
-        );
-      } catch (err) {
-        console.error(`[dispatch] create-time dispatch failed for ${order.id}:`, err);
-      }
-    }
-
-    res.json(responseOrder);
-    try {
-      io.emit('order:new', responseOrder);
-      if (responseOrder.customer_id) {
-        io.to(String(responseOrder.customer_id)).emit('order:new', responseOrder);
-      }
-      if (responseOrder.vendor_id) {
-        io.to(String(responseOrder.vendor_id)).emit('order:new', responseOrder);
-        void sendPushToUserIds([responseOrder.vendor_id], {
-          title: 'New pharmacy order',
-          body: 'Review items and confirm availability for the customer',
-          type: 'shop-order',
-          orderId: responseOrder.id,
-          channelId: 'trip_updates',
-          highPriority: true,
-        });
-      }
-      if (isPharmacyShopOrder(responseOrder) && responseOrder.customer_id) {
-        void sendPushToUserIds([responseOrder.customer_id], {
-          title: 'Order placed',
-          body: `${shopLabelForOrder(responseOrder)} is confirming your items`,
-          type: 'trip-update',
-          orderId: responseOrder.id,
-          channelId: 'trip_updates',
-          highPriority: false,
-        });
-      }
-    } catch (err) {
-      console.error('[socket] order:new broadcast failed:', err);
+      void broadcastRideOfferToRiders(order);
     }
   } catch (err) {
     console.error('Order creation error:', err);
@@ -8464,31 +6144,6 @@ app.patch('/api/orders/:id', authenticateToken, async (req: any, res) => {
       return res.status(400).json({ message: 'Deliveries must be completed with the customer delivery PIN.' });
     }
 
-    const currentRes = await pool.query('SELECT * FROM orders WHERE id = $1', [orderId]);
-    const current = currentRes.rows[0];
-    if (!current) {
-      return res.status(404).json({ message: 'Order not found' });
-    }
-
-    if (req.user.role === 'vendor') {
-      if (String(current.vendor_id) !== String(req.user.id)) {
-        return res.status(403).json({ message: 'Not your pharmacy order' });
-      }
-      if (riderId) {
-        return res.status(403).json({ message: 'Pharmacies cannot assign riders' });
-      }
-      if (status && status !== current.status) {
-        if (!isPharmacyShopOrder(current)) {
-          return res.status(403).json({ message: 'Only pharmacy shop orders can be updated here' });
-        }
-        if (!vendorMaySetPharmacyStatus(String(current.status), String(status))) {
-          return res.status(400).json({
-            message: `Cannot change order from ${current.status} to ${status}`,
-          });
-        }
-      }
-    }
-
     let result;
     if (status === 'picked_up') {
       const code = generateDeliveryCode();
@@ -8504,10 +6159,6 @@ app.patch('/api/orders/:id', authenticateToken, async (req: any, res) => {
     } else {
       let updateQuery = 'UPDATE orders SET status = $1';
       const params: any[] = [status];
-
-      if (status === 'cancelled') {
-        updateQuery += ', rider_id = NULL';
-      }
 
       if (riderId) {
         updateQuery += ', rider_id = $2';
@@ -8534,15 +6185,8 @@ app.patch('/api/orders/:id', authenticateToken, async (req: any, res) => {
       broadcastOrderUpdated(order);
       if (riderId && order.rider_id) {
         await notifyRideTaken(order.id, order.rider_id);
-      } else if (status === 'cancelled') {
-        clearDispatchTimer(orderId);
-        await pool.query(
-          `UPDATE order_dispatch_offers SET status = 'expired'
-           WHERE order_id = $1 AND status = 'offered'`,
-          [orderId]
-        );
       } else if (isOfferableOrder(order)) {
-        await broadcastRideOfferToRiders(order);
+        broadcastRideOfferToRiders(order);
       }
       if (status === 'delivered' && req.user.role === 'admin') {
         await settleOrderPayment(order);
@@ -8561,20 +6205,15 @@ app.post('/api/orders/:id/decline', authenticateToken, async (req: any, res) => 
   }
   const orderId = req.params.id;
   try {
-    const userRes = await pool.query(
-      'SELECT status, is_online FROM users WHERE id = $1',
-      [req.user.id]
-    );
-    const account = userRes.rows[0];
-    if (account?.status !== 'active') {
+    const userRes = await pool.query('SELECT status FROM users WHERE id = $1', [req.user.id]);
+    if (userRes.rows[0]?.status !== 'active') {
       return res.status(403).json({ message: 'Go online to respond to ride offers.' });
     }
     await recordRiderDecline(orderId, req.user.id);
     res.json({ ok: true });
   } catch (err) {
     console.error('[dispatch] decline failed:', err);
-    // Idempotent — rider already dismissed UI; don't surface a scary error.
-    res.json({ ok: true, note: 'offer_closed' });
+    res.status(500).json({ message: 'Server error' });
   }
 });
 
@@ -9222,29 +6861,14 @@ app.post('/api/orders/:id/messages', authenticateToken, async (req: any, res) =>
       });
     }
 
-    if (order.vendor_id) {
-      io.to(order.vendor_id).emit('order:message', {
-        orderId,
-        message: formatOrderMessage(row, order.vendor_id),
-      });
-    }
-
-    const recipientIds: string[] = [];
-    if (order.customer_id && String(req.user.id) !== String(order.customer_id)) {
-      recipientIds.push(order.customer_id);
-    }
-    if (order.rider_id && String(req.user.id) !== String(order.rider_id)) {
-      recipientIds.push(order.rider_id);
-    }
-    if (order.vendor_id && String(req.user.id) !== String(order.vendor_id)) {
-      recipientIds.push(order.vendor_id);
-    }
-    if (recipientIds.length) {
+    const recipientId =
+      req.user.id === order.customer_id ? order.rider_id : order.customer_id;
+    if (recipientId) {
       const senderName = displayUserName(nameRes.rows[0]?.name, {
         role: nameRes.rows[0]?.role,
         fallback: 'Someone',
       });
-      void sendPushToUserIds(recipientIds, {
+      void sendPushToUserIds([recipientId], {
         title: `Message from ${senderName}`,
         body: body.length > 140 ? `${body.slice(0, 137)}…` : body,
         type: 'trip-message',
@@ -9258,153 +6882,6 @@ app.post('/api/orders/:id/messages', authenticateToken, async (req: any, res) =>
   } catch (err: any) {
     const status = err.status || 500;
     res.status(status).json({ message: err.message || 'Server error' });
-  }
-});
-
-// --- Pharmacy shop chat (customer ↔ vendor) ---
-
-app.get('/api/shop/conversations', authenticateToken, async (req: any, res) => {
-  const role = req.user.role;
-  if (role !== 'customer' && role !== 'vendor') {
-    return res.status(403).json({ message: 'Customers and pharmacies only' });
-  }
-  try {
-    const sql =
-      role === 'vendor'
-        ? `SELECT c.*, cu.name AS customer_name, vu.name AS vendor_name, vu.shop_category
-           FROM shop_conversations c
-           JOIN users cu ON cu.id = c.customer_id
-           JOIN users vu ON vu.id = c.vendor_id
-           WHERE c.vendor_id = $1
-           ORDER BY c.last_message_at DESC
-           LIMIT 100`
-        : `SELECT c.*, cu.name AS customer_name, vu.name AS vendor_name, vu.shop_category
-           FROM shop_conversations c
-           JOIN users cu ON cu.id = c.customer_id
-           JOIN users vu ON vu.id = c.vendor_id
-           WHERE c.customer_id = $1
-           ORDER BY c.last_message_at DESC
-           LIMIT 100`;
-    const result = await pool.query(sql, [req.user.id]);
-    res.json(result.rows.map((row: any) => formatShopConversation(row, req.user.id, role)));
-  } catch (err) {
-    console.error('Shop conversations list error:', err);
-    res.status(500).json({ message: 'Server error' });
-  }
-});
-
-app.post('/api/shop/conversations', authenticateToken, async (req: any, res) => {
-  const role = req.user.role;
-  const vendorId = String(req.body?.vendorId ?? req.body?.vendor_id ?? '').trim();
-  const customerId = String(req.body?.customerId ?? req.body?.customer_id ?? '').trim();
-
-  try {
-    let customer = req.user.id;
-    let vendor = vendorId;
-    if (role === 'customer') {
-      if (!vendorId) return res.status(400).json({ message: 'vendor_id is required' });
-      const vRes = await pool.query(
-        `SELECT id FROM users WHERE id = $1 AND role = 'vendor' AND status = 'active'`,
-        [vendorId]
-      );
-      if (vRes.rowCount === 0) {
-        return res.status(404).json({ message: 'Pharmacy not found' });
-      }
-    } else if (role === 'vendor') {
-      if (!customerId) return res.status(400).json({ message: 'customer_id is required' });
-      vendor = req.user.id;
-      customer = customerId;
-    } else {
-      return res.status(403).json({ message: 'Customers and pharmacies only' });
-    }
-
-    let convRes = await pool.query(
-      `SELECT c.*, cu.name AS customer_name, vu.name AS vendor_name, vu.shop_category
-       FROM shop_conversations c
-       JOIN users cu ON cu.id = c.customer_id
-       JOIN users vu ON vu.id = c.vendor_id
-       WHERE c.customer_id = $1 AND c.vendor_id = $2`,
-      [customer, vendor]
-    );
-    if (convRes.rowCount === 0) {
-      const ins = await pool.query(
-        `INSERT INTO shop_conversations (customer_id, vendor_id)
-         VALUES ($1, $2)
-         RETURNING id`,
-        [customer, vendor]
-      );
-      convRes = await pool.query(
-        `SELECT c.*, cu.name AS customer_name, vu.name AS vendor_name, vu.shop_category
-         FROM shop_conversations c
-         JOIN users cu ON cu.id = c.customer_id
-         JOIN users vu ON vu.id = c.vendor_id
-         WHERE c.id = $1`,
-        [ins.rows[0].id]
-      );
-    }
-    res.status(201).json(formatShopConversation(convRes.rows[0], req.user.id, role));
-  } catch (err: any) {
-    console.error('Shop conversation create error:', err);
-    res.status(500).json({ message: err.message || 'Server error' });
-  }
-});
-
-app.get('/api/shop/conversations/:id/messages', authenticateToken, async (req: any, res) => {
-  try {
-    await assertShopConversationAccess(req.params.id, req.user.id);
-    const result = await pool.query(
-      `SELECT m.*, u.name AS sender_name, u.role AS sender_role
-       FROM shop_messages m
-       JOIN users u ON u.id = m.sender_id
-       WHERE m.conversation_id = $1
-       ORDER BY m.created_at ASC
-       LIMIT 300`,
-      [req.params.id]
-    );
-    res.json(result.rows.map((row: any) => formatShopMessage(row, req.user.id)));
-  } catch (err: any) {
-    res.status(err.status || 500).json({ message: err.message || 'Server error' });
-  }
-});
-
-app.post('/api/shop/conversations/:id/messages', authenticateToken, async (req: any, res) => {
-  const body = String(req.body?.body ?? req.body?.text ?? '').trim();
-  if (!body) return res.status(400).json({ message: 'Message cannot be empty' });
-  if (body.length > 1000) {
-    return res.status(400).json({ message: 'Message is too long (max 1000 characters)' });
-  }
-  try {
-    const conversation = await assertShopConversationAccess(req.params.id, req.user.id);
-    const inserted = await pool.query(
-      `INSERT INTO shop_messages (conversation_id, sender_id, body)
-       VALUES ($1, $2, $3)
-       RETURNING *`,
-      [req.params.id, req.user.id, body]
-    );
-    const row = inserted.rows[0];
-    const nameRes = await pool.query('SELECT name, role FROM users WHERE id = $1', [req.user.id]);
-    row.sender_name = nameRes.rows[0]?.name;
-    row.sender_role = nameRes.rows[0]?.role;
-    await emitShopMessage(conversation, row, req.user.id);
-    res.status(201).json(formatShopMessage(row, req.user.id));
-  } catch (err: any) {
-    res.status(err.status || 500).json({ message: err.message || 'Server error' });
-  }
-});
-
-app.post('/api/shop/conversations/:id/read', authenticateToken, async (req: any, res) => {
-  try {
-    const conversation = await assertShopConversationAccess(req.params.id, req.user.id);
-    const isVendor = String(conversation.vendor_id) === String(req.user.id);
-    await pool.query(
-      `UPDATE shop_conversations
-       SET ${isVendor ? 'vendor_unread = 0' : 'customer_unread = 0'}
-       WHERE id = $1`,
-      [req.params.id]
-    );
-    res.json({ ok: true });
-  } catch (err: any) {
-    res.status(err.status || 500).json({ message: err.message || 'Server error' });
   }
 });
 
@@ -9708,15 +7185,11 @@ app.patch('/api/admin/products/:id/approve', authenticateToken, async (req: any,
   if (req.user.role !== 'admin') return res.status(403).json({ message: 'Unauthorized' });
   try {
     const result = await pool.query(
-      'UPDATE products SET is_approved = true WHERE id = $1 RETURNING id, name, vendor_id',
+      'UPDATE products SET is_approved = true WHERE id = $1 RETURNING *',
       [req.params.id]
     );
     if (!result.rows[0]) return res.status(404).json({ message: 'Product not found' });
-    const product = result.rows[0];
-    res.json(product);
-    if (product.vendor_id) {
-      void notifyApprovalSms(product.vendor_id, 'product', { productName: product.name });
-    }
+    res.json(result.rows[0]);
   } catch (err) {
     res.status(500).json({ message: 'Failed to approve product' });
   }
@@ -9766,10 +7239,6 @@ app.get('/api/admin/settings', authenticateToken, async (req: any, res) => {
       delivery_price_per_km: pricePerKm || '4',
       delivery_min_fee: minFee ?? '',
       delivery_max_fee: maxFee ?? '',
-      okada_price_per_km: (await getSetting('okada_price_per_km')) || '3.5',
-      okada_min_fee: (await getSetting('okada_min_fee')) || '6',
-      keke_price_per_km: (await getSetting('keke_price_per_km')) || '2.5',
-      keke_min_fee: (await getSetting('keke_min_fee')) || '5',
       surge_enabled: surge.enabled ? 'true' : 'false',
       surge_multiplier: String(surge.multiplier),
       surge_start_time: surge.start_time,
@@ -9799,10 +7268,6 @@ app.patch('/api/admin/settings', authenticateToken, async (req: any, res) => {
     delivery_price_per_km,
     delivery_min_fee,
     delivery_max_fee,
-    okada_price_per_km,
-    okada_min_fee,
-    keke_price_per_km,
-    keke_min_fee,
     surge_enabled,
     surge_multiplier,
     surge_start_time,
@@ -9815,10 +7280,6 @@ app.patch('/api/admin/settings', authenticateToken, async (req: any, res) => {
     delivery_price_per_km != null ||
     delivery_min_fee != null ||
     delivery_max_fee != null ||
-    okada_price_per_km != null ||
-    okada_min_fee != null ||
-    keke_price_per_km != null ||
-    keke_min_fee != null ||
     surge_enabled != null ||
     surge_multiplier != null ||
     surge_start_time != null ||
@@ -9883,22 +7344,6 @@ app.patch('/api/admin/settings', authenticateToken, async (req: any, res) => {
         await setSetting('delivery_max_fee', String(max));
       }
     }
-    if (okada_price_per_km != null) {
-      const rate = Math.max(0.01, parseFloat(String(okada_price_per_km)) || 3.5);
-      await setSetting('okada_price_per_km', String(rate));
-    }
-    if (okada_min_fee != null) {
-      const min = Math.max(0, parseFloat(String(okada_min_fee)) || 0);
-      await setSetting('okada_min_fee', String(min));
-    }
-    if (keke_price_per_km != null) {
-      const rate = Math.max(0.01, parseFloat(String(keke_price_per_km)) || 2.5);
-      await setSetting('keke_price_per_km', String(rate));
-    }
-    if (keke_min_fee != null) {
-      const min = Math.max(0, parseFloat(String(keke_min_fee)) || 0);
-      await setSetting('keke_min_fee', String(min));
-    }
     if (surge_enabled != null) {
       const on =
         surge_enabled === true ||
@@ -9954,182 +7399,6 @@ app.patch('/api/admin/settings', authenticateToken, async (req: any, res) => {
     res.json({ success: true, message: 'Settings updated', pricing });
   } catch (err) {
     res.status(500).json({ message: 'Failed to update settings' });
-  }
-});
-
-app.get('/api/admin/promotions', authenticateToken, async (req: any, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ message: 'Unauthorized' });
-  try {
-    await ensureRidePromotionsSchema();
-    const result = await pool.query(
-      `SELECT * FROM ride_promotions ORDER BY updated_at DESC, created_at DESC`
-    );
-    res.json(result.rows.map((row) => ridePromotionForClient(row as RidePromotionRow)));
-  } catch (err) {
-    res.status(500).json({ message: 'Failed to load promotions' });
-  }
-});
-
-app.post('/api/admin/promotions', authenticateToken, async (req: any, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ message: 'Unauthorized' });
-  const {
-    name,
-    code,
-    service_types,
-    customer_discount_percent,
-    customer_discount_fixed,
-    rider_bonus_amount,
-    target_region,
-    enabled,
-    starts_at,
-    ends_at,
-    max_redemptions,
-    announce_sms,
-  } = req.body;
-  if (!String(name || '').trim()) {
-    return res.status(400).json({ message: 'Promotion name is required' });
-  }
-  try {
-    await ensureRidePromotionsSchema();
-    const result = await pool.query(
-      `INSERT INTO ride_promotions (
-        name, code, service_types, customer_discount_percent, customer_discount_fixed,
-        rider_bonus_amount, target_region, enabled, starts_at, ends_at, max_redemptions
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-      RETURNING *`,
-      [
-        String(name).trim(),
-        code ? String(code).trim().toUpperCase() : null,
-        String(service_types || 'okada,keke,package').trim(),
-        Math.max(0, Math.min(100, parseFloat(String(customer_discount_percent)) || 0)),
-        Math.max(0, parseFloat(String(customer_discount_fixed)) || 0),
-        Math.max(0, parseFloat(String(rider_bonus_amount)) || 0),
-        target_region ? String(target_region).trim() : null,
-        enabled !== false,
-        starts_at || null,
-        ends_at || null,
-        max_redemptions != null && max_redemptions !== ''
-          ? Math.max(1, parseInt(String(max_redemptions), 10) || 0)
-          : null,
-      ]
-    );
-    const promo = result.rows[0] as RidePromotionRow;
-    res.status(201).json(ridePromotionForClient(promo));
-    const shouldAnnounce = announce_sms !== false && promo.enabled !== false;
-    if (shouldAnnounce) {
-      void announcePromotionSms(promo, { force: true });
-    }
-  } catch (err) {
-    res.status(500).json({ message: 'Failed to create promotion' });
-  }
-});
-
-app.patch('/api/admin/promotions/:id', authenticateToken, async (req: any, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ message: 'Unauthorized' });
-  const { id } = req.params;
-  const fields = [
-    'name',
-    'code',
-    'service_types',
-    'customer_discount_percent',
-    'customer_discount_fixed',
-    'rider_bonus_amount',
-    'target_region',
-    'enabled',
-    'starts_at',
-    'ends_at',
-    'max_redemptions',
-  ] as const;
-  const updates: string[] = [];
-  const values: unknown[] = [];
-  let idx = 1;
-  for (const key of fields) {
-    if (req.body[key] === undefined) continue;
-    let val = req.body[key];
-    if (key === 'code') val = val ? String(val).trim().toUpperCase() : null;
-    else if (key === 'name') val = String(val).trim();
-    else if (key === 'service_types') val = String(val).trim();
-    else if (key === 'target_region') val = val ? String(val).trim() : null;
-    else if (key === 'enabled') val = val === true || val === 'true' || val === 1 || val === '1';
-    else if (key === 'customer_discount_percent') {
-      val = Math.max(0, Math.min(100, parseFloat(String(val)) || 0));
-    } else if (
-      key === 'customer_discount_fixed' ||
-      key === 'rider_bonus_amount'
-    ) {
-      val = Math.max(0, parseFloat(String(val)) || 0);
-    } else if (key === 'max_redemptions') {
-      val =
-        val != null && val !== ''
-          ? Math.max(1, parseInt(String(val), 10) || 0)
-          : null;
-    }
-    updates.push(`${key} = $${idx++}`);
-    values.push(val);
-  }
-  if (!updates.length) return res.status(400).json({ message: 'No fields to update' });
-  updates.push('updated_at = CURRENT_TIMESTAMP');
-  values.push(id);
-  try {
-    await ensureRidePromotionsSchema();
-    const prev = await pool.query('SELECT * FROM ride_promotions WHERE id = $1', [id]);
-    const result = await pool.query(
-      `UPDATE ride_promotions SET ${updates.join(', ')} WHERE id = $${idx} RETURNING *`,
-      values
-    );
-    if (!result.rows[0]) return res.status(404).json({ message: 'Promotion not found' });
-    const promo = result.rows[0] as RidePromotionRow;
-    res.json(ridePromotionForClient(promo));
-    const enabledNow = promo.enabled === true;
-    const wasEnabled = prev.rows[0]?.enabled === true;
-    const shouldAnnounce =
-      req.body.announce_sms === true || (req.body.enabled === true && !wasEnabled && enabledNow);
-    if (shouldAnnounce) {
-      void announcePromotionSms(promo, { force: req.body.announce_sms === true });
-    }
-  } catch (err) {
-    res.status(500).json({ message: 'Failed to update promotion' });
-  }
-});
-
-app.post('/api/admin/promotions/:id/announce', authenticateToken, async (req: any, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ message: 'Unauthorized' });
-  try {
-    await ensureRidePromotionsSchema();
-    const result = await pool.query('SELECT * FROM ride_promotions WHERE id = $1', [req.params.id]);
-    if (!result.rows[0]) return res.status(404).json({ message: 'Promotion not found' });
-    const promo = result.rows[0] as RidePromotionRow;
-    if (!promo.enabled) {
-      return res.status(400).json({ message: 'Enable the promotion before sending SMS' });
-    }
-    const outcome = await announcePromotionSms(promo, { force: true });
-    res.json({
-      success: true,
-      sent: outcome.sent,
-      skipped: outcome.skipped,
-      message:
-        outcome.sent > 0
-          ? `Promotion SMS sent to ${outcome.sent} phone(s)`
-          : outcome.skipped
-            ? 'SMS already announced for this promotion (use force via re-enable)'
-            : 'No matching phone numbers found',
-    });
-  } catch (err: any) {
-    res.status(502).json({ message: err?.message || 'Failed to announce promotion' });
-  }
-});
-
-app.delete('/api/admin/promotions/:id', authenticateToken, async (req: any, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ message: 'Unauthorized' });
-  try {
-    await ensureRidePromotionsSchema();
-    const result = await pool.query('DELETE FROM ride_promotions WHERE id = $1 RETURNING id', [
-      req.params.id,
-    ]);
-    if (!result.rows[0]) return res.status(404).json({ message: 'Promotion not found' });
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ message: 'Failed to delete promotion' });
   }
 });
 
@@ -10282,16 +7551,15 @@ app.post('/api/delivery/calculate', authenticateToken, async (req: any, res) => 
     destination_lng,
     pickup_region,
     destination_region,
-    service_type,
-    serviceType,
-    promo_code,
-    promoCode,
+    vehicle_type,
+    vehicleType,
   } = req.body;
   const pLat = Number(pickup_lat);
   const pLng = Number(pickup_lng);
   const dLat = Number(dest_lat ?? destination_lat);
   const dLng = Number(dest_lng ?? destination_lng);
-  const rideService = normalizeRideServiceType(service_type ?? serviceType);
+  const normalizedVehicle = String(vehicle_type || vehicleType || 'bike').trim().toLowerCase();
+  const vehicleForQuote = normalizedVehicle === 'tricycle' ? 'tricycle' : 'bike';
   if (!pLat || !pLng || !dLat || !dLng) {
     return res.status(400).json({ message: 'pickup and destination coordinates required' });
   }
@@ -10303,24 +7571,16 @@ app.post('/api/delivery/calculate', authenticateToken, async (req: any, res) => 
       dLng,
       pickup_region,
       destination_region,
-      rideService,
-      { promo_code: promo_code ?? promoCode, region: destination_region ?? pickup_region }
+      vehicleForQuote
     );
-    const meta = RIDE_SERVICE_META[rideService];
     res.json({
       ...quote,
-      service_type: rideService,
-      service_label: meta.label,
-      max_passengers: meta.maxPassengers,
       route: {
         legs: [
           {
-            from: rideService === 'package' ? 'pickup' : 'you',
-            to: 'destination',
-            label:
-              rideService === 'package'
-                ? 'Pickup → Drop-off'
-                : `${meta.label} ride`,
+            from: 'shop',
+            to: 'customer',
+            label: 'Shop → You',
             distance_km: quote.distance_km,
           },
         ],
@@ -10390,24 +7650,14 @@ app.post('/api/push/test-incoming-ride', authenticateToken, async (req: any, res
   if (req.user.role !== 'rider') {
     return res.status(403).json({ message: 'Riders only' });
   }
+  if (!req.user.is_online) {
+    return res.status(400).json({
+      message: 'Go Online first — then lock the screen and call this again',
+    });
+  }
   try {
-    // JWT is minimal {id,role} — always read is_online from DB.
-    const userRes = await pool.query(
-      'SELECT status, is_online FROM users WHERE id = $1',
-      [req.user.id]
-    );
-    const account = userRes.rows[0];
-    if (account?.status !== 'active' || account?.is_online !== true) {
-      return res.status(400).json({
-        message: 'Go Online first — then lock the screen and call this again',
-      });
-    }
     const tokRes = await pool.query(
-      `SELECT DISTINCT ON (LOWER(COALESCE(NULLIF(TRIM(platform), ''), 'android')))
-         token, platform, updated_at
-       FROM fcm_tokens
-       WHERE user_id = $1
-       ORDER BY LOWER(COALESCE(NULLIF(TRIM(platform), ''), 'android')), updated_at DESC NULLS LAST`,
+      `SELECT token, platform FROM fcm_tokens WHERE user_id = $1`,
       [req.user.id]
     );
     if (!tokRes.rows.length) {
@@ -10417,7 +7667,6 @@ app.post('/api/push/test-incoming-ride', authenticateToken, async (req: any, res
         tokens: 0,
       });
     }
-    const expiresAt = new Date(Date.now() + OFFER_TTL_SEC * 1000).toISOString();
     await sendPushToUserIds([req.user.id], {
       title: 'Test delivery job',
       body: 'Screen-off alert test — tap to open BytzGo',
@@ -10425,11 +7674,6 @@ app.post('/api/push/test-incoming-ride', authenticateToken, async (req: any, res
       orderId: 'test-push',
       channelId: 'incoming_rides_alarm',
       highPriority: true,
-      expiresAt,
-      status: 'ready',
-      pickup: 'Test pickup',
-      address: 'Test drop-off',
-      orderType: 'courier',
     });
     res.json({
       ok: true,
@@ -10494,58 +7738,22 @@ app.delete('/api/push/subscribe', authenticateToken, async (req: any, res) => {
 });
 
 // Socket.io Connection
-function socketTokenFromHandshake(socket: any): string | null {
-  const authToken = socket.handshake?.auth?.token;
-  if (typeof authToken === 'string' && authToken.trim()) return authToken.trim();
-  const header = socket.handshake?.headers?.authorization;
-  if (typeof header === 'string' && header.startsWith('Bearer ')) {
-    return header.slice(7).trim();
-  }
-  return null;
-}
-
-io.use((socket, next) => {
-  const token = socketTokenFromHandshake(socket);
-  if (!token) {
-    (socket as any).data = { user: null };
-    return next();
-  }
-  jwt.verify(token, process.env.JWT_SECRET as string, (err: any, user: any) => {
-    (socket as any).data = { user: err ? null : user };
-    next();
-  });
-});
-
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
 
   socket.on('join', (userId) => {
     if (!userId) return;
-    const user = (socket as any).data?.user;
     const room = String(userId).trim();
-    if (user && String(user.id) !== room) {
-      console.warn(`[socket] join rejected for ${socket.id}: room ${room} != user ${user.id}`);
-      return;
-    }
     socket.join(room);
     console.log(`User ${room} joined their room`);
   });
 
   socket.on('location:update', async ({ userId, lat, lng }) => {
     if (!userId || lat == null || lng == null) return;
-    const user = (socket as any).data?.user;
     const riderId = String(userId).trim();
-    if (user) {
-      if (String(user.id) !== riderId || user.role !== 'rider') return;
-    }
     try {
       await pool.query(
         'INSERT INTO rider_locations (rider_id, lat, lng, updated_at) VALUES ($1, $2, $3, CURRENT_TIMESTAMP) ON CONFLICT (rider_id) DO UPDATE SET lat = $2, lng = $3, updated_at = CURRENT_TIMESTAMP',
-        [riderId, lat, lng]
-      );
-      // Keep profile pin in sync so dispatch can match when GPS feed pauses.
-      await pool.query(
-        `UPDATE users SET lat = $2, lng = $3 WHERE id = $1 AND role = 'rider'`,
         [riderId, lat, lng]
       );
       const payload = { riderId, lat, lng };
@@ -10596,20 +7804,6 @@ app.get('/auth/google-mobile', (_req, res) => {
   }
   res.set('Cache-Control', 'no-store');
   res.type('html').sendFile(file);
-});
-
-/** iOS build metadata (App Store / TestFlight — no IPA hosted here). */
-app.get('/download/ios/version', (_req, res) => {
-  const candidates = [
-    path.join(__dirname, '..', 'public', 'ios-version.json'),
-    path.join(__dirname, '..', 'dist', 'ios-version.json'),
-  ];
-  const file = candidates.find((p) => fs.existsSync(p));
-  if (!file) {
-    return res.json({ version: 'unknown', platform: 'ios' });
-  }
-  res.setHeader('Cache-Control', 'no-store');
-  res.type('json').sendFile(file);
 });
 
 /** Direct APK install for testers / before Play listing (file copied by scripts/copy-apk-to-public.mjs). */
@@ -10708,87 +7902,8 @@ function attachWebApp() {
 
 attachWebApp();
 
-app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  if (err?.message === 'Not allowed by CORS') {
-    return res.status(403).json({ message: 'Origin not allowed' });
-  }
-  console.error('Unhandled route error:', err);
-  if (!res.headersSent) {
-    res.status(500).json({ message: 'Server error' });
-  }
-});
-
-assertProductionConfig();
-
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
-
-function shutdown(signal: string) {
-  console.log(`[shutdown] ${signal} — closing HTTP server and DB pool`);
-  httpServer.close(() => {
-    pool
-      .end()
-      .then(() => process.exit(0))
-      .catch(() => process.exit(1));
-  });
-  setTimeout(() => process.exit(1), 10_000).unref();
-}
-
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT', () => shutdown('SIGINT'));
-process.on('unhandledRejection', (reason) => {
-  console.error('[process] unhandledRejection:', reason);
-});
-process.on('uncaughtException', (err) => {
-  console.error('[process] uncaughtException:', err);
-  shutdown('uncaughtException');
-});
-
 httpServer.listen(PORT, HOST, () => {
   console.log(`Server running on http://${HOST}:${PORT}`);
-  console.log(
-    `[dispatch] Bolt-style: TTL ${OFFER_TTL_SEC}s, ${ridersPerWave(1)}/wave, orphan ${ORPHAN_REDISPATCH_INTERVAL_MS / 1000}s, decline→next nearest`
-  );
-  void ensureRidePromotionsSchema().catch((err) =>
-    console.warn('[promotions] schema init failed:', err)
-  );
-  // Production skips initDb — run phantom prune here so it actually executes on Render.
-  void pruneStaleOnlineRiders()
-    .then((n) => console.info(`[dispatch] startup prune removed ${n} stale online rider(s)`))
-    .catch((err) => console.warn('[dispatch] startup prune failed:', err));
-  void activateDueScheduledOrders().catch((err) =>
-    console.warn('[dispatch] scheduled order activation failed:', err)
-  );
-  void redispatchOrphanReadyOrders().catch((err) =>
-    console.warn('[dispatch] orphan re-dispatch failed:', err)
-  );
-  void closeStuckTripsGlobally()
-    .then((r) => {
-      if (r.cancelledReady || r.cancelledAbandoned) {
-        console.info(
-          `[dispatch] startup closed ${r.cancelledReady} waiting + ${r.cancelledAbandoned} abandoned trip(s)`
-        );
-      }
-    })
-    .catch((err) => console.warn('[dispatch] startup close-stuck failed:', err));
-  setInterval(() => {
-    void activateDueScheduledOrders().catch((err) =>
-      console.warn('[dispatch] scheduled order activation failed:', err)
-    );
-  }, 60_000);
-  setInterval(() => {
-    void pruneStaleOnlineRiders().catch((err) =>
-      console.warn('[dispatch] prune failed:', err)
-    );
-  }, 60_000);
-  setInterval(() => {
-    void redispatchOrphanReadyOrders().catch((err) =>
-      console.warn('[dispatch] orphan re-dispatch failed:', err)
-    );
-  }, ORPHAN_REDISPATCH_INTERVAL_MS);
-  setInterval(() => {
-    void closeStuckTripsGlobally().catch((err) =>
-      console.warn('[dispatch] close-stuck failed:', err)
-    );
-  }, CLOSE_STUCK_INTERVAL_MS);
 });

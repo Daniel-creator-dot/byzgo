@@ -1,5 +1,4 @@
 import '../core/json_parse.dart';
-import 'ride_service.dart';
 
 
 
@@ -75,9 +74,7 @@ class Order {
     this.pulseGuideAt,
     this.pulseGuidePhase,
     this.pulseGuideActive,
-    this.serviceType,
-    this.passengerCount,
-    this.riderBonusAmount,
+    this.vehicleType,
 
   });
 
@@ -165,19 +162,10 @@ class Order {
   final String? pulseGuidePhase;
   final bool? pulseGuideActive;
 
-  final RideServiceType? serviceType;
-
-  final int? passengerCount;
-
-  final double? riderBonusAmount;
+  /// Requested vehicle: `bike` (Okada) or `tricycle` (Keke).
+  final String? vehicleType;
 
   bool get isCourier => orderType == 'courier';
-
-  bool get isPassengerRide =>
-      serviceType == RideServiceType.okada || serviceType == RideServiceType.keke;
-
-  String get rideServiceLabel =>
-      serviceType?.label ?? (isCourier ? 'Bike' : 'Trip');
 
   bool get hasShopPickup => vendorId.trim().isNotEmpty;
 
@@ -220,9 +208,7 @@ class Order {
       pulseGuideAt: pulseGuideAt,
       pulseGuidePhase: pulseGuidePhase,
       pulseGuideActive: pulseGuideActive,
-      serviceType: serviceType,
-      passengerCount: passengerCount,
-      riderBonusAmount: riderBonusAmount,
+      vehicleType: vehicleType,
     );
   }
 
@@ -354,6 +340,7 @@ class Order {
       pulseGuideAt: next.pulseGuideAt,
       pulseGuidePhase: next.pulseGuidePhase,
       pulseGuideActive: next.pulseGuideActive,
+      vehicleType: next.vehicleType ?? vehicleType,
     );
   }
 
@@ -469,11 +456,7 @@ class Order {
       pulseGuidePhase: (json['pulseGuidePhase'] ?? json['pulse_guide_phase'])?.toString(),
       pulseGuideActive: json['pulseGuideActive'] == true || json['pulse_guide_active'] == true,
 
-      serviceType: RideServiceType.fromString(json['service_type']?.toString()),
-      passengerCount: parseJsonInt(json['passenger_count']),
-      riderBonusAmount: parseJsonDouble(
-        json['rider_bonus_amount'] ?? json['riderBonusAmount'],
-      ),
+      vehicleType: (json['vehicleType'] ?? json['vehicle_type'])?.toString(),
 
     );
 
@@ -528,9 +511,7 @@ class Order {
       pulseGuideAt: at ?? DateTime.now().toUtc().toIso8601String(),
       pulseGuidePhase: phase,
       pulseGuideActive: active,
-      serviceType: serviceType,
-      passengerCount: passengerCount,
-      riderBonusAmount: riderBonusAmount,
+      vehicleType: vehicleType,
     );
   }
 

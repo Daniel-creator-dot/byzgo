@@ -1,19 +1,18 @@
 import 'package:flutter/material.dart';
 
-import '../../models/ride_service.dart';
 import '../../shared/format.dart';
 import '../../shared/theme.dart';
+import '../../shared/vehicle_type.dart';
+import '../../shared/widgets/bytz_hero_header.dart';
 import '../../shared/widgets/ride_google_map.dart';
-import '../../shared/widgets/ride_hub_welcome.dart';
 import '../../shared/widgets/ride_ui.dart';
 
-/// Hero + quick actions for the ride & delivery booking sheet.
+/// Hero + quick actions for the bike delivery booking sheet.
 class DeliveryBookingHeader extends StatelessWidget {
   const DeliveryBookingHeader({
     super.key,
     required this.firstName,
     required this.balance,
-    required this.selectedService,
     this.vendorMode = false,
     this.onShops,
     this.onWallet,
@@ -23,7 +22,6 @@ class DeliveryBookingHeader extends StatelessWidget {
 
   final String firstName;
   final double balance;
-  final RideServiceType selectedService;
   final bool vendorMode;
   final VoidCallback? onShops;
   final VoidCallback? onWallet;
@@ -35,14 +33,51 @@ class DeliveryBookingHeader extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        RideHubWelcome(
-          firstName: firstName,
-          balance: balance,
-          selectedService: selectedService,
-          vendorMode: vendorMode,
-          onWallet: onWallet,
+        BytzHeroHeader(
+          kicker: vendorMode ? 'Your store' : 'Fast delivery',
+          title: vendorMode
+              ? 'Send a package\nfrom your shop'
+              : 'Hey $firstName,\nwhere to?',
+          assetPath: 'assets/branding/hero_delivery.png',
+          dark: false,
+          height: 118,
+          trailing: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(
+              color: BytzGoTheme.accent.withValues(alpha: 0.9),
+              borderRadius: BorderRadius.circular(12),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.12),
+                  blurRadius: 8,
+                ),
+              ],
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                const Text(
+                  'WALLET',
+                  style: TextStyle(
+                    fontSize: 7,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 0.8,
+                    color: BytzGoTheme.sheetText,
+                  ),
+                ),
+                Text(
+                  formatCedisCompact(balance),
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w900,
+                    color: BytzGoTheme.sheetText,
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
-        const SizedBox(height: 14),
+        const SizedBox(height: 12),
         SizedBox(
           height: 92,
           child: ListView(
@@ -50,13 +85,13 @@ class DeliveryBookingHeader extends StatelessWidget {
             children: [
               if (onShops != null)
                 _QuickTile(
-                  image: 'assets/branding/pharmacy_hub_welcome.png',
-                  label: 'Pharmacy',
-                  accent: const Color(0xFF14B8A6),
+                  image: 'assets/branding/onboarding_delivery.png',
+                  label: 'Shops',
+                  accent: BytzGoTheme.brandBlue,
                   onTap: onShops,
                 ),
               _QuickTile(
-                image: 'assets/branding/onboarding_delivery.png',
+                image: 'assets/branding/hero_delivery.png',
                 label: 'Top up',
                 accent: const Color(0xFF22C55E),
                 onTap: onWallet,
@@ -152,6 +187,102 @@ class _QuickTile extends StatelessWidget {
   }
 }
 
+/// Okada vs Keke vehicle picker for courier trips.
+class VehicleTypeSelector extends StatelessWidget {
+  const VehicleTypeSelector({
+    super.key,
+    required this.selected,
+    required this.onSelected,
+  });
+
+  final String selected;
+  final ValueChanged<String> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'CHOOSE YOUR RIDE',
+          style: TextStyle(
+            fontSize: 9,
+            fontWeight: FontWeight.w900,
+            letterSpacing: 1,
+            color: BytzGoTheme.sheetMuted.withValues(alpha: 0.9),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: VehicleType.all.map((type) {
+            final isOn = selected == type;
+            final icon = type == VehicleType.tricycle
+                ? Icons.electric_rickshaw_outlined
+                : Icons.two_wheeler;
+            return Expanded(
+              child: Padding(
+                padding: EdgeInsets.only(
+                  right: type == VehicleType.bike ? 6 : 0,
+                  left: type == VehicleType.tricycle ? 6 : 0,
+                ),
+                child: PressableScale(
+                  onTap: () => onSelected(type),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 14,
+                    ),
+                    decoration: BoxDecoration(
+                      color: isOn
+                          ? BytzGoTheme.accent.withValues(alpha: 0.12)
+                          : BytzGoTheme.sheetDivider.withValues(alpha: 0.35),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: isOn
+                            ? BytzGoTheme.accent
+                            : Colors.transparent,
+                        width: 2,
+                      ),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(
+                          icon,
+                          size: 22,
+                          color: isOn
+                              ? BytzGoTheme.accentDark
+                              : BytzGoTheme.sheetMuted,
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          VehicleType.label(type),
+                          style: TextStyle(
+                            fontWeight: FontWeight.w900,
+                            fontSize: 14,
+                            color: isOn
+                                ? BytzGoTheme.sheetText
+                                : BytzGoTheme.sheetMuted,
+                          ),
+                        ),
+                        Text(
+                          VehicleType.subtitle(type),
+                          style: BytzGoTheme.sheetBody(10),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            );
+          }).toList(),
+        ),
+      ],
+    );
+  }
+}
+
 /// Package / parcel type chips.
 class PackageTypeSelector extends StatelessWidget {
   const PackageTypeSelector({
@@ -164,10 +295,10 @@ class PackageTypeSelector extends StatelessWidget {
   final ValueChanged<String> onSelected;
 
   static const options = [
-    _Pkg('Package', Icons.inventory_2_outlined, Color(0xFF0EA5E9)),
+    _Pkg('Package', Icons.inventory_2_outlined, Color(0xFF1E60C2)),
+    _Pkg('Food', Icons.restaurant_outlined, Color(0xFFF59E0B)),
     _Pkg('Documents', Icons.description_outlined, Color(0xFF6366F1)),
-    _Pkg('Medicine', Icons.medication_outlined, Color(0xFF14B8A6)),
-    _Pkg('Electronics', Icons.devices_other_outlined, Color(0xFF8B5CF6)),
+    _Pkg('Groceries', Icons.shopping_bag_outlined, Color(0xFF22C55E)),
     _Pkg('Fragile', Icons.wine_bar_outlined, Color(0xFFEC4899)),
   ];
 
@@ -366,16 +497,14 @@ class DeliveryQuoteCard extends StatelessWidget {
     required this.distanceKm,
     this.surgeActive = false,
     this.loading = false,
-    this.promotionDiscount = 0,
-    this.promotionName,
+    this.vehicleType = VehicleType.bike,
   });
 
   final double fee;
   final double distanceKm;
   final bool surgeActive;
   final bool loading;
-  final double promotionDiscount;
-  final String? promotionName;
+  final String vehicleType;
 
   @override
   Widget build(BuildContext context) {
@@ -450,9 +579,9 @@ class DeliveryQuoteCard extends StatelessWidget {
                       children: [
                         Row(
                           children: [
-                            const Text(
-                              'Bike courier',
-                              style: TextStyle(
+                            Text(
+                              '${VehicleType.label(vehicleType)} courier',
+                              style: const TextStyle(
                                 fontWeight: FontWeight.w900,
                                 fontSize: 16,
                                 color: BytzGoTheme.sheetText,
@@ -479,69 +608,26 @@ class DeliveryQuoteCard extends StatelessWidget {
                                 ),
                               ),
                             ],
-                            if (!loading && promotionDiscount > 0) ...[
-                              const SizedBox(width: 8),
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 6,
-                                  vertical: 2,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: BytzGoTheme.accent,
-                                  borderRadius: BorderRadius.circular(6),
-                                ),
-                                child: Text(
-                                  (promotionName?.trim().isNotEmpty == true)
-                                      ? promotionName!.trim().toUpperCase()
-                                      : 'PROMO',
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 8,
-                                    fontWeight: FontWeight.w900,
-                                  ),
-                                ),
-                              ),
-                            ],
                           ],
                         ),
                         Text(
                           loading
                               ? 'Calculating…'
                               : distanceKm > 0
-                                  ? promotionDiscount > 0
-                                      ? '${distanceKm.toStringAsFixed(1)} km · Save ${formatCedis(promotionDiscount)}'
-                                      : '${distanceKm.toStringAsFixed(1)} km · Pay on arrival'
+                                  ? '${distanceKm.toStringAsFixed(1)} km · Pay on arrival'
                                   : 'Pay when rider arrives',
                           style: BytzGoTheme.sheetBody(12),
                         ),
                       ],
                     ),
                   ),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      if (!loading && promotionDiscount > 0)
-                        Text(
-                          formatCedis(fee + promotionDiscount),
-                          style: TextStyle(
-                            decoration: TextDecoration.lineThrough,
-                            fontSize: 12,
-                            color: BytzGoTheme.sheetMuted.withValues(alpha: 0.9),
-                          ),
-                        ),
-                      Text(
-                        loading
-                            ? 'Calculating…'
-                            : formatCedis(fee),
-                        style: TextStyle(
-                          fontWeight: FontWeight.w900,
-                          fontSize: loading ? 16 : 20,
-                          color: loading
-                              ? BytzGoTheme.sheetMuted
-                              : BytzGoTheme.accentDark,
-                        ),
-                      ),
-                    ],
+                  Text(
+                    formatCedis(fee),
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w900,
+                      fontSize: 20,
+                      color: BytzGoTheme.accentDark,
+                    ),
                   ),
                 ],
               ),

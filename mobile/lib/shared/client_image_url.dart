@@ -32,6 +32,11 @@ class ClientImageUrl {
       return trimmed;
     }
     final pathOnly = trimmed.split('?').first;
+    // rider-documents are private — only signed https URLs from the API work.
+    // Never invent a public CDN URL for them (it will 403 / show blank).
+    if (pathOnly.startsWith('rider-documents/')) {
+      return null;
+    }
     if (_isObjectKey(pathOnly)) {
       return '${publicBase}/$pathOnly';
     }
@@ -39,6 +44,6 @@ class ClientImageUrl {
   }
 
   static bool _isObjectKey(String value) {
-    return RegExp(r'^(avatars|products|covers|stories|rider-documents)/').hasMatch(value);
+    return RegExp(r'^(avatars|products|covers|stories)/').hasMatch(value);
   }
 }

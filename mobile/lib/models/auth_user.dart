@@ -21,7 +21,7 @@ class AuthUser {
     this.avatarUrl,
     this.hasAvatar = false,
     this.shopCategory,
-    this.riderVehicleType,
+    this.vehicleType,
   });
 
   final String id;
@@ -40,7 +40,7 @@ class AuthUser {
   final String? avatarUrl;
   final bool hasAvatar;
   final String? shopCategory;
-  final String? riderVehicleType;
+  final String? vehicleType;
 
   static String? _persistImageField(String? url) {
     if (url == null || url.isEmpty) return null;
@@ -66,7 +66,7 @@ class AuthUser {
       avatarUrl: ClientImageUrl.resolve(json['avatar_url']?.toString()),
       hasAvatar: json['has_avatar'] == true,
       shopCategory: json['shop_category']?.toString(),
-      riderVehicleType: json['rider_vehicle_type']?.toString(),
+      vehicleType: json['vehicle_type']?.toString(),
     );
   }
 
@@ -87,6 +87,7 @@ class AuthUser {
         if (avatarUrl != null) 'avatar_url': _persistImageField(avatarUrl),
         if (hasAvatar) 'has_avatar': hasAvatar,
         if (shopCategory != null) 'shop_category': shopCategory,
+        if (vehicleType != null) 'vehicle_type': vehicleType,
       };
 
   AuthUser copyWith({
@@ -101,7 +102,7 @@ class AuthUser {
     String? avatarUrl,
     bool? hasAvatar,
     String? coverImage,
-    String? riderVehicleType,
+    String? vehicleType,
   }) {
     return AuthUser(
       id: id,
@@ -120,7 +121,7 @@ class AuthUser {
       avatarUrl: avatarUrl ?? this.avatarUrl,
       hasAvatar: hasAvatar ?? this.hasAvatar,
       shopCategory: shopCategory,
-      riderVehicleType: riderVehicleType ?? this.riderVehicleType,
+      vehicleType: vehicleType ?? this.vehicleType,
     );
   }
 }
