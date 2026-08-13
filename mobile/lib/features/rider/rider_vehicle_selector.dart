@@ -12,7 +12,7 @@ class RiderVehicleSelector extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final vehicle =
-        context.select<Session, String?>((s) => s.user?.riderVehicleType) ??
+        context.select<Session, String?>((s) => s.user?.vehicleType) ??
             'motorcycle';
     return RiderVehicleTypePicker(
       value: vehicle,
@@ -24,10 +24,10 @@ class RiderVehicleSelector extends StatelessWidget {
 
   Future<void> _setVehicle(BuildContext context, String type) async {
     try {
-      final user =
-          await context.read<AuthRepository>().updateRiderVehicleType(type);
+      final result =
+          await context.read<AuthRepository>().updateProfile(vehicleType: type);
       if (!context.mounted) return;
-      context.read<Session>().patchUser(user);
+      context.read<Session>().patchUser(result.user);
     } catch (e) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

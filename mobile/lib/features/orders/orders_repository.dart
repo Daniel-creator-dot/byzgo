@@ -8,7 +8,7 @@ import '../../models/delivery_quote.dart';
 import '../../models/location_point.dart';
 
 import '../../models/order.dart';
-
+import '../../models/pharmacy_search_hit.dart';
 import '../../models/product.dart';
 import '../../models/trip_message.dart';
 import '../../models/vendor.dart';

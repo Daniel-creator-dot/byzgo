@@ -1,4 +1,5 @@
 import '../core/json_parse.dart';
+import 'ride_service.dart';
 
 
 
@@ -75,6 +76,8 @@ class Order {
     this.pulseGuidePhase,
     this.pulseGuideActive,
     this.vehicleType,
+    this.riderBonusAmount,
+    this.passengerCount,
 
   });
 
@@ -165,6 +168,17 @@ class Order {
   /// Requested vehicle: `bike` (Okada) or `tricycle` (Keke).
   final String? vehicleType;
 
+  final double? riderBonusAmount;
+
+  final int? passengerCount;
+
+  RideServiceType get rideServiceType =>
+      RideServiceType.fromString(vehicleType ?? orderType);
+
+  bool get isPassengerRide => rideServiceType.isPassengerRide;
+
+  String get rideServiceLabel => rideServiceType.label;
+
   bool get isCourier => orderType == 'courier';
 
   bool get hasShopPickup => vendorId.trim().isNotEmpty;
@@ -209,6 +223,8 @@ class Order {
       pulseGuidePhase: pulseGuidePhase,
       pulseGuideActive: pulseGuideActive,
       vehicleType: vehicleType,
+      riderBonusAmount: riderBonusAmount,
+      passengerCount: passengerCount,
     );
   }
 
@@ -341,6 +357,8 @@ class Order {
       pulseGuidePhase: next.pulseGuidePhase,
       pulseGuideActive: next.pulseGuideActive,
       vehicleType: next.vehicleType ?? vehicleType,
+      riderBonusAmount: next.riderBonusAmount ?? riderBonusAmount,
+      passengerCount: next.passengerCount ?? passengerCount,
     );
   }
 
@@ -457,6 +475,12 @@ class Order {
       pulseGuideActive: json['pulseGuideActive'] == true || json['pulse_guide_active'] == true,
 
       vehicleType: (json['vehicleType'] ?? json['vehicle_type'])?.toString(),
+      riderBonusAmount: parseJsonDouble(
+        json['riderBonusAmount'] ?? json['rider_bonus_amount'],
+      ),
+      passengerCount: parseJsonInt(
+        json['passengerCount'] ?? json['passenger_count'],
+      ),
 
     );
 
@@ -512,6 +536,8 @@ class Order {
       pulseGuidePhase: phase,
       pulseGuideActive: active,
       vehicleType: vehicleType,
+      riderBonusAmount: riderBonusAmount,
+      passengerCount: passengerCount,
     );
   }
 

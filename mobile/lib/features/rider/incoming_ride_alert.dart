@@ -29,7 +29,10 @@ class IncomingRideAlert {
     Order order, {
     /// True when app is backgrounded / screen off — use CallKit full-screen UI.
     bool useCallKit = false,
+    /// Alias used by rider shell: screen-off uses the system incoming-call UI.
+    bool useNotificationSound = false,
   }) async {
+    useCallKit = useCallKit || useNotificationSound;
     if (!isOfferableOrder(order)) return;
     if (!PushNotificationService.instance.acceptsIncomingRideJobs) return;
 
