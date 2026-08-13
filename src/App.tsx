@@ -24,6 +24,7 @@ import { RiderApp } from './components/rider/RiderApp';
 import { ProfileAvatarUpload } from './components/ProfileAvatarUpload';
 import { CustomerShell } from './components/customer/CustomerShell';
 import { CustomerDeliveryHome } from './components/customer/CustomerDeliveryHome';
+import { AppUpdateNotice } from './components/AppUpdateNotice';
 import { CustomerTripsView } from './components/customer/CustomerTripsView';
 import { LocationAutocompleteInput } from './components/LocationAutocompleteInput';
 import { GHANA_REGIONS } from './lib/constants';
@@ -187,6 +188,7 @@ function PullToRefresh({ onRefresh, refreshing, children }: { onRefresh: () => P
 export default function App() {
   return (
     <BrowserRouter>
+      <AppUpdateNotice />
       <MainApp />
     </BrowserRouter>
   );
@@ -3765,6 +3767,14 @@ function AdminView({
     sms_api_key: '',
     sms_sender_id: 'bytzee',
     sms_config_source: '',
+    app_update_enabled: false,
+    app_update_title: 'New BytzGo update',
+    app_update_message: '',
+    app_update_min_version: '',
+    app_update_min_build: '',
+    app_update_ios_url: '',
+    app_update_android_url: '',
+    app_update_force: false,
   });
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [smsTestPhone, setSmsTestPhone] = useState('');
@@ -3849,6 +3859,14 @@ function AdminView({
         sms_api_key: '',
         sms_sender_id: res.data.sms_sender_id || 'bytzee',
         sms_config_source: res.data.sms_config_source || '',
+        app_update_enabled: res.data.app_update_enabled === true || res.data.app_update_enabled === 'true',
+        app_update_title: res.data.app_update_title || 'New BytzGo update',
+        app_update_message: res.data.app_update_message || '',
+        app_update_min_version: res.data.app_update_min_version || '',
+        app_update_min_build: res.data.app_update_min_build || '',
+        app_update_ios_url: res.data.app_update_ios_url || '',
+        app_update_android_url: res.data.app_update_android_url || '',
+        app_update_force: res.data.app_update_force === true || res.data.app_update_force === 'true',
       })).catch(() => addNotification('Failed to load settings', 'warning'));
     }
     if (activeTab === 'promotions') {
@@ -4636,6 +4654,80 @@ function AdminView({
                    {smsTestLoading ? '…' : 'Test SMS'}
                  </button>
                </div>
+             </div>
+
+             <div className="pt-4 border-t border-slate-700 space-y-3">
+               <div className="flex items-center justify-between gap-3">
+                 <div>
+                   <h4 className="text-sm font-bold text-white">In-app update notice</h4>
+                   <p className="text-[10px] text-slate-500 font-bold">
+                     Shows a popup to every customer, rider, vendor, and admin until they update or tap Later.
+                   </p>
+                 </div>
+                 <label className="flex items-center gap-2 text-[10px] font-black uppercase text-slate-400">
+                   <input
+                     type="checkbox"
+                     checked={settings.app_update_enabled}
+                     onChange={(e) => setSettings({ ...settings, app_update_enabled: e.target.checked })}
+                     className="rounded border-slate-600"
+                   />
+                   Show
+                 </label>
+               </div>
+               <DarkInput
+                 label="Title"
+                 value={settings.app_update_title}
+                 onChange={(e) => setSettings({ ...settings, app_update_title: e.target.value })}
+                 placeholder="New BytzGo update"
+               />
+               <label className="block">
+                 <span className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">Message</span>
+                 <textarea
+                   value={settings.app_update_message}
+                   onChange={(e) => setSettings({ ...settings, app_update_message: e.target.value })}
+                   rows={4}
+                   placeholder="What's new — pharmacy hub, faster dispatch, update now from TestFlight / Play Store."
+                   className="w-full bg-slate-900 border border-slate-700 rounded-xl py-3 px-4 text-sm font-bold text-white placeholder:text-slate-600"
+                 />
+               </label>
+               <div className="grid grid-cols-2 gap-3">
+                 <DarkInput
+                   label="Min app version (optional)"
+                   value={settings.app_update_min_version}
+                   onChange={(e) => setSettings({ ...settings, app_update_min_version: e.target.value })}
+                   placeholder="1.0.61"
+                 />
+                 <DarkInput
+                   label="Min build number (optional)"
+                   value={settings.app_update_min_build}
+                   onChange={(e) => setSettings({ ...settings, app_update_min_build: e.target.value })}
+                   placeholder="86"
+                 />
+               </div>
+               <p className="text-[10px] text-slate-500 font-bold">
+                 Leave version/build empty to show everyone. If set, only older installs see it.
+               </p>
+               <DarkInput
+                 label="iPhone update link"
+                 value={settings.app_update_ios_url}
+                 onChange={(e) => setSettings({ ...settings, app_update_ios_url: e.target.value })}
+                 placeholder="https://apps.apple.com/..."
+               />
+               <DarkInput
+                 label="Android update link"
+                 value={settings.app_update_android_url}
+                 onChange={(e) => setSettings({ ...settings, app_update_android_url: e.target.value })}
+                 placeholder="https://play.google.com/store/apps/details?id=com.bytzgo.bytzgoMobile"
+               />
+               <label className="flex items-center gap-2 text-[10px] font-black uppercase text-slate-400">
+                 <input
+                   type="checkbox"
+                   checked={settings.app_update_force}
+                   onChange={(e) => setSettings({ ...settings, app_update_force: e.target.checked })}
+                   className="rounded border-slate-600"
+                 />
+                 Force update (no Later button)
+               </label>
              </div>
 
              <DarkButton type="submit" disabled={settingsSaving} className="w-full">{settingsSaving ? 'Saving…' : 'Save settings'}</DarkButton>

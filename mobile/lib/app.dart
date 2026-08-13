@@ -32,6 +32,7 @@ import 'shared/system_chrome.dart';
 import 'shared/theme.dart';
 import 'shared/client_image_url.dart';
 import 'shared/widgets/app_launch_carousel.dart';
+import 'shared/widgets/app_update_notice.dart';
 
 class BytzGoApp extends StatefulWidget {
   const BytzGoApp({super.key});
@@ -185,7 +186,7 @@ class _BytzGoAppState extends State<BytzGoApp> {
                   child: AppLaunchCarousel(message: 'Loading your city…'),
                 );
               }
-              return child;
+              return AppUpdateNoticeHost(child: child);
             },
           );
         },

@@ -1,5 +1,6 @@
 import 'package:dio/dio.dart';
 
+import '../models/app_update_notice.dart';
 import '../shared/delivery_pricing.dart';
 import 'api_client.dart';
 
@@ -22,6 +23,22 @@ class ConfigRepository {
       ),
     );
     return Map<String, dynamic>.from(res.data ?? {});
+  }
+
+  Future<AppUpdateNoticeConfig?> fetchAppUpdateNotice() async {
+    try {
+      final res = await _api.dio.get<Map<String, dynamic>>(
+        '/api/config/app-update',
+        queryParameters: {'_': DateTime.now().millisecondsSinceEpoch},
+        options: Options(
+          headers: {'Cache-Control': 'no-cache', 'Pragma': 'no-cache'},
+        ),
+      );
+      if (res.data == null) return null;
+      return AppUpdateNoticeConfig.fromJson(Map<String, dynamic>.from(res.data!));
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<double> fetchPricePerKm() async {

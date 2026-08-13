@@ -7,6 +7,7 @@ import '../../shared/format.dart';
 import '../../shared/theme.dart';
 import 'admin_repository.dart';
 import 'admin_promotions_tab.dart';
+import 'admin_update_notice_tab.dart';
 import 'admin_zones_tab.dart';
 import 'widgets/admin_hero_header.dart';
 
@@ -46,7 +47,7 @@ class _AdminPricingTabState extends State<AdminPricingTab>
   @override
   void initState() {
     super.initState();
-    _tabs = TabController(length: 4, vsync: this);
+    _tabs = TabController(length: 5, vsync: this);
     WidgetsBinding.instance.addPostFrameCallback((_) => _load());
   }
 
@@ -281,11 +282,13 @@ class _AdminPricingTabState extends State<AdminPricingTab>
           labelColor: BytzGoTheme.accent,
           unselectedLabelColor: Colors.white54,
           indicatorColor: BytzGoTheme.accent,
+          isScrollable: true,
           tabs: const [
             Tab(text: 'PACKAGE'),
             Tab(text: 'OKADA & KEKE'),
             Tab(text: 'PROMOS'),
             Tab(text: 'ZONES'),
+            Tab(text: 'NOTICE'),
           ],
         ),
         Expanded(
@@ -296,6 +299,7 @@ class _AdminPricingTabState extends State<AdminPricingTab>
               _okadaKekeTab(),
               const AdminPromotionsTab(),
               const AdminZonesTab(),
+              const AdminUpdateNoticeTab(),
             ],
           ),
         ),

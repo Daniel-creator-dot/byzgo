@@ -449,6 +449,48 @@ async function setSetting(key: string, value: string) {
   );
 }
 
+const DEFAULT_IOS_UPDATE_URL = 'https://apps.apple.com/search?term=BytzGo';
+const DEFAULT_ANDROID_UPDATE_URL =
+  'https://play.google.com/store/apps/details?id=com.bytzgo.bytzgoMobile';
+
+async function getPublicAppUpdate() {
+  const [
+    enabled,
+    title,
+    message,
+    minVersion,
+    minBuild,
+    iosUrl,
+    androidUrl,
+    force,
+  ] = await Promise.all([
+    getSetting('app_update_enabled'),
+    getSetting('app_update_title'),
+    getSetting('app_update_message'),
+    getSetting('app_update_min_version'),
+    getSetting('app_update_min_build'),
+    getSetting('app_update_ios_url'),
+    getSetting('app_update_android_url'),
+    getSetting('app_update_force'),
+  ]);
+  const cleanTitle = String(title || 'New BytzGo update').trim() || 'New BytzGo update';
+  const cleanMessage = String(message || '').trim();
+  const cleanMinVersion = String(minVersion || '').trim();
+  const cleanMinBuild = Math.max(0, parseInt(String(minBuild || '0'), 10) || 0);
+  const id = `${cleanMinVersion}|${cleanMinBuild}|${cleanTitle}|${cleanMessage}`;
+  return {
+    enabled: enabled === 'true' || enabled === '1',
+    title: cleanTitle,
+    message: cleanMessage,
+    min_version: cleanMinVersion,
+    min_build: cleanMinBuild,
+    ios_url: String(iosUrl || '').trim() || DEFAULT_IOS_UPDATE_URL,
+    android_url: String(androidUrl || '').trim() || DEFAULT_ANDROID_UPDATE_URL,
+    force: force === 'true' || force === '1',
+    id,
+  };
+}
+
 function parseOptionalPositiveAmount(raw: string | null | undefined): number | null {
   if (raw == null || String(raw).trim() === '') return null;
   const n = parseFloat(String(raw));
@@ -4576,6 +4618,26 @@ app.get('/api/maps/reverse-geocode', authenticateToken, async (req: any, res) =>
   }
 });
 
+/** In-app update / announcement banner — public so login + every role can show it. */
+app.get('/api/config/app-update', async (_req, res) => {
+  try {
+    res.json(await getPublicAppUpdate());
+  } catch (err) {
+    console.error('App update config error:', err);
+    res.json({
+      enabled: false,
+      title: 'New BytzGo update',
+      message: '',
+      min_version: '',
+      min_build: 0,
+      ios_url: DEFAULT_IOS_UPDATE_URL,
+      android_url: DEFAULT_ANDROID_UPDATE_URL,
+      force: false,
+      id: '',
+    });
+  }
+});
+
 /** Public Maps SDK key for mobile/web clients (restrict by app bundle in Google Cloud). */
 app.get('/api/config/maps', async (_req, res) => {
   const apiKey = mapsApiKey();
@@ -7622,6 +7684,7 @@ app.get('/api/admin/settings', authenticateToken, async (req: any, res) => {
     const smsSender = await getSetting('sms_sender_id');
     const effectiveSmsKey = process.env.SMS_API_KEY?.trim() || smsKey || '';
     const surge = await getSurgePricingState();
+    const updateNotice = await getPublicAppUpdate();
     res.json({
       paystack_public_key: pub || process.env.PAYSTACK_PUBLIC_KEY || '',
       paystack_secret_key: maskSecret(sec || process.env.PAYSTACK_SECRET_KEY || ''),
@@ -7644,6 +7707,14 @@ app.get('/api/admin/settings', authenticateToken, async (req: any, res) => {
       sms_api_key_configured: effectiveSmsKey.length > 8,
       sms_sender_id: smsSender || process.env.SMS_SENDER_ID || 'bytzee',
       sms_config_source: process.env.SMS_API_KEY?.trim() ? 'env' : smsKey ? 'database' : 'default',
+      app_update_enabled: updateNotice.enabled,
+      app_update_title: updateNotice.title,
+      app_update_message: updateNotice.message,
+      app_update_min_version: updateNotice.min_version,
+      app_update_min_build: String(updateNotice.min_build || ''),
+      app_update_ios_url: updateNotice.ios_url,
+      app_update_android_url: updateNotice.android_url,
+      app_update_force: updateNotice.force,
     });
   } catch (err) {
     res.status(500).json({ message: 'Failed to load settings' });
@@ -7669,6 +7740,14 @@ app.patch('/api/admin/settings', authenticateToken, async (req: any, res) => {
     sms_base_url,
     sms_api_key,
     sms_sender_id,
+    app_update_enabled,
+    app_update_title,
+    app_update_message,
+    app_update_min_version,
+    app_update_min_build,
+    app_update_ios_url,
+    app_update_android_url,
+    app_update_force,
   } = req.body;
   const pricingTouched =
     delivery_price_per_km != null ||
@@ -7784,6 +7863,41 @@ app.patch('/api/admin/settings', authenticateToken, async (req: any, res) => {
          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
         [String(sms_sender_id).trim()]
       );
+    }
+    if (app_update_enabled != null) {
+      const on =
+        app_update_enabled === true ||
+        app_update_enabled === 'true' ||
+        app_update_enabled === 1 ||
+        app_update_enabled === '1';
+      await setSetting('app_update_enabled', on ? 'true' : 'false');
+    }
+    if (app_update_title != null) {
+      await setSetting('app_update_title', String(app_update_title).trim());
+    }
+    if (app_update_message != null) {
+      await setSetting('app_update_message', String(app_update_message).trim());
+    }
+    if (app_update_min_version != null) {
+      await setSetting('app_update_min_version', String(app_update_min_version).trim());
+    }
+    if (app_update_min_build != null) {
+      const n = Math.max(0, parseInt(String(app_update_min_build), 10) || 0);
+      await setSetting('app_update_min_build', String(n));
+    }
+    if (app_update_ios_url != null) {
+      await setSetting('app_update_ios_url', String(app_update_ios_url).trim());
+    }
+    if (app_update_android_url != null) {
+      await setSetting('app_update_android_url', String(app_update_android_url).trim());
+    }
+    if (app_update_force != null) {
+      const on =
+        app_update_force === true ||
+        app_update_force === 'true' ||
+        app_update_force === 1 ||
+        app_update_force === '1';
+      await setSetting('app_update_force', on ? 'true' : 'false');
     }
     let pricing: Awaited<ReturnType<typeof buildPublicPricingPayload>> | undefined;
     if (pricingTouched) {

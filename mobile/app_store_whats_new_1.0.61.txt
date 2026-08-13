@@ -1,0 +1,5 @@
+• In-app update notice so everyone sees what’s new
+• Approved riders stay signed in and can go online
+• Ride screen no longer keeps searching after a trip ends
+• Pharmacy and shops load more reliably
+• Bug fixes and stability improvements

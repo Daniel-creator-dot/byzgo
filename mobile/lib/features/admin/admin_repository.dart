@@ -8,6 +8,7 @@ import '../../models/admin_pending_product.dart';
 import '../../models/admin_vendor.dart';
 import '../../models/admin_ride_promotion.dart';
 import '../../models/rider_document.dart';
+import '../../models/app_update_notice.dart';
 
 class AdminRepository {
   AdminRepository(this._api);
@@ -203,6 +204,38 @@ class AdminRepository {
 
   Future<void> deleteRidePromotion(String id) async {
     await _api.dio.delete<Map<String, dynamic>>('/api/admin/promotions/$id');
+  }
+
+  Future<AppUpdateNoticeConfig> fetchUpdateNotice() async {
+    final res = await _api.dio.get<Map<String, dynamic>>('/api/admin/settings');
+    return AppUpdateNoticeConfig.fromJson(
+      Map<String, dynamic>.from(res.data ?? {}),
+    );
+  }
+
+  Future<void> saveUpdateNotice({
+    required bool enabled,
+    required String title,
+    required String message,
+    required String minVersion,
+    required String minBuild,
+    required String iosUrl,
+    required String androidUrl,
+    required bool force,
+  }) async {
+    await _api.dio.patch<Map<String, dynamic>>(
+      '/api/admin/settings',
+      data: {
+        'app_update_enabled': enabled,
+        'app_update_title': title,
+        'app_update_message': message,
+        'app_update_min_version': minVersion,
+        'app_update_min_build': minBuild,
+        'app_update_ios_url': iosUrl,
+        'app_update_android_url': androidUrl,
+        'app_update_force': force,
+      },
+    );
   }
 
   static String errorMessage(Object err) {
