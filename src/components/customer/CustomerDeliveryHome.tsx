@@ -16,7 +16,7 @@ import { LocationAutocompleteInput } from '../LocationAutocompleteInput';
 import { DeliveryMapPicker } from './DeliveryMapPicker';
 import { LiveTripTracker } from './LiveTripTracker';
 import { MapsHealthBanner } from '../MapsProvider';
-import { rideTabCourierTrip } from '../../lib/customerTrip';
+import { isCustomerSearchingBiker, rideTabCourierTrip } from '../../lib/customerTrip';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -37,6 +37,7 @@ export type CourierFormState = {
 
 export function CustomerDeliveryHome({
   liveOrders,
+  allCustomerOrders,
   user,
   courierForm,
   setCourierForm,
@@ -58,6 +59,7 @@ export function CustomerDeliveryHome({
   refreshData,
 }: {
   liveOrders: Order[];
+  allCustomerOrders?: Order[];
   user: { id: string; email: string; name: string; balance: number; lat?: number; lng?: number; address?: string; phone?: string };
   courierForm: CourierFormState;
   setCourierForm: Dispatch<SetStateAction<CourierFormState>>;
@@ -102,14 +104,10 @@ export function CustomerDeliveryHome({
         : null,
   });
 
-  const rideTabTrip = rideTabCourierTrip(liveOrders, user.id);
+  const rideTabTrip = rideTabCourierTrip(allCustomerOrders ?? liveOrders, user.id);
   const activeCourierTrip = rideTabTrip?.status !== 'delivered' ? rideTabTrip : undefined;
   const showLiveTripOnHome = rideTabTrip != null;
-  const tripSearching =
-    rideTabTrip &&
-    rideTabTrip.status !== 'delivered' &&
-    !rideTabTrip.rider_id &&
-    ['pending', 'ready', 'preparing'].includes(rideTabTrip.status);
+  const tripSearching = !!rideTabTrip && isCustomerSearchingBiker(rideTabTrip);
 
   const submitCourier = async (extra: Record<string, unknown>) => {
     if (tripSearching) {

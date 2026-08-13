@@ -230,6 +230,8 @@ app.get('/api/health', async (_req, res) => {
       testEndpoint: '/api/push/test-incoming-ride',
       statusEndpoint: '/api/push/status',
     },
+    pharmacySearch: true,
+    shopChat: true,
     media: {
       storage: storage.configured ? 'supabase' : 'inline_fallback',
       bucket: storage.bucket,
@@ -354,15 +356,24 @@ async function emitVendorPromo(row: Record<string, unknown>) {
 }
 
 async function vendorRowForClient(row: Record<string, unknown>) {
-  const cover = await resolveImageUrlForClient(
-    typeof row.cover_image === 'string' ? row.cover_image : null
-  );
-  const promo = await vendorPromoPayload(row);
-  return {
-    ...row,
-    cover_image: cover,
-    ...promo,
-  };
+  try {
+    const cover = await resolveImageUrlForClient(
+      typeof row.cover_image === 'string' ? row.cover_image : null
+    );
+    const promo = await vendorPromoPayload(row);
+    return {
+      ...row,
+      cover_image: cover,
+      ...promo,
+    };
+  } catch (err) {
+    console.warn('vendorRowForClient failed', row.id, err);
+    return {
+      ...row,
+      shop_open_status: row.shop_open_status ?? 'open',
+      has_active_story: false,
+    };
+  }
 }
 
 const PRIMECARE_CANONICAL_EMAIL = 'vendor@bytzgo.net';
@@ -1053,6 +1064,45 @@ async function initializePaystackTopup(amountGhs: number, user: { id: string; em
 }
 
 // Database Initialization
+async function ensureShopMarketplaceSchema() {
+  const statements = [
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS shop_category TEXT DEFAULT 'pharmacy'`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS shop_open_status TEXT DEFAULT 'open'`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS shop_status_message TEXT`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS shop_discount_label TEXT`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS shop_discount_percent DECIMAL(5,2)`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS shop_promo_updated_at TIMESTAMP WITH TIME ZONE`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS shop_story_image TEXT`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS shop_story_posted_at TIMESTAMP WITH TIME ZONE`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS shop_story_expires_at TIMESTAMP WITH TIME ZONE`,
+    `CREATE TABLE IF NOT EXISTS shop_conversations (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        customer_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        vendor_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        last_message_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        last_message_preview TEXT,
+        customer_unread INT NOT NULL DEFAULT 0,
+        vendor_unread INT NOT NULL DEFAULT 0,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(customer_id, vendor_id)
+      )`,
+    `CREATE TABLE IF NOT EXISTS shop_messages (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        conversation_id UUID NOT NULL REFERENCES shop_conversations(id) ON DELETE CASCADE,
+        sender_id UUID NOT NULL REFERENCES users(id),
+        body TEXT NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      )`,
+  ];
+  for (const sql of statements) {
+    try {
+      await pool.query(sql);
+    } catch (err) {
+      console.warn('[db] shop schema skip:', (err as Error).message);
+    }
+  }
+}
+
 const initDb = async () => {
   try {
     await pool.query(`
@@ -1399,6 +1449,7 @@ const initDb = async () => {
       AND items::text LIKE '%courier-1%'
     `);
     await reconcileDeliveryZones();
+    await ensureShopMarketplaceSchema();
     console.log('Database initialized successfully');
     const mediaCfg = getStorageConfig();
     if (mediaCfg.configured) {
@@ -4620,12 +4671,102 @@ app.get('/api/vendors', async (req, res) => {
     }
     
     const result = await pool.query(query, params);
-    const vendors = await Promise.all(
-      dedupeVendorList(result.rows).map((v: Record<string, unknown>) => vendorRowForClient(v))
-    );
+    const vendors = [];
+    for (const row of dedupeVendorList(result.rows)) {
+      vendors.push(await vendorRowForClient(row as Record<string, unknown>));
+    }
     res.json(vendors);
   } catch (err) {
-    res.status(500).json({ message: 'Server error' });
+    console.error('Vendors list error:', err);
+    res.status(500).json({ message: 'Could not load pharmacies. Pull to refresh.' });
+  }
+});
+
+/** Find pharmacies & health retailers that stock a medicine (customer drug search). */
+app.get('/api/pharmacy-search', async (req, res) => {
+  const q = String(req.query.q || '').trim();
+  if (q.length < 2) return res.json([]);
+  const { region, category } = req.query;
+  try {
+    const params: any[] = [`%${q}%`];
+    let sql = `
+      SELECT
+        u.id, u.name, u.email, u.phone, u.cover_image, u.address, u.lat, u.lng, u.region, u.shop_category,
+        u.shop_open_status, u.shop_status_message, u.shop_discount_label, u.shop_discount_percent,
+        u.shop_promo_updated_at, u.shop_story_image, u.shop_story_posted_at, u.shop_story_expires_at,
+        p.id AS product_id, p.name AS product_name, p.price AS product_price,
+        p.category AS product_category, p.image_url AS product_image_url
+      FROM products p
+      INNER JOIN users u ON u.id = p.vendor_id
+      WHERE u.role = 'vendor'
+        AND u.status = 'active'
+        AND LOWER(COALESCE(u.shop_category, 'pharmacy')) IN ('pharmacy', 'health')
+        AND p.is_available = true
+        AND p.is_approved = true
+        AND (
+          p.name ILIKE $1
+          OR p.category ILIKE $1
+          OR COALESCE(p.description, '') ILIKE $1
+        )`;
+    if (region && typeof region === 'string') {
+      params.push(region);
+      sql += ` AND (u.region = $${params.length} OR u.region IS NULL)`;
+    }
+    if (category && typeof category === 'string' && isAllowedShopCategory(category)) {
+      params.push(category.trim());
+      sql += ` AND LOWER(COALESCE(u.shop_category, 'pharmacy')) = LOWER($${params.length})`;
+    }
+    sql += ` ORDER BY u.name ASC, p.name ASC LIMIT 200`;
+    const result = await pool.query(sql, params);
+    const grouped = new Map<string, { vendor: Record<string, unknown>; matches: any[] }>();
+    for (const row of result.rows) {
+      const vendorId = String(row.id);
+      if (!grouped.has(vendorId)) {
+        grouped.set(vendorId, {
+          vendor: {
+            id: row.id,
+            name: row.name,
+            email: row.email,
+            phone: row.phone,
+            cover_image: row.cover_image,
+            address: row.address,
+            lat: row.lat,
+            lng: row.lng,
+            region: row.region,
+            shop_category: row.shop_category,
+            shop_open_status: row.shop_open_status,
+            shop_status_message: row.shop_status_message,
+            shop_discount_label: row.shop_discount_label,
+            shop_discount_percent: row.shop_discount_percent,
+            shop_promo_updated_at: row.shop_promo_updated_at,
+            shop_story_image: row.shop_story_image,
+            shop_story_posted_at: row.shop_story_posted_at,
+            shop_story_expires_at: row.shop_story_expires_at,
+          },
+          matches: [],
+        });
+      }
+      grouped.get(vendorId)!.matches.push({
+        id: row.product_id,
+        vendor_id: row.id,
+        name: row.product_name,
+        price: row.product_price,
+        category: row.product_category,
+        image_url: row.product_image_url,
+        is_available: true,
+        is_approved: true,
+      });
+    }
+    const hits = await Promise.all(
+      Array.from(grouped.values()).map(async (entry) => {
+        const vendor = await vendorRowForClient(entry.vendor);
+        return { vendor, matches: entry.matches.slice(0, 5) };
+      })
+    );
+    res.json(hits);
+  } catch (err) {
+    console.error('Pharmacy search error:', err);
+    res.status(500).json({ message: 'Medicine search failed. Try a shorter name.' });
   }
 });
 
@@ -4654,7 +4795,8 @@ app.get('/api/products', async (req, res) => {
     const result = await pool.query(query, params);
     res.json(result.rows);
   } catch (err) {
-    res.status(500).json({ message: 'Server error' });
+    console.error('Products list error:', err);
+    res.status(500).json({ message: 'Could not load shop items.' });
   }
 });
 
@@ -6882,6 +7024,253 @@ app.post('/api/orders/:id/messages', authenticateToken, async (req: any, res) =>
   } catch (err: any) {
     const status = err.status || 500;
     res.status(status).json({ message: err.message || 'Server error' });
+  }
+});
+
+
+function formatShopMessage(row: any, viewerId: string) {
+  return {
+    id: row.id,
+    conversationId: row.conversation_id,
+    senderId: row.sender_id,
+    senderName: displayUserName(row.sender_name, {
+      role: row.sender_role,
+      fallback: 'Pharmacy',
+    }),
+    senderRole: row.sender_role || null,
+    body: row.body,
+    createdAt: row.created_at,
+    isMine: String(row.sender_id) === String(viewerId),
+  };
+}
+
+async function assertShopConversationAccess(conversationId: string, userId: string) {
+  const res = await pool.query(
+    `SELECT c.*, cu.name AS customer_name, vu.name AS vendor_name, vu.shop_category
+     FROM shop_conversations c
+     JOIN users cu ON cu.id = c.customer_id
+     JOIN users vu ON vu.id = c.vendor_id
+     WHERE c.id = $1`,
+    [conversationId]
+  );
+  if (res.rowCount === 0) {
+    const err: any = new Error('Conversation not found');
+    err.status = 404;
+    throw err;
+  }
+  const row = res.rows[0];
+  if (String(row.customer_id) !== String(userId) && String(row.vendor_id) !== String(userId)) {
+    const err: any = new Error('Unauthorized');
+    err.status = 403;
+    throw err;
+  }
+  return row;
+}
+
+function formatShopConversation(row: any, viewerId: string, role: string) {
+  const isVendor = role === 'vendor';
+  return {
+    id: row.id,
+    customerId: row.customer_id,
+    vendorId: row.vendor_id,
+    customerName: displayUserName(row.customer_name, { role: 'customer', fallback: 'Customer' }),
+    vendorName: displayUserName(row.vendor_name, { role: 'vendor', fallback: 'Pharmacy' }),
+    shopCategory: row.shop_category || 'pharmacy',
+    lastMessageAt: row.last_message_at,
+    lastMessagePreview: row.last_message_preview || '',
+    unreadCount: isVendor ? row.vendor_unread || 0 : row.customer_unread || 0,
+    peerName: isVendor
+      ? displayUserName(row.customer_name, { role: 'customer', fallback: 'Customer' })
+      : displayUserName(row.vendor_name, { role: 'vendor', fallback: 'Pharmacy' }),
+  };
+}
+
+async function emitShopMessage(conversation: any, row: any, senderId: string) {
+  const customerPayload = formatShopMessage(row, conversation.customer_id);
+  const vendorPayload = formatShopMessage(row, conversation.vendor_id);
+  io.to(conversation.customer_id).emit('shop:message', {
+    conversationId: conversation.id,
+    message: customerPayload,
+  });
+  io.to(conversation.vendor_id).emit('shop:message', {
+    conversationId: conversation.id,
+    message: vendorPayload,
+  });
+  const preview = String(row.body || '').slice(0, 180);
+  await pool.query(
+    `UPDATE shop_conversations
+     SET last_message_at = CURRENT_TIMESTAMP,
+         last_message_preview = $2,
+         customer_unread = customer_unread + CASE WHEN $3 = customer_id THEN 0 ELSE 1 END,
+         vendor_unread = vendor_unread + CASE WHEN $3 = vendor_id THEN 0 ELSE 1 END
+     WHERE id = $1`,
+    [conversation.id, preview, senderId]
+  );
+  const recipientId =
+    String(senderId) === String(conversation.customer_id)
+      ? conversation.vendor_id
+      : conversation.customer_id;
+  const senderName = displayUserName(row.sender_name, {
+    role: row.sender_role,
+    fallback: 'Pharmacy',
+  });
+  void sendPushToUserIds([recipientId], {
+    title: `Message from ${senderName}`,
+    body: preview.length > 140 ? `${preview.slice(0, 137)}…` : preview,
+    type: 'shop-message',
+    conversationId: conversation.id,
+    channelId: 'shop_messages',
+    highPriority: true,
+  });
+}
+
+// --- Pharmacy shop chat (customer ↔ vendor) ---
+
+app.get('/api/shop/conversations', authenticateToken, async (req: any, res) => {
+  const role = req.user.role;
+  if (role !== 'customer' && role !== 'vendor') {
+    return res.status(403).json({ message: 'Customers and pharmacies only' });
+  }
+  try {
+    const sql =
+      role === 'vendor'
+        ? `SELECT c.*, cu.name AS customer_name, vu.name AS vendor_name, vu.shop_category
+           FROM shop_conversations c
+           JOIN users cu ON cu.id = c.customer_id
+           JOIN users vu ON vu.id = c.vendor_id
+           WHERE c.vendor_id = $1
+           ORDER BY c.last_message_at DESC
+           LIMIT 100`
+        : `SELECT c.*, cu.name AS customer_name, vu.name AS vendor_name, vu.shop_category
+           FROM shop_conversations c
+           JOIN users cu ON cu.id = c.customer_id
+           JOIN users vu ON vu.id = c.vendor_id
+           WHERE c.customer_id = $1
+           ORDER BY c.last_message_at DESC
+           LIMIT 100`;
+    const result = await pool.query(sql, [req.user.id]);
+    res.json(result.rows.map((row: any) => formatShopConversation(row, req.user.id, role)));
+  } catch (err: any) {
+    if (err?.code === '42P01') {
+      return res.json([]);
+    }
+    console.error('Shop conversations list error:', err);
+    res.status(500).json({ message: 'Could not load shop messages.' });
+  }
+});
+
+app.post('/api/shop/conversations', authenticateToken, async (req: any, res) => {
+  const role = req.user.role;
+  const vendorId = String(req.body?.vendorId ?? req.body?.vendor_id ?? '').trim();
+  const customerId = String(req.body?.customerId ?? req.body?.customer_id ?? '').trim();
+
+  try {
+    let customer = req.user.id;
+    let vendor = vendorId;
+    if (role === 'customer') {
+      if (!vendorId) return res.status(400).json({ message: 'vendor_id is required' });
+      const vRes = await pool.query(
+        `SELECT id FROM users WHERE id = $1 AND role = 'vendor' AND status = 'active'`,
+        [vendorId]
+      );
+      if (vRes.rowCount === 0) {
+        return res.status(404).json({ message: 'Pharmacy not found' });
+      }
+    } else if (role === 'vendor') {
+      if (!customerId) return res.status(400).json({ message: 'customer_id is required' });
+      vendor = req.user.id;
+      customer = customerId;
+    } else {
+      return res.status(403).json({ message: 'Customers and pharmacies only' });
+    }
+
+    let convRes = await pool.query(
+      `SELECT c.*, cu.name AS customer_name, vu.name AS vendor_name, vu.shop_category
+       FROM shop_conversations c
+       JOIN users cu ON cu.id = c.customer_id
+       JOIN users vu ON vu.id = c.vendor_id
+       WHERE c.customer_id = $1 AND c.vendor_id = $2`,
+      [customer, vendor]
+    );
+    if (convRes.rowCount === 0) {
+      const ins = await pool.query(
+        `INSERT INTO shop_conversations (customer_id, vendor_id)
+         VALUES ($1, $2)
+         RETURNING id`,
+        [customer, vendor]
+      );
+      convRes = await pool.query(
+        `SELECT c.*, cu.name AS customer_name, vu.name AS vendor_name, vu.shop_category
+         FROM shop_conversations c
+         JOIN users cu ON cu.id = c.customer_id
+         JOIN users vu ON vu.id = c.vendor_id
+         WHERE c.id = $1`,
+        [ins.rows[0].id]
+      );
+    }
+    res.status(201).json(formatShopConversation(convRes.rows[0], req.user.id, role));
+  } catch (err: any) {
+    console.error('Shop conversation create error:', err);
+    res.status(500).json({ message: err.message || 'Server error' });
+  }
+});
+
+app.get('/api/shop/conversations/:id/messages', authenticateToken, async (req: any, res) => {
+  try {
+    await assertShopConversationAccess(req.params.id, req.user.id);
+    const result = await pool.query(
+      `SELECT m.*, u.name AS sender_name, u.role AS sender_role
+       FROM shop_messages m
+       JOIN users u ON u.id = m.sender_id
+       WHERE m.conversation_id = $1
+       ORDER BY m.created_at ASC
+       LIMIT 300`,
+      [req.params.id]
+    );
+    res.json(result.rows.map((row: any) => formatShopMessage(row, req.user.id)));
+  } catch (err: any) {
+    res.status(err.status || 500).json({ message: err.message || 'Server error' });
+  }
+});
+
+app.post('/api/shop/conversations/:id/messages', authenticateToken, async (req: any, res) => {
+  const body = String(req.body?.body ?? req.body?.text ?? '').trim();
+  if (!body) return res.status(400).json({ message: 'Message cannot be empty' });
+  if (body.length > 1000) {
+    return res.status(400).json({ message: 'Message is too long (max 1000 characters)' });
+  }
+  try {
+    const conversation = await assertShopConversationAccess(req.params.id, req.user.id);
+    const inserted = await pool.query(
+      `INSERT INTO shop_messages (conversation_id, sender_id, body)
+       VALUES ($1, $2, $3)
+       RETURNING *`,
+      [req.params.id, req.user.id, body]
+    );
+    const row = inserted.rows[0];
+    const nameRes = await pool.query('SELECT name, role FROM users WHERE id = $1', [req.user.id]);
+    row.sender_name = nameRes.rows[0]?.name;
+    row.sender_role = nameRes.rows[0]?.role;
+    await emitShopMessage(conversation, row, req.user.id);
+    res.status(201).json(formatShopMessage(row, req.user.id));
+  } catch (err: any) {
+    res.status(err.status || 500).json({ message: err.message || 'Server error' });
+  }
+});
+
+app.post('/api/shop/conversations/:id/read', authenticateToken, async (req: any, res) => {
+  try {
+    const conversation = await assertShopConversationAccess(req.params.id, req.user.id);
+    const isVendor = String(conversation.vendor_id) === String(req.user.id);
+    await pool.query(
+      `UPDATE shop_conversations
+       SET ${isVendor ? 'vendor_unread = 0' : 'customer_unread = 0'}
+       WHERE id = $1`,
+      [req.params.id]
+    );
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(err.status || 500).json({ message: err.message || 'Server error' });
   }
 });
 

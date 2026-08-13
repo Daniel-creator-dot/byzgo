@@ -43,6 +43,7 @@ import {
   walletTopupReferenceHint,
 } from './lib/walletTopup';
 import { formatCedis } from './lib/format';
+import { mergeCustomerOrderUpdate } from './lib/customerTrip';
 import {
   DEFAULT_DELIVERY_PRICE_PER_KM,
   deliveryFeeFromDistanceKm,
@@ -371,9 +372,7 @@ function MainApp() {
       
       const productsPromise = role === 'vendor'
         ? axios.get('/api/products', { params: { vendor_id: user?.id || storedUser.id } })
-        : role === 'customer'
-          ? axios.get('/api/products')
-          : Promise.resolve({ data: [] });
+        : Promise.resolve({ data: [] });
 
       const vendorsPromise = (role === 'customer' || role === 'rider') 
         ? axios.get('/api/vendors', { params: { region } }) 
@@ -686,7 +685,9 @@ function MainApp() {
 
     socket.on('order:updated', (updatedOrder: Order) => {
       const prevOrder = ordersRef.current.find((o) => o.id === updatedOrder.id);
-      setOrders(prev => prev.map(o => o.id === updatedOrder.id ? updatedOrder : o));
+      setOrders(prev => prev.map(o => o.id === updatedOrder.id
+        ? mergeCustomerOrderUpdate(o, updatedOrder)
+        : o));
       const u = userRef.current;
       if (
         u?.role === 'customer' &&
@@ -1844,6 +1845,27 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
   const [menuSearch, setMenuSearch] = useState('');
   const [menuDrugHits, setMenuDrugHits] = useState<{ vendor: any; matches: any[] }[]>([]);
   const [menuSearching, setMenuSearching] = useState(false);
+  const [vendorMenuProducts, setVendorMenuProducts] = useState<any[]>([]);
+
+  useEffect(() => {
+    if (!selectedVendor?.id) {
+      setVendorMenuProducts([]);
+      return;
+    }
+    let cancelled = false;
+    axios
+      .get('/api/products', { params: { vendor_id: selectedVendor.id } })
+      .then((res) => {
+        if (cancelled) return;
+        setVendorMenuProducts(Array.isArray(res.data) ? res.data : []);
+      })
+      .catch(() => {
+        if (!cancelled) setVendorMenuProducts([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedVendor?.id]);
 
   useEffect(() => {
     if (activeTab !== 'menu' || selectedVendor) {
@@ -1863,7 +1885,12 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
         });
         setMenuDrugHits(Array.isArray(res.data) ? res.data : []);
       } catch {
-        setMenuDrugHits([]);
+        const needle = q.toLowerCase();
+        setMenuDrugHits(
+          vendors
+            .filter((v: { name?: string }) => String(v.name || '').toLowerCase().includes(needle))
+            .map((vendor: unknown) => ({ vendor, matches: [] }))
+        );
       } finally {
         setMenuSearching(false);
       }
@@ -1957,9 +1984,7 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
   const liveOrders = myOrders.filter((o) => !['delivered', 'cancelled'].includes(o.status));
   const tripHistory = myOrders.filter((o) => o.status !== 'cancelled');
 
-  const vendorProducts = selectedVendor 
-    ? products.filter(p => p.vendor_id === selectedVendor.id)
-    : [];
+  const vendorProducts = selectedVendor ? vendorMenuProducts : [];
 
   const menuBrowseVendors = !selectedVendor && menuSearch.trim().length >= 2 && menuDrugHits.length > 0
     ? menuDrugHits.map(h => ({ ...h.vendor, _drugMatches: h.matches }))
@@ -2413,6 +2438,7 @@ function CustomerView({ user, orders, products, vendors, riderLocations, paystac
       {activeTab === 'courier' && (
         <CustomerDeliveryHome
           liveOrders={liveOrders}
+          allCustomerOrders={myOrders}
           user={user}
           courierForm={courierForm}
           setCourierForm={setCourierForm}

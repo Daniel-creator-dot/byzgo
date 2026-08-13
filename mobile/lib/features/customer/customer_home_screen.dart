@@ -64,7 +64,8 @@ class CustomerHomeScreen extends StatefulWidget {
   State<CustomerHomeScreen> createState() => CustomerHomeScreenState();
 }
 
-class CustomerHomeScreenState extends State<CustomerHomeScreen> {
+class CustomerHomeScreenState extends State<CustomerHomeScreen>
+    with WidgetsBindingObserver {
   final _pickupCtrl = TextEditingController();
   final _dropoffCtrl = TextEditingController();
   final _itemCtrl = TextEditingController(text: 'Package');
@@ -313,7 +314,25 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
         }
       }
     }
+    Order? pendingRated;
+    if (_pendingRatingTripId != null) {
+      for (final o in _orders) {
+        if (o.id == _pendingRatingTripId && _rideTabTripVisible(o, userId)) {
+          pendingRated = o;
+          break;
+        }
+      }
+    }
     final active = _activeCourier;
+    if (pendingRated != null && active != null && pendingRated.id != active.id) {
+      try {
+        final activeCreated = DateTime.parse(active.createdAt);
+        final doneCreated = DateTime.parse(pendingRated.createdAt);
+        if (activeCreated.isAfter(doneCreated)) return active;
+      } catch (_) {}
+      return pendingRated;
+    }
+    if (pendingRated != null) return pendingRated;
     if (active != null) return active;
     return _newestRideTabOrder(
       _orders,
@@ -363,10 +382,18 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
       _pickupCtrl.text = label;
       _pickMode = MapPickMode.pickup;
     }
+    WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _init();
     });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && _session.isAuthenticated) {
+      unawaited(_loadOrders(silent: true));
+    }
   }
 
   Future<void> _init() async {
@@ -401,8 +428,8 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
   }
 
   bool get _searchingBiker {
-    final active = _activeCourier;
-    return active != null && customerIsSearchingBiker(active);
+    final trip = _rideTabTrip;
+    return trip != null && customerIsSearchingBiker(trip);
   }
 
   LocationPoint? _pickupForOrder(Order order) {
@@ -452,7 +479,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
   }
 
   Future<void> _fetchNearbyRiders() async {
-    final active = _activeCourier;
+    final active = _rideTabTrip;
     if (active == null || !customerIsSearchingBiker(active)) return;
     final center = _pickupForOrder(active);
     if (center == null || !center.hasCoords) return;
@@ -554,13 +581,15 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
   /// Poll API while searching for a biker or waiting at drop-off if socket lags.
   void _syncOrderStatusPoll() {
     _orderStatusPoll?.cancel();
-    final active = _activeCourier;
+    final active = _rideTabTrip ?? _activeCourier;
     if (active == null) {
       _orderStatusPoll = null;
       return;
     }
     final searching = customerIsSearchingBiker(active);
-    if (!searching && active.status != 'arrived') {
+    if (!searching &&
+        active.status != 'arrived' &&
+        active.status != 'picked_up') {
       _orderStatusPoll = null;
       return;
     }
@@ -572,22 +601,27 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
   }
 
   Future<void> _pollOrderStatusOnce() async {
-    final track = _activeCourier;
+    final track = _activeCourier ?? _rideTabTrip;
     if (track == null) return;
     final searching = customerIsSearchingBiker(track);
-    if (!searching && track.status != 'arrived') return;
+    if (!searching &&
+        track.status != 'arrived' &&
+        track.status != 'picked_up') {
+      return;
+    }
     try {
       final list = await _ordersRepo.fetchOrders();
       final updated = list.where((o) => o.id == track.id).firstOrNull;
       if (updated == null || !mounted) return;
       final hadRider = customerOrderHasActiveRider(track);
       final hasRiderNow = customerOrderHasActiveRider(updated);
+      final becameTerminal =
+          updated.status == 'delivered' || updated.status == 'cancelled';
       if (updated.status == track.status &&
           updated.riderId == track.riderId &&
-          !searching) {
+          !becameTerminal) {
         return;
       }
-      if (searching && !hasRiderNow) return;
       final prevStatus = track.status;
       _onOrderUpdated(updated);
       if (hasRiderNow && !hadRider) {
@@ -674,6 +708,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _watchedSession?.removeListener(_onSessionChanged);
     _quoteDebounce?.cancel();
     _pricingConfig?.removeListener(_onLivePricingUpdated);
@@ -804,6 +839,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
         }
       } else if (order.status == 'delivered' && prev?.status != 'delivered') {
         _snack('Delivered — thanks for using BytzGO!', success: true);
+        _stopLivePolls();
       } else if (order.status == 'arrived' && prev?.status != 'arrived') {
         _snack('Driver arrived — complete payment for your PIN', success: true);
       } else if (order.status == 'picked_up' && prev?.status != 'picked_up') {
@@ -825,7 +861,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
           _snack('Biker found — they\'re on the way', success: true);
         }
       }
-      if (order.status != 'cancelled') {
+      if (order.status != 'cancelled' && order.status != 'delivered') {
         _syncNearbyPoll();
         _syncEtaPoll(order);
         _syncRiderLocationPoll(order);
@@ -857,7 +893,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
       _session.patchBalance(balance);
     };
     socket.onLocationUpdated = (riderId, lat, lng) {
-      final active = _activeCourier;
+      final active = _rideTabTrip ?? _activeCourier;
       if (active == null || _dismissedTripIds.contains(active.id)) return;
       if (customerIsSearchingBiker(active)) {
         unawaited(_pollOrderStatusOnce());
@@ -1089,14 +1125,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
       }
     });
     if (cancelled) {
-      _nearbyPoll?.cancel();
-      _nearbyPoll = null;
-      _etaPoll?.cancel();
-      _etaPoll = null;
-      _riderLocationPoll?.cancel();
-      _riderLocationPoll = null;
-      _orderStatusPoll?.cancel();
-      _orderStatusPoll = null;
+      _stopLivePolls();
       _dismissRideTabTrip(order.id);
       if (prev?.status != 'cancelled') {
         _snack('Delivery request cancelled', success: true);
@@ -1104,9 +1133,24 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
       _mapKey.currentState?.fitAllMarkers();
       return;
     }
+    if (order.status == 'delivered') {
+      _stopLivePolls();
+      return;
+    }
     _syncNearbyPoll();
     _syncEtaPoll(order);
     _syncRiderLocationPoll(order);
+  }
+
+  void _stopLivePolls() {
+    _nearbyPoll?.cancel();
+    _nearbyPoll = null;
+    _etaPoll?.cancel();
+    _etaPoll = null;
+    _riderLocationPoll?.cancel();
+    _riderLocationPoll = null;
+    _orderStatusPoll?.cancel();
+    _orderStatusPoll = null;
   }
 
   void _dismissRideTabTrip(String orderId) {
@@ -1117,14 +1161,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
       if (_pendingRatingTripId == orderId) _pendingRatingTripId = null;
       _clearLiveTrackingState();
     });
-    _nearbyPoll?.cancel();
-    _nearbyPoll = null;
-    _etaPoll?.cancel();
-    _etaPoll = null;
-    _riderLocationPoll?.cancel();
-    _riderLocationPoll = null;
-    _orderStatusPoll?.cancel();
-    _orderStatusPoll = null;
+    _stopLivePolls();
     if (_sheetScrollCtrl.hasClients) {
       _sheetScrollCtrl.jumpTo(0);
     }
@@ -1226,7 +1263,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
     _scheduleDeliveryQuote();
   }
 
-  Future<void> _loadOrders() async {
+  Future<void> _loadOrders({bool silent = false}) async {
     if (!mounted) return;
     if (!_session.isAuthenticated) {
       setState(() {
@@ -1236,10 +1273,12 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
       });
       return;
     }
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+    if (!silent) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
     try {
       final list = await _ordersRepo.fetchOrders();
       if (!mounted) return;
@@ -1251,13 +1290,19 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen> {
         _loading = false;
         _restorePendingRatingTrip();
       });
-      _syncNearbyPoll();
-      final active = _activeCourier;
-      if (active != null) {
-        unawaited(_resolveTrackingLabels(active));
-        _syncEtaPoll(active);
-        _syncRiderLocationPoll(active);
+      final shown = _rideTabTrip;
+      if (shown != null && customerIsSearchingBiker(shown)) {
+        _syncNearbyPoll();
+        unawaited(_resolveTrackingLabels(shown));
         _syncOrderStatusPoll();
+      } else if (shown != null && !['delivered', 'cancelled'].contains(shown.status)) {
+        _syncNearbyPoll();
+        unawaited(_resolveTrackingLabels(shown));
+        _syncEtaPoll(shown);
+        _syncRiderLocationPoll(shown);
+        _syncOrderStatusPoll();
+      } else {
+        _stopLivePolls();
       }
     } catch (e) {
       if (!mounted) return;

@@ -62,6 +62,20 @@ class OrdersRepository {
 
 
   Future<List<Vendor>> fetchVendors({String? region, String? category}) async {
+    try {
+      return await _getVendors(region: region, category: category);
+    } on DioException {
+      if ((region != null && region.isNotEmpty) ||
+          (category != null && category.isNotEmpty)) {
+        try {
+          return await _getVendors();
+        } catch (_) {}
+      }
+      rethrow;
+    }
+  }
+
+  Future<List<Vendor>> _getVendors({String? region, String? category}) async {
     final query = <String, String>{};
     if (region != null && region.isNotEmpty) query['region'] = region;
     if (category != null && category.isNotEmpty) query['category'] = category;
@@ -80,6 +94,67 @@ class OrdersRepository {
         .map((e) => Vendor.fromJson(Map<String, dynamic>.from(e)))
         .toList();
     return dedupeVendors(list);
+  }
+
+  Future<List<PharmacySearchHit>> searchPharmaciesByDrug({
+    required String query,
+    String? region,
+    String? category,
+  }) async {
+    final q = query.trim();
+    if (q.length < 2) return [];
+    final params = <String, String>{'q': q};
+    if (region != null && region.isNotEmpty) params['region'] = region;
+    if (category != null && category.isNotEmpty) params['category'] = category;
+
+    try {
+      final res = await _api.dio.get<dynamic>(
+        '/api/pharmacy-search',
+        queryParameters: params,
+      );
+      final data = res.data;
+      if (data is List) {
+        return data
+            .whereType<Map>()
+            .map((e) => PharmacySearchHit.fromJson(Map<String, dynamic>.from(e)))
+            .toList();
+      }
+    } on DioException catch (e) {
+      final status = e.response?.statusCode;
+      if (status != 404 && status != 500) rethrow;
+    }
+    return _fallbackDrugSearch(query: q, region: region, category: category);
+  }
+
+  Future<List<PharmacySearchHit>> _fallbackDrugSearch({
+    required String query,
+    String? region,
+    String? category,
+  }) async {
+    final vendors = await fetchVendors(region: region, category: category);
+    if (vendors.isEmpty) return [];
+    final needle = query.toLowerCase();
+    final hits = <PharmacySearchHit>[];
+    for (final vendor in vendors) {
+      try {
+        final products = await fetchProducts(vendorId: vendor.id);
+        final matches = products
+            .where((p) {
+              final name = p.name.toLowerCase();
+              final cat = (p.category ?? '').toLowerCase();
+              final desc = (p.description ?? '').toLowerCase();
+              return name.contains(needle) ||
+                  cat.contains(needle) ||
+                  desc.contains(needle);
+            })
+            .take(5)
+            .toList();
+        if (matches.isNotEmpty) {
+          hits.add(PharmacySearchHit(vendor: vendor, matches: matches));
+        }
+      } catch (_) {}
+    }
+    return hits;
   }
 
   Future<List<Product>> fetchProducts({required String vendorId}) async {

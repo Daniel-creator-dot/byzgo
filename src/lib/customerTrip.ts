@@ -1,8 +1,14 @@
 import axios from 'axios';
 import { Order } from '../types';
 
+function customerOrderRiderId(order: Order): string | undefined {
+  const id = order.rider_id || (order as Order & { riderId?: string }).riderId;
+  return id?.trim() ? id : undefined;
+}
+
 export function isCustomerSearchingBiker(order: Order): boolean {
-  if (order.rider_id) return false;
+  if (['cancelled', 'delivered', 'scheduled'].includes(order.status)) return false;
+  if (customerOrderRiderId(order)) return false;
   if (customerOrderHasShopPickup(order)) {
     return order.status === 'ready';
   }
@@ -12,7 +18,7 @@ export function isCustomerSearchingBiker(order: Order): boolean {
 export function customerPharmacyAwaitingConfirm(order: Order): boolean {
   return (
     customerOrderHasShopPickup(order) &&
-    !order.rider_id &&
+    !customerOrderRiderId(order) &&
     ['pending', 'preparing'].includes(order.status)
   );
 }
@@ -30,18 +36,75 @@ function isCourierTrip(order: Order): boolean {
   return type === 'courier' || Boolean(order.vendor_id?.trim());
 }
 
-/** Ride tab: in-progress trip, or just-delivered until the customer rates. */
+function orderCreatedMs(order: Order): number {
+  const raw =
+    order.created_at ||
+    (order as Order & { createdAt?: string }).createdAt ||
+    '';
+  const t = Date.parse(raw);
+  return Number.isFinite(t) ? t : 0;
+}
+
+function isRecentUnratedDelivered(order: Order, hours = 6): boolean {
+  if (order.status !== 'delivered') return false;
+  const rating = (order as Order & { rating?: number }).rating ?? 0;
+  if (rating >= 1) return false;
+  return Date.now() - orderCreatedMs(order) < hours * 3_600_000;
+}
+
+/** Ride tab: just-finished trip until rated, else the newest in-progress trip. */
 export function rideTabCourierTrip(orders: Order[], userId: string): Order | undefined {
   const mine = orders.filter((o) => o.customer_id === userId && isCourierTrip(o));
-  const active = mine.find((o) => !['delivered', 'cancelled'].includes(o.status));
-  if (active) return active;
-  const unratedDelivered = mine.filter(
-    (o) => o.status === 'delivered' && !((o as Order & { rating?: number }).rating ?? 0)
-  );
-  if (unratedDelivered.length === 0) return undefined;
-  return unratedDelivered.sort(
-    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-  )[0];
+  const recentDelivered = mine
+    .filter((o) => isRecentUnratedDelivered(o))
+    .sort((a, b) => orderCreatedMs(b) - orderCreatedMs(a))[0];
+  const active = mine
+    .filter((o) => !['delivered', 'cancelled', 'scheduled'].includes(o.status))
+    .sort((a, b) => orderCreatedMs(b) - orderCreatedMs(a))[0];
+  if (recentDelivered && active) {
+    return orderCreatedMs(active) > orderCreatedMs(recentDelivered) ? active : recentDelivered;
+  }
+  return recentDelivered ?? active;
+}
+
+const TRIP_STATUS_RANK: Record<string, number> = {
+  cancelled: -2,
+  pending: 0,
+  preparing: 1,
+  ready: 2,
+  picked_up: 3,
+  arrived: 4,
+  delivered: 5,
+};
+
+/** Ignore stale socket payloads that would rewind a finished trip back to searching. */
+export function mergeCustomerOrderUpdate(prev: Order, next: Order): Order {
+  if (prev.status === 'cancelled' && next.status !== 'cancelled') return prev;
+  const merged: Order = { ...prev, ...next };
+  if (prev.status === 'delivered' && next.status !== 'cancelled' && next.status !== 'delivered') {
+    return {
+      ...merged,
+      status: 'delivered',
+      rider_id: customerOrderRiderId(next) || customerOrderRiderId(prev),
+    };
+  }
+  const prevRank = TRIP_STATUS_RANK[prev.status] ?? 0;
+  const nextRank = TRIP_STATUS_RANK[next.status] ?? 0;
+  if (nextRank < prevRank && next.status !== 'cancelled') {
+    return {
+      ...merged,
+      status: prev.status,
+      rider_id: customerOrderRiderId(next) || customerOrderRiderId(prev),
+    };
+  }
+  if (
+    !customerOrderRiderId(next) &&
+    customerOrderRiderId(prev) &&
+    ['picked_up', 'arrived', 'delivered'].includes(next.status)
+  ) {
+    return { ...merged, rider_id: customerOrderRiderId(prev) };
+  }
+  return merged;
 }
 
 export function customerOrderHasShopPickup(order: Order): boolean {

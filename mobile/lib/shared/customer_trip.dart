@@ -23,7 +23,7 @@ bool customerCanShowDeliveryPin(Order order) {
 }
 
 bool customerIsSearchingBiker(Order order) {
-  if (['cancelled', 'delivered'].contains(order.status)) return false;
+  if (['cancelled', 'delivered', 'scheduled'].contains(order.status)) return false;
   if (customerOrderHasActiveRider(order)) return false;
   // Pharmacy: rider dispatch starts only after the vendor marks the order ready.
   if (customerOrderHasShopPickup(order)) {
