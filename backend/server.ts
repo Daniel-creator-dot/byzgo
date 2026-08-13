@@ -307,7 +307,12 @@ async function userForAuthResponse(row: Record<string, unknown> | null | undefin
   return u;
 }
 
-const SHOP_CATEGORIES = ['pharmacy', 'food', 'restaurant', 'fashion', 'groceries'] as const;
+const SHOP_CATEGORIES = ['pharmacy', 'health', 'food', 'restaurant', 'fashion', 'groceries'] as const;
+
+function isAllowedShopCategory(raw: string | null | undefined): boolean {
+  const c = String(raw ?? '').trim().toLowerCase();
+  return (SHOP_CATEGORIES as readonly string[]).includes(c);
+}
 const SHOP_OPEN_STATUSES = ['open', 'busy', 'closed'] as const;
 type ShopOpenStatus = (typeof SHOP_OPEN_STATUSES)[number];
 
@@ -4665,8 +4670,8 @@ app.get('/api/vendors', async (req, res) => {
       query += ' AND (region = $2 OR region IS NULL)';
       params.push(region);
     }
-    if (category && typeof category === 'string') {
-      query += ` AND LOWER(COALESCE(shop_category, 'food')) = LOWER($${params.length + 1})`;
+    if (category && typeof category === 'string' && isAllowedShopCategory(category)) {
+      query += ` AND LOWER(COALESCE(shop_category, 'pharmacy')) = LOWER($${params.length + 1})`;
       params.push(category.trim());
     }
     
