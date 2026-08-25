@@ -511,6 +511,59 @@ async function getGlobalDeliveryBounds(): Promise<{ min: number | null; max: num
   };
 }
 
+type RideServiceKind = 'package' | 'okada' | 'keke';
+
+function normalizeRideServiceKind(raw?: string | null): RideServiceKind {
+  const s = String(raw || '').trim().toLowerCase();
+  if (s === 'tricycle' || s === 'keke' || s === 'napep' || s === 'auto' || s === 'pragia') {
+    return 'keke';
+  }
+  if (s === 'bike' || s === 'okada' || s === 'motorcycle' || s === 'motorbike') {
+    return 'okada';
+  }
+  return 'package';
+}
+
+async function getRideServiceConfig(kind: RideServiceKind): Promise<{ rate: number; min: number | null }> {
+  const globalRate = Math.max(
+    0.01,
+    parseFloat((await getSetting('delivery_price_per_km')) || '4') || 4
+  );
+  const globalMin = (await getGlobalDeliveryBounds()).min;
+  if (kind === 'okada') {
+    const rate = parseOptionalPositiveAmount(await getSetting('okada_price_per_km')) ?? 3.5;
+    const serviceMin = parseOptionalPositiveAmount(await getSetting('okada_min_fee')) ?? 6;
+    const mins = [serviceMin, globalMin].filter((n): n is number => n != null && n > 0);
+    return { rate, min: mins.length ? Math.max(...mins) : serviceMin };
+  }
+  if (kind === 'keke') {
+    const rate = parseOptionalPositiveAmount(await getSetting('keke_price_per_km')) ?? 2.5;
+    const serviceMin = parseOptionalPositiveAmount(await getSetting('keke_min_fee')) ?? 5;
+    const mins = [serviceMin, globalMin].filter((n): n is number => n != null && n > 0);
+    return { rate, min: mins.length ? Math.max(...mins) : serviceMin };
+  }
+  const serviceMin = parseOptionalPositiveAmount(await getSetting('package_min_fee'));
+  const mins = [serviceMin, globalMin].filter((n): n is number => n != null && n > 0);
+  return { rate: globalRate, min: mins.length ? Math.max(...mins) : globalMin };
+}
+
+async function getRideServiceMinFee(kind: RideServiceKind): Promise<number | null> {
+  return (await getRideServiceConfig(kind)).min;
+}
+
+async function buildRideServicesPayload() {
+  const [pkg, okada, keke] = await Promise.all([
+    getRideServiceConfig('package'),
+    getRideServiceConfig('okada'),
+    getRideServiceConfig('keke'),
+  ]);
+  return [
+    { id: 'package', price_per_km: pkg.rate, min_fee: pkg.min },
+    { id: 'okada', price_per_km: okada.rate, min_fee: okada.min },
+    { id: 'keke', price_per_km: keke.rate, min_fee: keke.min },
+  ];
+}
+
 function positiveAmount(value: unknown): number | null {
   const n = Number(value);
   return Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : null;
@@ -815,12 +868,14 @@ async function buildPublicPricingPayload() {
     max_price: z.max_price != null ? Number(z.max_price) : null,
     is_active: z.is_active !== false,
   }));
+  const rideServices = await buildRideServicesPayload();
   return {
     price_per_km: pricePerKm,
     base_price_per_km: baseRate,
     min_fee: globalBounds.min,
     max_fee: globalBounds.max,
     zones,
+    ride_services: rideServices,
     surge_enabled: surge.enabled,
     surge_multiplier: surge.multiplier,
     surge_start_time: surge.start_time,
@@ -891,16 +946,6 @@ function haversineDistanceKm(
   return Math.round(r * c * 1000) / 1000;
 }
 
-/** Okada (bike) vs Keke (tricycle) fare — mirrors mobile `okada_fare.dart`. */
-function okadaVehicleDeliveryFee(distanceKm: number, vehicleType?: string | null): number {
-  const isTricycle = vehicleType === 'tricycle';
-  const base = isTricycle ? 8.0 : 5.0;
-  const perKm = isTricycle ? 3.0 : 2.5;
-  const minimum = isTricycle ? 12.0 : 8.0;
-  const raw = base + distanceKm * perKm;
-  return Math.round(Math.max(minimum, raw) * 100) / 100;
-}
-
 async function calculateDeliveryFeeFromCoords(
   pickupLat: number,
   pickupLng: number,
@@ -915,35 +960,18 @@ async function calculateDeliveryFeeFromCoords(
   price_per_km: number;
   zone: string | null;
   base_delivery_fee: number;
+  fee_from_distance_km: number;
+  min_fee: number | null;
+  min_applied: boolean;
+  zone_min_price: number | null;
+  zone_max_price: number | null;
   surge_active: boolean;
   surge_multiplier: number;
+  service: RideServiceKind;
 }> {
   const distance_km = haversineDistanceKm(pickupLat, pickupLng, destLat, destLng);
-  const normalizedVehicle =
-    vehicleType === 'tricycle' || vehicleType === 'bike' ? vehicleType : null;
-
-  if (normalizedVehicle) {
-    const base = okadaVehicleDeliveryFee(distance_km, normalizedVehicle);
-    const { fee, surge } = await applySurgeToFee(base);
-    const globalRate = Math.max(
-      0.01,
-      parseFloat((await getSetting('delivery_price_per_km')) || '4') || 4
-    );
-    const effectiveRate = surge.surge_active
-      ? Math.round(globalRate * surge.multiplier * 100) / 100
-      : globalRate;
-    return {
-      distance_km,
-      delivery_fee: fee,
-      price_per_km: effectiveRate,
-      zone: null,
-      base_delivery_fee: base,
-      surge_active: surge.surge_active,
-      surge_multiplier: surge.multiplier,
-    };
-  }
-
-  const globalRate = Math.max(0.01, parseFloat((await getSetting('delivery_price_per_km')) || '4') || 4);
+  const kind = normalizeRideServiceKind(vehicleType);
+  const service = await getRideServiceConfig(kind);
   const globalBounds = await getGlobalDeliveryBounds();
 
   let zone: any = null;
@@ -962,15 +990,20 @@ async function calculateDeliveryFeeFromCoords(
     zone = result.rows[0];
   }
 
-  const feeFromDistance = Math.round(distance_km * globalRate * 100) / 100;
-  const base = applyDeliveryFeeCaps(feeFromDistance, zone, globalBounds, serviceMin);
+  const feeFromDistance = Math.round(distance_km * service.rate * 100) / 100;
+  const base = applyDeliveryFeeCaps(feeFromDistance, zone, globalBounds, service.min);
   const { fee, surge } = await applySurgeToFee(base);
   const effectiveRate = surge.surge_active
-    ? Math.round(globalRate * surge.multiplier * 100) / 100
-    : globalRate;
-  const appliedMin = [positiveAmount(serviceMin), positiveAmount(globalBounds.min), zone ? positiveAmount(zone.min_price) : null]
-    .filter((n): n is number => n != null)
-    .reduce((a, b) => Math.max(a, b), 0) || null;
+    ? Math.round(service.rate * surge.multiplier * 100) / 100
+    : service.rate;
+  const appliedMin =
+    [
+      positiveAmount(service.min),
+      positiveAmount(globalBounds.min),
+      zone ? positiveAmount(zone.min_price) : null,
+    ]
+      .filter((n): n is number => n != null)
+      .reduce((a, b) => Math.max(a, b), 0) || null;
   const zoneMax =
     zone?.max_price != null && Number.isFinite(Number(zone.max_price))
       ? Number(zone.max_price)
@@ -983,13 +1016,15 @@ async function calculateDeliveryFeeFromCoords(
     zone: zone?.name ?? null,
     base_delivery_fee: base,
     fee_from_distance_km: feeFromDistance,
-    min_fee: appliedMin ?? effectiveMin,
-    min_applied: appliedMin != null &&
-      (discounted.fee <= appliedMin + 0.009 || feeFromDistance + 0.009 < appliedMin),
+    min_fee: appliedMin,
+    min_applied:
+      appliedMin != null &&
+      (fee <= appliedMin + 0.009 || feeFromDistance + 0.009 < appliedMin),
     zone_min_price: appliedMin,
     zone_max_price: zoneMax,
     surge_active: surge.surge_active,
     surge_multiplier: surge.multiplier,
+    service: kind,
   };
 }
 
@@ -1486,6 +1521,14 @@ const initDb = async () => {
       INSERT INTO system_settings (key, value) VALUES ('delivery_min_fee', '')
       ON CONFLICT (key) DO NOTHING;
       INSERT INTO system_settings (key, value) VALUES ('delivery_max_fee', '')
+      ON CONFLICT (key) DO NOTHING;
+      INSERT INTO system_settings (key, value) VALUES ('okada_price_per_km', '3.5')
+      ON CONFLICT (key) DO NOTHING;
+      INSERT INTO system_settings (key, value) VALUES ('okada_min_fee', '6')
+      ON CONFLICT (key) DO NOTHING;
+      INSERT INTO system_settings (key, value) VALUES ('keke_price_per_km', '2.5')
+      ON CONFLICT (key) DO NOTHING;
+      INSERT INTO system_settings (key, value) VALUES ('keke_min_fee', '5')
       ON CONFLICT (key) DO NOTHING;
       INSERT INTO system_settings (key, value) VALUES ('commission_percent', '10')
       ON CONFLICT (key) DO NOTHING;
@@ -7889,6 +7932,10 @@ app.get('/api/admin/settings', authenticateToken, async (req: any, res) => {
       delivery_price_per_km: pricePerKm || '4',
       delivery_min_fee: minFee ?? '',
       delivery_max_fee: maxFee ?? '',
+      okada_price_per_km: (await getSetting('okada_price_per_km')) || '3.5',
+      okada_min_fee: (await getSetting('okada_min_fee')) || '6',
+      keke_price_per_km: (await getSetting('keke_price_per_km')) || '2.5',
+      keke_min_fee: (await getSetting('keke_min_fee')) || '5',
       surge_enabled: surge.enabled ? 'true' : 'false',
       surge_multiplier: String(surge.multiplier),
       surge_start_time: surge.start_time,
@@ -7926,6 +7973,10 @@ app.patch('/api/admin/settings', authenticateToken, async (req: any, res) => {
     delivery_price_per_km,
     delivery_min_fee,
     delivery_max_fee,
+    okada_price_per_km,
+    okada_min_fee,
+    keke_price_per_km,
+    keke_min_fee,
     surge_enabled,
     surge_multiplier,
     surge_start_time,
@@ -7946,6 +7997,10 @@ app.patch('/api/admin/settings', authenticateToken, async (req: any, res) => {
     delivery_price_per_km != null ||
     delivery_min_fee != null ||
     delivery_max_fee != null ||
+    okada_price_per_km != null ||
+    okada_min_fee != null ||
+    keke_price_per_km != null ||
+    keke_min_fee != null ||
     surge_enabled != null ||
     surge_multiplier != null ||
     surge_start_time != null ||
@@ -8008,6 +8063,30 @@ app.patch('/api/admin/settings', authenticateToken, async (req: any, res) => {
       } else {
         const max = Math.max(0.01, parseFloat(trimmed) || 0);
         await setSetting('delivery_max_fee', String(max));
+      }
+    }
+    if (okada_price_per_km != null) {
+      const rate = Math.max(0.01, parseFloat(String(okada_price_per_km)) || 3.5);
+      await setSetting('okada_price_per_km', String(rate));
+    }
+    if (okada_min_fee != null) {
+      const trimmed = String(okada_min_fee).trim();
+      if (trimmed === '') {
+        await setSetting('okada_min_fee', '6');
+      } else {
+        await setSetting('okada_min_fee', String(Math.max(0, parseFloat(trimmed) || 0)));
+      }
+    }
+    if (keke_price_per_km != null) {
+      const rate = Math.max(0.01, parseFloat(String(keke_price_per_km)) || 2.5);
+      await setSetting('keke_price_per_km', String(rate));
+    }
+    if (keke_min_fee != null) {
+      const trimmed = String(keke_min_fee).trim();
+      if (trimmed === '') {
+        await setSetting('keke_min_fee', '5');
+      } else {
+        await setSetting('keke_min_fee', String(Math.max(0, parseFloat(trimmed) || 0)));
       }
     }
     if (surge_enabled != null) {
@@ -8263,8 +8342,8 @@ app.post('/api/delivery/calculate', authenticateToken, async (req: any, res) => 
   const pLng = Number(pickup_lng);
   const dLat = Number(dest_lat ?? destination_lat);
   const dLng = Number(dest_lng ?? destination_lng);
-  const normalizedVehicle = String(vehicle_type || vehicleType || 'bike').trim().toLowerCase();
-  const vehicleForQuote = normalizedVehicle === 'tricycle' ? 'tricycle' : 'bike';
+  const normalizedVehicle = String(vehicle_type || vehicleType || 'package').trim().toLowerCase();
+  const vehicleForQuote = normalizeRideServiceKind(normalizedVehicle);
   if (!pLat || !pLng || !dLat || !dLng) {
     return res.status(400).json({ message: 'pickup and destination coordinates required' });
   }

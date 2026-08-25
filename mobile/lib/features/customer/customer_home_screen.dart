@@ -20,6 +20,7 @@ import '../../models/trip_message.dart';
 import '../../models/location_point.dart';
 import '../../models/nearby_rider.dart';
 import '../../models/order.dart';
+import '../../models/delivery_quote.dart';
 import '../../shared/format.dart';
 import '../../shared/delivery_pricing.dart';
 import '../../shared/user_display.dart';
@@ -28,6 +29,7 @@ import '../../shared/rider_trip.dart';
 import '../../shared/customer_trip.dart';
 import '../../shared/theme.dart';
 import '../../shared/vehicle_type.dart';
+import '../../models/ride_service.dart';
 import '../../shared/widgets/live_trip_map_overlay.dart';
 import '../../shared/widgets/ride_google_map.dart';
 import '../../shared/widgets/bytz_scaffold.dart';
@@ -90,6 +92,8 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen>
   String? _pendingRatingTripId;
   final Set<String> _dismissedTripIds = {};
   double? _quotedFee;
+  double? _quotedMinFee;
+  bool _minApplied = false;
   double? _quoteDistanceKm;
   bool _surgeActive = false;
   bool _quoteLoading = false;
@@ -178,6 +182,8 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen>
     setState(() {
       _pricePerKm = _pricingConfig?.pricePerKm ?? defaultDeliveryPricePerKm;
       _quotedFee = null;
+      _quotedMinFee = null;
+      _minApplied = false;
       _surgeActive = _pricingConfig?.surgeActive ?? false;
     });
     if (_pickup != null && _destination != null) {
@@ -194,6 +200,44 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen>
   double get _deliveryFee => _quotedFee ?? 0;
 
   bool get _quoteReady => _quotedFee != null && _quotedFee! > 0 && !_quoteLoading;
+
+  RideServiceType get _activeRideService =>
+      _vehicleType == VehicleType.tricycle
+          ? RideServiceType.keke
+          : RideServiceType.okada;
+
+  Map<String, double> get _rideMinFees {
+    final region = _session.user?.region;
+    final okada = _pricingConfig?.minFeeFor(RideServiceType.okada, region: region);
+    final keke = _pricingConfig?.minFeeFor(RideServiceType.keke, region: region);
+    return {
+      if (okada != null && okada > 0) VehicleType.bike: okada,
+      if (keke != null && keke > 0) VehicleType.tricycle: keke,
+    };
+  }
+
+  void _applyQuoteToState(DeliveryQuote q, {String? region}) {
+    final localMin = _pricingConfig?.minFeeFor(
+      _activeRideService,
+      region: region ?? _session.user?.region,
+    );
+    final serverMin = q.minFee;
+    final minFee = [
+      if (localMin != null && localMin > 0) localMin,
+      if (serverMin != null && serverMin > 0) serverMin,
+    ].fold<double?>(null, (best, n) => best == null || n > best ? n : best);
+    final fee = minFee != null && q.deliveryFee + 0.009 < minFee
+        ? minFee
+        : q.deliveryFee;
+    _quotedFee = fee;
+    _quotedMinFee = minFee;
+    _minApplied = q.minApplied || (minFee != null && fee <= minFee + 0.009);
+    _quoteDistanceKm = q.distanceKm;
+    _pricePerKm = q.pricePerKm;
+    _surgeActive = q.surgeActive;
+    _quoteLoading = false;
+    _quoteError = null;
+  }
 
   double get _routeDistanceKm {
     if (_quoteDistanceKm != null && _quoteDistanceKm! > 0) return _quoteDistanceKm!;
@@ -662,6 +706,8 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen>
       if (!mounted) return;
       setState(() {
         _quotedFee = null;
+        _quotedMinFee = null;
+        _minApplied = false;
         _quoteDistanceKm = null;
         _surgeActive = false;
         _quoteLoading = false;
@@ -685,14 +731,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen>
         vehicleType: _vehicleType,
       );
       if (!mounted) return;
-      setState(() {
-        _quotedFee = q.deliveryFee;
-        _quoteDistanceKm = q.distanceKm;
-        _pricePerKm = q.pricePerKm;
-        _surgeActive = q.surgeActive;
-        _quoteLoading = false;
-        _quoteError = null;
-      });
+      setState(() => _applyQuoteToState(q, region: region));
       _revealQuoteInSheet();
     } catch (e) {
       if (!mounted) return;
@@ -1423,15 +1462,8 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen>
       vehicleType: _vehicleType,
     );
     if (!mounted) return null;
-    setState(() {
-      _quotedFee = q.deliveryFee;
-      _quoteDistanceKm = q.distanceKm;
-      _pricePerKm = q.pricePerKm;
-      _surgeActive = q.surgeActive;
-      _quoteLoading = false;
-      _quoteError = null;
-    });
-    return q.deliveryFee;
+    setState(() => _applyQuoteToState(q, region: region));
+    return _quotedFee;
   }
 
   Future<void> _requestDelivery() async {
@@ -1662,6 +1694,8 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen>
                   surgeActive: _surgeActive,
                   loading: _quoteLoading || !_quoteReady,
                   vehicleType: _vehicleType,
+                  minFee: _quotedMinFee,
+                  minApplied: _minApplied,
                 ),
               ),
             ),
@@ -1809,6 +1843,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen>
               const SizedBox(height: 14),
               VehicleTypeSelector(
                 selected: _vehicleType,
+                minFees: _rideMinFees,
                 onSelected: (v) {
                   setState(() {
                     _vehicleType = v;

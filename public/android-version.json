@@ -1,6 +1,6 @@
 {
-  "version": "1.0.63+88",
-  "updated_at": "2026-08-25T04:03:25.277Z",
+  "version": "1.0.64+89",
+  "updated_at": "2026-08-25T04:18:15.353Z",
   "size_bytes": 70769783,
-  "install_note": "Uninstall any older BytzGo app first, then install this APK. Includes schedule delivery, stuck PIN fix, and rider commission. If Google sign-in fails, use phone or email login."
+  "install_note": "Uninstall the old BytzGo first. 1.0.64 applies admin base/min fares to Okada and Keke quotes."
 }

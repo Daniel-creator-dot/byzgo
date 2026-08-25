@@ -157,7 +157,7 @@ class DeliveryPricingConfig extends ChangeNotifier with WidgetsBindingObserver {
         surge != _surgeActive ||
         mult != _surgeMultiplier ||
         !_sameZones(nextZones) ||
-        nextServices.length != _rideServices.length;
+        !_sameServices(nextServices);
 
     _pricePerKm = nextRate;
     _basePricePerKm = nextBase;
@@ -174,6 +174,19 @@ class DeliveryPricingConfig extends ChangeNotifier with WidgetsBindingObserver {
       debugPrint('[pricing] updated: ₵$_pricePerKm/km surge=$_surgeActive');
       notifyListeners();
     }
+  }
+
+  bool _sameServices(Map<RideServiceType, RideServiceOption> next) {
+    if (next.length != _rideServices.length) return false;
+    for (final e in next.entries) {
+      final prev = _rideServices[e.key];
+      if (prev == null ||
+          prev.minFee != e.value.minFee ||
+          prev.pricePerKm != e.value.pricePerKm) {
+        return false;
+      }
+    }
+    return true;
   }
 
   bool _sameZones(List<DeliveryZone> next) {

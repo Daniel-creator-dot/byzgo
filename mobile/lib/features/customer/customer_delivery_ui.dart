@@ -193,10 +193,12 @@ class VehicleTypeSelector extends StatelessWidget {
     super.key,
     required this.selected,
     required this.onSelected,
+    this.minFees = const {},
   });
 
   final String selected;
   final ValueChanged<String> onSelected;
+  final Map<String, double> minFees;
 
   @override
   Widget build(BuildContext context) {
@@ -270,6 +272,17 @@ class VehicleTypeSelector extends StatelessWidget {
                           VehicleType.subtitle(type),
                           style: BytzGoTheme.sheetBody(10),
                         ),
+                        if ((minFees[type] ?? 0) > 0)
+                          Text(
+                            'from ${formatCedis(minFees[type]!)}',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w800,
+                              color: isOn
+                                  ? BytzGoTheme.accentDark
+                                  : BytzGoTheme.sheetMuted,
+                            ),
+                          ),
                       ],
                     ),
                   ),
@@ -498,6 +511,8 @@ class DeliveryQuoteCard extends StatelessWidget {
     this.surgeActive = false,
     this.loading = false,
     this.vehicleType = VehicleType.bike,
+    this.minFee,
+    this.minApplied = false,
   });
 
   final double fee;
@@ -505,6 +520,8 @@ class DeliveryQuoteCard extends StatelessWidget {
   final bool surgeActive;
   final bool loading;
   final String vehicleType;
+  final double? minFee;
+  final bool minApplied;
 
   @override
   Widget build(BuildContext context) {
@@ -613,9 +630,13 @@ class DeliveryQuoteCard extends StatelessWidget {
                         Text(
                           loading
                               ? 'Calculating…'
-                              : distanceKm > 0
-                                  ? '${distanceKm.toStringAsFixed(1)} km · Pay on arrival'
-                                  : 'Pay when rider arrives',
+                              : [
+                                  if (distanceKm > 0)
+                                    '${distanceKm.toStringAsFixed(1)} km',
+                                  if (minApplied && minFee != null && minFee! > 0)
+                                    'min ${formatCedis(minFee!)}',
+                                  'Pay on arrival',
+                                ].join(' · '),
                           style: BytzGoTheme.sheetBody(12),
                         ),
                       ],
