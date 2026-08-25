@@ -4945,15 +4945,19 @@ app.get('/api/vendors', async (req, res) => {
     const params: any[] = ['vendor'];
     const { category } = req.query;
     
-    if (region) {
-      query += ' AND (region = $2 OR region IS NULL)';
-      params.push(region);
-    }
+    // Do not hide approved shops on a strict region match — Accra vs Greater Accra
+    // (and similar) was dropping live vendors from customer/rider lists.
     if (category && typeof category === 'string' && isAllowedShopCategory(category)) {
       query += ` AND LOWER(COALESCE(shop_category, 'pharmacy')) = LOWER($${params.length + 1})`;
       params.push(category.trim());
     }
-    
+    if (region && typeof region === 'string' && String(region).trim()) {
+      params.push(String(region).trim());
+      query += ` ORDER BY CASE WHEN region = $${params.length} THEN 0 ELSE 1 END, name ASC`;
+    } else {
+      query += ' ORDER BY name ASC';
+    }
+
     const result = await pool.query(query, params);
     const vendors = [];
     for (const row of dedupeVendorList(result.rows)) {
@@ -4962,7 +4966,7 @@ app.get('/api/vendors', async (req, res) => {
     res.json(vendors);
   } catch (err) {
     console.error('Vendors list error:', err);
-    res.status(500).json({ message: 'Could not load pharmacies. Pull to refresh.' });
+    res.status(500).json({ message: 'Could not load shops. Pull to refresh.' });
   }
 });
 
@@ -4984,7 +4988,6 @@ app.get('/api/pharmacy-search', async (req, res) => {
       INNER JOIN users u ON u.id = p.vendor_id
       WHERE u.role = 'vendor'
         AND u.status = 'active'
-        AND LOWER(COALESCE(u.shop_category, 'pharmacy')) IN ('pharmacy', 'health')
         AND p.is_available = true
         AND p.is_approved = true
         AND (

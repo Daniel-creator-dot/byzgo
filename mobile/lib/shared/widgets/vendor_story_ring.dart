@@ -25,7 +25,7 @@ class VendorStoryRing extends StatelessWidget {
     final cat = ShopCategory.byId(
           ShopCategory.normalizeVendorCategory(vendor.shopCategory),
         ) ??
-        ShopCategory.ordered.first;
+        ShopCategory.marketplace.first;
     final ringColors = unseen
         ? [BytzGoTheme.accent, const Color(0xFFA855F7), const Color(0xFF38BDF8)]
         : [Colors.white38, Colors.white24];

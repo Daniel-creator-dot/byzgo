@@ -26,7 +26,7 @@ class VendorShopAvatar extends StatelessWidget {
             categoryId ?? vendor.shopCategory,
           ),
         ) ??
-        ShopCategory.ordered.first;
+        ShopCategory.marketplace.first;
     final radius = borderRadius ?? BorderRadius.circular(size * 0.25);
     final cover = vendor.coverImage?.trim();
 

@@ -276,7 +276,7 @@ class _CustomerHeader extends StatelessWidget {
       case CustomerTab.courier:
         return 'Book a delivery';
       case CustomerTab.shops:
-        return 'Pharmacy & Health';
+        return 'Shops';
       case CustomerTab.activity:
         return 'Your trips';
       case CustomerTab.profile:
@@ -348,7 +348,7 @@ class _CustomerHeader extends StatelessWidget {
                     children: [
                       TextSpan(text: isGuest ? 'Browse ' : 'Hey, '),
                       TextSpan(
-                        text: isGuest ? 'pharmacy' : firstName,
+                        text: isGuest ? 'shops' : firstName,
                         style: const TextStyle(color: BytzGoTheme.accentDark),
                       ),
                     ],
@@ -496,7 +496,7 @@ class _NavItem extends StatelessWidget {
       case CustomerTab.courier:
         return Icons.local_shipping_outlined;
       case CustomerTab.shops:
-        return Icons.local_pharmacy_outlined;
+        return Icons.storefront_outlined;
       case CustomerTab.activity:
         return Icons.route_outlined;
       case CustomerTab.profile:

@@ -10,7 +10,7 @@ enum CustomerTab {
       case CustomerTab.courier:
         return 'Delivery';
       case CustomerTab.shops:
-        return 'Pharmacy';
+        return 'Shops';
       case CustomerTab.activity:
         return 'Activity';
       case CustomerTab.profile:

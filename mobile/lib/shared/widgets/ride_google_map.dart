@@ -40,6 +40,8 @@ class RideGoogleMap extends StatefulWidget {
     this.pulseGuide,
     this.showPulseGuide = false,
     this.padding = EdgeInsets.zero,
+    this.shopPins = const [],
+    this.onShopPinTap,
   });
 
   final LocationPoint? pickup;
@@ -71,6 +73,9 @@ class RideGoogleMap extends StatefulWidget {
   /// Insets so the camera keeps the route/markers (and Google logo) in the
   /// visible window above the bottom sheet and below the top HUDs.
   final EdgeInsets padding;
+  /// Approved shops riders/customers can tap to navigate or request from.
+  final List<LocationPoint> shopPins;
+  final void Function(LocationPoint shop)? onShopPinTap;
 
   @override
   State<RideGoogleMap> createState() => RideGoogleMapState();
@@ -349,6 +354,24 @@ class RideGoogleMapState extends State<RideGoogleMap> {
           ),
         );
       }
+    }
+
+    for (var i = 0; i < widget.shopPins.length; i++) {
+      final shop = widget.shopPins[i];
+      if (!shop.hasCoords) continue;
+      markers.add(
+        Marker(
+          markerId: MarkerId('shop_$i'),
+          position: LatLng(shop.lat, shop.lng),
+          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueViolet),
+          zIndexInt: 1,
+          infoWindow: InfoWindow(
+            title: shop.address,
+            snippet: 'Tap to navigate / pick up',
+          ),
+          onTap: widget.onShopPinTap == null ? null : () => widget.onShopPinTap!(shop),
+        ),
+      );
     }
 
     for (var i = 0; i < widget.nearbyRiders.length; i++) {

@@ -25,8 +25,7 @@ class AccraShopsMap extends StatelessWidget {
   final ValueChanged<Vendor>? onVendorTap;
   final double height;
 
-  static bool showMapForCategory(String categoryId) =>
-      ShopCategory.isHealthMarketplace(categoryId);
+  static bool showMapForCategory(String categoryId) => true;
 
   @override
   Widget build(BuildContext context) {
@@ -49,9 +48,7 @@ class AccraShopsMap extends StatelessWidget {
           icon: BitmapDescriptor.defaultMarkerWithHue(
             selected
                 ? BitmapDescriptor.hueGreen
-                : categoryId == 'health'
-                    ? BitmapDescriptor.hueGreen
-                    : BitmapDescriptor.hueAzure,
+                : ShopCategory.hueFor(v.shopCategory ?? categoryId),
           ),
           infoWindow: InfoWindow(
             title: v.name,
@@ -77,7 +74,7 @@ class AccraShopsMap extends StatelessWidget {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  '${pins.length} ${cat?.label.toLowerCase() ?? 'stores'} on the map',
+                  '${pins.length} shops on the map',
                   style: BytzGoTheme.sheetBody(13).copyWith(fontWeight: FontWeight.w700),
                 ),
               ),

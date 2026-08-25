@@ -537,21 +537,21 @@ class _CreateVendorSheetState extends State<_CreateVendorSheet> {
               ),
               const SizedBox(height: 6),
               Text(
-                'Share the email/phone and password with the pharmacy owner. They sign in as Vendor on the app.',
+                'Share the email/phone and password with the shop owner. They sign in as Vendor on the app.',
                 style: TextStyle(
                   color: Colors.white.withValues(alpha: 0.5),
                   fontSize: 12,
                 ),
               ),
               const SizedBox(height: 16),
-              _field(_name, 'Pharmacy / store name', Icons.local_pharmacy_outlined),
+              _field(_name, 'Shop name', Icons.storefront_outlined),
               _field(_email, 'Email (login)', Icons.email_outlined),
               _field(_phone, 'Ghana phone (login)', Icons.phone_outlined),
               _field(_password, 'Password', Icons.lock_outline, obscure: true),
               _field(_address, 'Shop address (optional)', Icons.location_on_outlined),
               const SizedBox(height: 8),
               Text(
-                'STORE TYPE (PHARMACY & HEALTH ONLY)',
+                'STORE TYPE',
                 style: TextStyle(
                   color: Colors.white.withValues(alpha: 0.4),
                   fontSize: 10,
@@ -562,7 +562,7 @@ class _CreateVendorSheetState extends State<_CreateVendorSheet> {
               const SizedBox(height: 8),
               Wrap(
                 spacing: 8,
-                children: ShopCategory.ordered.map((c) {
+                children: ShopCategory.assignable.map((c) {
                   final selected = _category == c.id;
                   return FilterChip(
                     label: Text(c.label),

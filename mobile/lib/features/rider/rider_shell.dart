@@ -521,7 +521,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
     if (!silent) setState(() => _refreshing = true);
     try {
       final orders = await _ordersRepo.fetchOrders();
-      final vendors = await _ordersRepo.fetchVendors(region: _user.region);
+      final vendors = await _ordersRepo.fetchVendors();
       if (!mounted) return;
       setState(() {
         _orders = orders;
@@ -1213,6 +1213,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
           showRoute: showRoute,
           routePoints: _navRoutePoints,
           followRider: _primaryActive != null,
+          onShopTap: (vendor) => showVendorMapPicker(context, vendor),
         ),
         if (!_isOnline)
           Container(

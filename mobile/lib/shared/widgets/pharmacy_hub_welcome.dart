@@ -10,12 +10,21 @@ class PharmacyHubWelcome extends StatelessWidget {
     required this.openCount,
     required this.listedCount,
     this.onSearchTap,
+    this.headline = 'Your health,\ndelivered with care',
+    this.body =
+        'Search medicines, chat with a pharmacist, and get confirmed orders delivered by a trusted rider.',
+    this.searchLabel = 'Find medicine',
+    this.licensedLabel = 'Licensed pharmacies · Chat before you buy',
   });
 
   final String categoryLabel;
   final int openCount;
   final int listedCount;
   final VoidCallback? onSearchTap;
+  final String headline;
+  final String body;
+  final String searchLabel;
+  final String licensedLabel;
 
   static const _imagePath = 'assets/branding/pharmacy_hub_welcome.png';
 
@@ -75,14 +84,14 @@ class PharmacyHubWelcome extends StatelessWidget {
                         borderRadius: BorderRadius.circular(999),
                         border: Border.all(color: Colors.white24),
                       ),
-                      child: const Row(
+                      child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(Icons.verified_rounded, size: 14, color: Color(0xFF6EE7B7)),
-                          SizedBox(width: 6),
+                          const Icon(Icons.verified_rounded, size: 14, color: Color(0xFF6EE7B7)),
+                          const SizedBox(width: 6),
                           Text(
-                            'Licensed pharmacies · Chat before you buy',
-                            style: TextStyle(
+                            licensedLabel,
+                            style: const TextStyle(
                               color: Colors.white,
                               fontSize: 10,
                               fontWeight: FontWeight.w800,
@@ -103,8 +112,8 @@ class PharmacyHubWelcome extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 4),
-                    const Text(
-                      'Your health,\ndelivered with care',
+                    Text(
+                      headline,
                       style: TextStyle(
                         color: Colors.white,
                         fontSize: 26,
@@ -115,7 +124,7 @@ class PharmacyHubWelcome extends StatelessWidget {
                     ),
                     const SizedBox(height: 10),
                     Text(
-                      'Search medicines, chat with a pharmacist, and get confirmed orders delivered by a trusted rider.',
+                      body,
                       style: TextStyle(
                         color: Colors.white.withValues(alpha: 0.82),
                         fontSize: 13,
@@ -148,7 +157,7 @@ class PharmacyHubWelcome extends StatelessWidget {
               TextButton.icon(
                 onPressed: onSearchTap,
                 icon: const Icon(Icons.search_rounded, size: 18),
-                label: const Text('Find medicine'),
+                label: Text(searchLabel),
                 style: TextButton.styleFrom(
                   foregroundColor: BytzGoTheme.brandBlue,
                   textStyle: const TextStyle(fontWeight: FontWeight.w800, fontSize: 12),

@@ -1457,9 +1457,9 @@ function AuthScreen({ onLogin, forcedRole }: { onLogin: (user: AuthUser, token: 
           )}
           {forcedRole === 'vendor' && (
             <motion.div className="mt-4 mx-auto max-w-sm p-3 rounded-2xl bg-black/50 backdrop-blur-md text-left border border-white/10">
-              <p className="text-[10px] font-black uppercase tracking-widest text-sky-400 mb-1">Pharmacy &amp; health only</p>
+              <p className="text-[10px] font-black uppercase tracking-widest text-sky-400 mb-1">Shop partner</p>
               <p className="text-xs text-slate-200 leading-relaxed">
-                Register as a <strong className="text-white">licensed pharmacy</strong> or <strong className="text-white">health retailer</strong>. Restaurants and general shops are not accepted on BytzGo.
+                Register as a <strong className="text-white">pharmacy, restaurant, grocery, fashion</strong> or other approved store. Admin activates your shop for customers and riders.
               </p>
             </motion.div>
           )}
@@ -3224,7 +3224,7 @@ function VendorView({
             </div>
 
             <div className="space-y-3">
-              <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Store type (pharmacy &amp; health only)</label>
+              <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 ml-2">Store type</label>
               <select
                 required
                 value={storeForm.shop_category}
@@ -3233,9 +3233,13 @@ function VendorView({
               >
                 <option value="pharmacy">Licensed pharmacy</option>
                 <option value="health">Health retailer</option>
+                <option value="food">Food</option>
+                <option value="restaurant">Restaurant</option>
+                <option value="groceries">Groceries</option>
+                <option value="fashion">Fashion</option>
               </select>
               <p className="text-[11px] text-slate-500 ml-2 leading-relaxed">
-                Restaurants and general shops are not supported on BytzGo. List medicines, OTC products, supplements, and medical supplies only.
+                Pick the category customers will use to find you. Keep your address and map pin accurate so riders can locate the shop.
               </p>
             </div>
 

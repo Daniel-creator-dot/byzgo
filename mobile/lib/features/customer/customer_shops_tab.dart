@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../../core/session.dart';
 import '../../core/shop_chat_unread.dart';
 import '../../core/socket_service.dart';
+import '../../core/places_service.dart';
 import '../../models/location_point.dart';
 import '../../models/order.dart';
 import '../../models/pharmacy_search_hit.dart';
@@ -17,6 +18,7 @@ import '../../shared/theme.dart';
 import '../../shared/external_navigation.dart';
 import '../../shared/shop_chat_sheet.dart';
 import '../../shared/vendor_contact.dart';
+import '../../shared/vendor_pickup.dart';
 import '../../shared/widgets/pharmacy_hub_welcome.dart';
 import '../../shared/widgets/accra_shops_map.dart';
 import '../../shared/widgets/ops_stat_card.dart';
@@ -51,7 +53,7 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
   String? _error;
   final _searchCtrl = TextEditingController();
   final _searchFocus = FocusNode();
-  String _categoryId = 'pharmacy';
+  String _categoryId = ShopCategory.all.id;
   String? _mapSelectedVendorId;
   SocketService? _socket;
   VendorPromoHandler? _promoHandler;
@@ -115,7 +117,7 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
       final hits = await context.read<OrdersRepository>().searchPharmaciesByDrug(
             query: query,
             region: region,
-            category: _categoryId,
+            category: _categoryId == ShopCategory.all.id ? null : _categoryId,
           );
       if (!mounted || _searchCtrl.text.trim() != query) return;
       setState(() {
@@ -161,7 +163,7 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
       final region = context.read<Session>().user?.region;
       final list = await context.read<OrdersRepository>().fetchVendors(
             region: region,
-            category: _categoryId,
+            category: _categoryId == ShopCategory.all.id ? null : _categoryId,
           );
       if (!mounted) return;
       setState(() {
@@ -268,6 +270,21 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
     if (mounted) await _loadSeen();
   }
 
+  Future<void> _sendFromShop(Vendor vendor) async {
+    final point = await resolveVendorPickup(
+      vendor,
+      context.read<PlacesService>(),
+    );
+    if (!mounted) return;
+    if (point == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not pin this shop — open Maps or try again')),
+      );
+      return;
+    }
+    widget.onShopPickup(point);
+  }
+
   void _openVendorMenu(Vendor vendor) {
     setState(() => _mapSelectedVendorId = vendor.id);
     Navigator.of(context).push(
@@ -295,10 +312,15 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
           SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-              child: PharmacyHubWelcome(
-                categoryLabel: _categoryId == 'health'
-                    ? 'HEALTH RETAIL HUB'
-                    : 'PHARMACY HUB',
+              child:               PharmacyHubWelcome(
+                categoryLabel: (ShopCategory.byId(_categoryId) ?? ShopCategory.all)
+                    .label
+                    .toUpperCase(),
+                headline: 'Shops near you,\ndelivered fast',
+                body:
+                    'Browse approved pharmacies, food, groceries, and more. Open a store to order or send a rider there.',
+                searchLabel: 'Find a shop',
+                licensedLabel: 'Approved partners · Order or send a rider',
                 openCount: _openShopCount,
                 listedCount: filtered.length,
                 onSearchTap: () {
@@ -431,7 +453,7 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
                 focusNode: _searchFocus,
                 onChanged: _onSearchChanged,
                 decoration: InputDecoration(
-                  hintText: 'Search medicine, brand, or pharmacy…',
+                  hintText: 'Search shops, products, or medicines…',
                   prefixIcon: const Icon(Icons.search_rounded),
                   suffixIcon: _drugSearching
                       ? const Padding(
@@ -500,16 +522,16 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
                       const SizedBox(height: 12),
                       Text(
                         _drugSearchActive && _searchCtrl.text.trim().length >= 2
-                            ? 'No pharmacy stocks "${_searchCtrl.text.trim()}" yet'
-                            : 'No ${cat.label.toLowerCase()} in your area yet',
+                            ? 'No shop matches "${_searchCtrl.text.trim()}" yet'
+                            : 'No ${cat.label.toLowerCase()} listed yet',
                         style: BytzGoTheme.sheetTitle(16),
                         textAlign: TextAlign.center,
                       ),
                       const SizedBox(height: 8),
                       Text(
                         _drugSearchActive
-                            ? 'Try a different spelling or browse all pharmacies.'
-                            : 'Try the other tab or check back soon.',
+                            ? 'Try another name or browse All shops.'
+                            : 'Pull to refresh — approved stores appear here once they are active.',
                         style: BytzGoTheme.sheetBody(13),
                         textAlign: TextAlign.center,
                       ),
@@ -597,7 +619,7 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
                                     VendorShopAvatar(
                                       vendor: v,
                                       size: 56,
-                                      categoryId: _categoryId,
+                                      categoryId: v.shopCategory,
                                     ),
                                   const SizedBox(width: 14),
                                   Expanded(
@@ -686,8 +708,31 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
                                           ),
                                         ],
                                         const SizedBox(height: 8),
-                                        Row(
+                                        Wrap(
+                                          spacing: 4,
                                           children: [
+                                            TextButton.icon(
+                                              onPressed: () => _openVendorMenu(v),
+                                              icon: const Icon(Icons.shopping_bag_outlined, size: 16),
+                                              label: const Text('Order'),
+                                              style: TextButton.styleFrom(
+                                                foregroundColor: BytzGoTheme.goldDeep,
+                                                padding: EdgeInsets.zero,
+                                                minimumSize: const Size(0, 32),
+                                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                              ),
+                                            ),
+                                            TextButton.icon(
+                                              onPressed: () => _sendFromShop(v),
+                                              icon: const Icon(Icons.delivery_dining, size: 16),
+                                              label: const Text('Send'),
+                                              style: TextButton.styleFrom(
+                                                foregroundColor: BytzGoTheme.brandBlue,
+                                                padding: EdgeInsets.zero,
+                                                minimumSize: const Size(0, 32),
+                                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                              ),
+                                            ),
                                             if (v.phone != null && v.phone!.trim().isNotEmpty)
                                               TextButton.icon(
                                                 onPressed: () => callVendorPhone(v.phone),
@@ -711,8 +756,6 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
                                                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                                               ),
                                             ),
-                                            if (v.phone != null && v.phone!.trim().isNotEmpty)
-                                              const SizedBox(width: 8),
                                             TextButton.icon(
                                               onPressed: () => showVendorMapPicker(context, v),
                                               icon: const Icon(Icons.map, size: 16),

@@ -23,6 +23,7 @@ class RiderDriveMapLayer extends StatefulWidget {
     this.routePoints = const [],
     this.followRider = false,
     this.mapPadding = EdgeInsets.zero,
+    this.onShopTap,
   });
 
   final ValueNotifier<LocationPoint?> riderPosition;
@@ -36,6 +37,7 @@ class RiderDriveMapLayer extends StatefulWidget {
   final List<LocationPoint> routePoints;
   final bool followRider;
   final EdgeInsets mapPadding;
+  final ValueChanged<Vendor>? onShopTap;
 
   @override
   State<RiderDriveMapLayer> createState() => RiderDriveMapLayerState();
@@ -131,6 +133,19 @@ class RiderDriveMapLayerState extends State<RiderDriveMapLayer> {
       );
     }
 
+    final idleShops = widget.activeOrder == null && widget.incomingOrder == null
+        ? widget.vendors
+            .where((v) => v.lat != null && v.lng != null)
+            .map(
+              (v) => LocationPoint(
+                address: v.name,
+                lat: v.lat!,
+                lng: v.lng!,
+              ),
+            )
+            .toList()
+        : <LocationPoint>[];
+
     return ValueListenableBuilder<LocationPoint?>(
       valueListenable: widget.riderPosition,
       builder: (context, pos, _) {
@@ -161,6 +176,19 @@ class RiderDriveMapLayerState extends State<RiderDriveMapLayer> {
           pulseGuide: pulseGuide,
           showPulseGuide: pulseGuide != null,
           padding: widget.mapPadding,
+          shopPins: idleShops,
+          onShopPinTap: widget.onShopTap == null
+              ? null
+              : (pin) {
+                  for (final v in widget.vendors) {
+                    if (v.name == pin.address &&
+                        v.lat == pin.lat &&
+                        v.lng == pin.lng) {
+                      widget.onShopTap!(v);
+                      return;
+                    }
+                  }
+                },
         );
       },
     );

@@ -752,7 +752,7 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
       const SizedBox(height: 16),
       BytzHeroHeader(
         kicker: 'Your store',
-        title: 'Pharmacy & health settings',
+        title: 'Shop settings',
         assetPath: 'assets/branding/hero_delivery.png',
         height: 110,
       ),
@@ -762,7 +762,7 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
       Wrap(
         spacing: 8,
         runSpacing: 8,
-        children: ShopCategory.ordered.map((c) {
+        children: ShopCategory.assignable.map((c) {
           final selected = c.id == cat;
           return FilterChip(
             label: Text(c.label),
@@ -784,7 +784,7 @@ class _VendorHomeScreenState extends State<VendorHomeScreen> {
       ),
       const SizedBox(height: 16),
       Text(
-        'Use the Menu tab to add medicines and health products with photos and prices.',
+        'Use the Menu tab to add products with photos and prices.',
         style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 11),
       ),
       const SizedBox(height: 24),
