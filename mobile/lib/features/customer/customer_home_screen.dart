@@ -1334,6 +1334,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen>
         _pickup = point;
         _pickupCtrl.text = label;
         _resolvingPickup = false;
+        _applyGeoRideDefault();
       } else {
         _destination = point;
         _dropoffCtrl.text = label;
@@ -1418,6 +1419,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen>
         _pickup = point;
         _pickupCtrl.text = point.address;
         _pickMode = MapPickMode.pickup;
+        _applyGeoRideDefault();
       });
       _scheduleDeliveryQuote();
       return;
@@ -1438,6 +1440,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen>
       _pickup = resolved;
       _pickupCtrl.text = label;
       _resolvingPickup = false;
+      _applyGeoRideDefault();
     });
     _scheduleDeliveryQuote();
   }
@@ -1479,6 +1482,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen>
     setState(() {
       if (isPickup) {
         _pickup = draft;
+        _applyGeoRideDefault();
       } else {
         _destination = draft;
       }
@@ -1768,6 +1772,8 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen>
                 balance: _session.user?.balance ?? 0,
                 selectedService: _rideService,
                 vendorMode: widget.vendorMode,
+                recommendedService: _geoRecommendedRideService,
+                popularHere: _showPopularHereHint,
                 onWallet: widget.onOpenWallet,
               ),
               const SizedBox(height: 14),
@@ -1888,10 +1894,13 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen>
                 selected: widget.vendorMode
                     ? RideServiceType.package
                     : _rideService,
+                recommended: _geoRecommendedRideService,
+                popularHere: _showPopularHereHint,
                 minFees: _rideMinFees,
                 onSelected: (v) {
                   if (widget.vendorMode) return;
                   setState(() {
+                    _userPickedRideService = true;
                     _rideService = v;
                     if (v.isPassengerRide) {
                       _passengers = _passengers.clamp(1, v.maxPassengers);
