@@ -16,7 +16,7 @@ cat > "$OUT" <<EOF
   "build_number": "$build",
   "updated_at": "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)",
   "platform": "ios",
-  "release_notes": "In-app update notice for all roles, rider approval fix, pharmacy and shops reliability.",
+  "release_notes": "Delivery mode restored, Accra neighborhood ride suggestions, admin Okada/Keke fares, rider session fix.",
   "install_note": "Install from the App Store or TestFlight."
 }
 EOF

@@ -1,0 +1,5 @@
+• Delivery mode is back with a gold booking UI (Package, Okada, Keke)
+• Accra suggests the popular mode by neighborhood (Okada vs Delivery)
+• Admin Okada/Keke fares and minimums show correctly in quotes
+• Riders stay signed in without a photo; KYC avatars save
+• In-app update notice for every role
