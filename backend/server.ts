@@ -254,6 +254,11 @@ app.get('/', (_req, res) => {
 
 const imageMimeFilter: multer.Options['fileFilter'] = (_req, file, cb) => {
   const mime = (file.mimetype || '').toLowerCase().split(';')[0].trim();
+  // Flutter/Android often send octet-stream; magic-byte sniff happens later.
+  if (!mime || mime === 'application/octet-stream' || mime === 'binary/octet-stream') {
+    cb(null, true);
+    return;
+  }
   cb(null, ALLOWED_UPLOAD_MIME.has(mime));
 };
 
@@ -506,21 +511,28 @@ async function getGlobalDeliveryBounds(): Promise<{ min: number | null; max: num
   };
 }
 
+function positiveAmount(value: unknown): number | null {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : null;
+}
+
 function applyDeliveryFeeCaps(
   feeFromDistance: number,
   zone: { min_price?: unknown; max_price?: unknown } | null,
-  globalBounds: { min: number | null; max: number | null }
+  globalBounds: { min: number | null; max: number | null },
+  serviceMin?: number | null
 ): number {
   let fee = feeFromDistance;
-  const minCap =
-    zone && Number.isFinite(Number(zone.min_price)) && Number(zone.min_price) > 0
-      ? Number(zone.min_price)
-      : globalBounds.min;
+  const mins = [
+    positiveAmount(serviceMin),
+    positiveAmount(globalBounds.min),
+    zone ? positiveAmount(zone.min_price) : null,
+  ].filter((n): n is number => n != null);
   const maxCap =
     zone?.max_price != null && Number.isFinite(Number(zone.max_price))
       ? Number(zone.max_price)
       : globalBounds.max;
-  if (minCap != null) fee = Math.max(fee, minCap);
+  if (mins.length) fee = Math.max(fee, ...mins);
   if (maxCap != null) fee = Math.min(fee, maxCap);
   return Math.round(fee * 100) / 100;
 }
@@ -951,15 +963,14 @@ async function calculateDeliveryFeeFromCoords(
   }
 
   const feeFromDistance = Math.round(distance_km * globalRate * 100) / 100;
-  const base = applyDeliveryFeeCaps(feeFromDistance, zone, globalBounds);
+  const base = applyDeliveryFeeCaps(feeFromDistance, zone, globalBounds, serviceMin);
   const { fee, surge } = await applySurgeToFee(base);
   const effectiveRate = surge.surge_active
     ? Math.round(globalRate * surge.multiplier * 100) / 100
     : globalRate;
-  const zoneMin =
-    zone && Number.isFinite(Number(zone.min_price)) && Number(zone.min_price) > 0
-      ? Number(zone.min_price)
-      : globalBounds.min;
+  const appliedMin = [positiveAmount(serviceMin), positiveAmount(globalBounds.min), zone ? positiveAmount(zone.min_price) : null]
+    .filter((n): n is number => n != null)
+    .reduce((a, b) => Math.max(a, b), 0) || null;
   const zoneMax =
     zone?.max_price != null && Number.isFinite(Number(zone.max_price))
       ? Number(zone.max_price)
@@ -972,7 +983,10 @@ async function calculateDeliveryFeeFromCoords(
     zone: zone?.name ?? null,
     base_delivery_fee: base,
     fee_from_distance_km: feeFromDistance,
-    zone_min_price: zoneMin,
+    min_fee: appliedMin ?? effectiveMin,
+    min_applied: appliedMin != null &&
+      (discounted.fee <= appliedMin + 0.009 || feeFromDistance + 0.009 < appliedMin),
+    zone_min_price: appliedMin,
     zone_max_price: zoneMax,
     surge_active: surge.surge_active,
     surge_multiplier: surge.multiplier,
@@ -1630,14 +1644,82 @@ async function repairStaleTripsForCustomer(customerId: string) {
     }
     broadcastOrderUpdated(order);
   }
-  await pool.query(
+  // Cancel zombie searches: unassigned ready/pending older than 2 hours.
+  const cancelled = await pool.query(
     `UPDATE orders SET status = 'cancelled', rider_id = NULL, updated_at = CURRENT_TIMESTAMP
      WHERE customer_id = $1
        AND status IN ('ready', 'pending', 'preparing')
        AND rider_id IS NULL
-       AND created_at < NOW() - INTERVAL '3 days'`,
+       AND created_at < NOW() - INTERVAL '2 hours'
+     RETURNING *`,
     [customerId]
   );
+  for (const row of cancelled.rows) {
+    await finalizeOrderCancellation(row, { prevRiderId: null });
+  }
+  // Free riders stuck on abandoned in-progress trips (no PIN / customer gone).
+  const abandoned = await pool.query(
+    `SELECT id, rider_id FROM orders
+     WHERE customer_id = $1
+       AND status IN ('picked_up', 'arrived')
+       AND updated_at < NOW() - INTERVAL '2 hours'
+       AND payment_status IS DISTINCT FROM 'paid'
+       AND customer_payment_ack IS NULL`,
+    [customerId]
+  );
+  for (const row of abandoned.rows) {
+    const updated = await pool.query(
+      `UPDATE orders SET status = 'cancelled', rider_id = NULL, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1 AND status IN ('picked_up', 'arrived')
+       RETURNING *`,
+      [row.id]
+    );
+    if (updated.rows[0]) {
+      await finalizeOrderCancellation(updated.rows[0], { prevRiderId: row.rider_id });
+    }
+  }
+}
+
+/** Admin/ops: close all zombie waiting + abandoned in-progress trips. */
+async function closeStuckTripsGlobally(): Promise<{
+  cancelledReady: number;
+  cancelledAbandoned: number;
+}> {
+  const ready = await pool.query(
+    `UPDATE orders SET status = 'cancelled', rider_id = NULL, updated_at = CURRENT_TIMESTAMP
+     WHERE status IN ('ready', 'pending', 'preparing')
+       AND rider_id IS NULL
+       AND created_at < NOW() - INTERVAL '2 hours'
+     RETURNING *`
+  );
+  for (const row of ready.rows) {
+    await finalizeOrderCancellation(row, { prevRiderId: null });
+  }
+
+  const abandonedIds = await pool.query(
+    `SELECT id, rider_id FROM orders
+     WHERE status IN ('picked_up', 'arrived')
+       AND updated_at < NOW() - INTERVAL '2 hours'
+       AND (payment_status IS DISTINCT FROM 'paid')
+       AND customer_payment_ack IS NULL`
+  );
+  let abandonedCount = 0;
+  for (const row of abandonedIds.rows) {
+    const updated = await pool.query(
+      `UPDATE orders SET status = 'cancelled', rider_id = NULL, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1 AND status IN ('picked_up', 'arrived')
+       RETURNING *`,
+      [row.id]
+    );
+    if (updated.rows[0]) {
+      abandonedCount += 1;
+      await finalizeOrderCancellation(updated.rows[0], { prevRiderId: row.rider_id });
+    }
+  }
+  return {
+    cancelledReady: ready.rowCount ?? 0,
+    cancelledAbandoned: abandonedCount,
+  };
 }
 
 const deliveryCodeAttempts = new Map<string, { attempts: number; lockedUntil: number }>();
@@ -2565,18 +2647,74 @@ async function notifyRideTaken(orderId: string, winnerRiderId: string) {
   }
 }
 
-/** Customer cancelled before a rider accepted — dismiss incoming UI for offered riders. */
-async function notifyRideCancelled(orderId: string) {
+/**
+ * Shared cancel cleanup: stop dispatch, expire offers, notify every offered /
+ * previously-assigned rider (socket + push so CallKit/incoming UI die), then broadcast.
+ */
+async function finalizeOrderCancellation(
+  cancelledOrder: any,
+  opts?: { prevRiderId?: string | null }
+) {
+  const orderId = String(cancelledOrder?.id || '');
+  if (!orderId) return;
+  const prevRiderId = opts?.prevRiderId ? String(opts.prevRiderId) : null;
+
   clearDispatchTimer(orderId);
+
+  await pool.query(
+    `UPDATE order_dispatch_offers SET status = 'expired'
+     WHERE order_id = $1 AND status IN ('offered', 'accepted')`,
+    [orderId]
+  );
+
   const offers = await pool.query(
     `SELECT DISTINCT rider_id FROM order_dispatch_offers WHERE order_id = $1`,
     [orderId]
   );
+  const riderIds = new Set<string>();
   for (const row of offers.rows) {
-    if (row.rider_id) {
-      io.to(row.rider_id).emit('ride:taken', { orderId, reason: 'cancelled' });
+    if (row.rider_id) riderIds.add(String(row.rider_id));
+  }
+  if (prevRiderId) riderIds.add(prevRiderId);
+
+  const cancelledPayload = {
+    ...cancelledOrder,
+    status: 'cancelled',
+    rider_id: null,
+  };
+
+  for (const rid of riderIds) {
+    io.to(rid).emit('ride:taken', { orderId, reason: 'cancelled' });
+    try {
+      io.to(rid).emit(
+        'order:updated',
+        await sanitizeOrderForRole(cancelledPayload, 'rider', rid)
+      );
+    } catch {
+      /* best-effort */
     }
   }
+
+  if (riderIds.size > 0) {
+    void sendPushToUserIds([...riderIds], {
+      title: 'Trip cancelled',
+      body: 'The customer cancelled this request',
+      type: 'trip-cancelled',
+      orderId,
+      channelId: 'trip_updates',
+      highPriority: true,
+      status: 'cancelled',
+    }).catch((err) => console.warn('[push] trip-cancelled notify failed:', err));
+  }
+
+  broadcastOrderUpdated(cancelledPayload);
+}
+
+/** @deprecated use finalizeOrderCancellation — kept for any residual call sites */
+async function notifyRideCancelled(orderId: string, prevRiderId?: string | null) {
+  const orderRes = await pool.query('SELECT * FROM orders WHERE id = $1', [orderId]);
+  const order = orderRes.rows[0] || { id: orderId, status: 'cancelled', rider_id: null };
+  await finalizeOrderCancellation(order, { prevRiderId });
 }
 
 type PushAlert = {
@@ -4062,7 +4200,9 @@ app.post('/api/upload', authenticateToken, upload.single('image'), async (req: a
 
 // Rider KYC documents (JPEG only)
 app.get('/api/rider/documents', authenticateToken, async (req: any, res) => {
-  if (req.user.role !== 'rider') return res.sendStatus(403);
+  if (req.user.role !== 'rider') {
+    return res.status(403).json({ message: 'Riders only' });
+  }
   try {
     const documents = await fetchRiderDocuments(req.user.id);
     const userRes = await pool.query(`SELECT status FROM users WHERE id = $1`, [req.user.id]);
@@ -4083,7 +4223,9 @@ app.post(
   authenticateToken,
   riderDocUpload.single('image'),
   async (req: any, res) => {
-    if (req.user.role !== 'rider') return res.sendStatus(403);
+    if (req.user.role !== 'rider') {
+      return res.status(403).json({ message: 'Riders only' });
+    }
     const docType = req.params.docType;
     if (!isRiderDocType(docType)) {
       return res.status(400).json({ message: 'Invalid document type. Use license, ghana_card, or photo.' });
@@ -4115,6 +4257,28 @@ app.post(
         [req.user.id, docType, imageRef, imageResult.contentType]
       );
 
+      // Profile picture slot also becomes the public rider avatar (Supabase avatars/).
+      if (docType === 'photo') {
+        try {
+          const avatarResult = await persistUploadedImage({
+            folder: 'avatars',
+            userId: String(req.user.id),
+            fileName: resolveUploadFileName('avatars'),
+            buffer: req.file.buffer,
+            mime: req.file.mimetype,
+          });
+          const dbAvatar = normalizeImageRefForDb(avatarResult.objectKey || avatarResult.url);
+          if (dbAvatar) {
+            await pool.query('UPDATE users SET avatar_url = $1 WHERE id = $2', [
+              dbAvatar,
+              req.user.id,
+            ]);
+          }
+        } catch (avatarErr) {
+          console.warn('[rider-docs] avatar copy failed (KYC photo still saved):', avatarErr);
+        }
+      }
+
       // Only send new / rejected riders back to review — never demote an
       // already-approved (active) driver when they replace a photo.
       if (await riderHasAllDocuments(req.user.id)) {
@@ -4143,7 +4307,9 @@ app.post(
 );
 
 app.post('/api/rider/documents/submit', authenticateToken, async (req: any, res) => {
-  if (req.user.role !== 'rider') return res.sendStatus(403);
+  if (req.user.role !== 'rider') {
+    return res.status(403).json({ message: 'Riders only' });
+  }
   try {
     if (!(await riderHasAllDocuments(req.user.id))) {
       return res.status(400).json({ message: 'Upload licence, Ghana card, and profile photo first.' });
@@ -6353,6 +6519,37 @@ app.patch('/api/orders/:id', authenticateToken, async (req: any, res) => {
       return res.status(400).json({ message: 'Deliveries must be completed with the customer delivery PIN.' });
     }
 
+    const currentRes = await pool.query('SELECT * FROM orders WHERE id = $1', [orderId]);
+    const current = currentRes.rows[0];
+    if (!current) {
+      return res.status(404).json({ message: 'Order not found' });
+    }
+
+    if (req.user.role === 'vendor') {
+      if (String(current.vendor_id) !== String(req.user.id)) {
+        return res.status(403).json({ message: 'Not your pharmacy order' });
+      }
+      if (riderId) {
+        return res.status(403).json({ message: 'Pharmacies cannot assign riders' });
+      }
+      if (status && status !== current.status) {
+        if (!isPharmacyShopOrder(current)) {
+          return res.status(403).json({ message: 'Only pharmacy shop orders can be updated here' });
+        }
+        if (!vendorMaySetPharmacyStatus(String(current.status), String(status))) {
+          return res.status(400).json({
+            message: `Cannot change order from ${current.status} to ${status}`,
+          });
+        }
+      }
+    }
+
+    // Accept must only claim live ready trips — never resurrect cancelled ones.
+    if (riderId && status && status !== 'ready' && status !== 'picked_up') {
+      return res.status(400).json({ message: 'Invalid accept status for this ride.' });
+    }
+    const prevRiderId = current.rider_id;
+
     let result;
     if (status === 'picked_up') {
       const code = generateDeliveryCode();
@@ -6360,7 +6557,7 @@ app.patch('/api/orders/:id', authenticateToken, async (req: any, res) => {
       let q = `UPDATE orders SET status = $1, delivery_code = $2, delivery_code_created_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = $${params.length + 1}`;
       if (riderId) {
         params.splice(1, 0, riderId);
-        q = `UPDATE orders SET status = $1, rider_id = $2, delivery_code = $3, delivery_code_created_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = $${params.length + 1} AND rider_id IS NULL`;
+        q = `UPDATE orders SET status = $1, rider_id = $2, delivery_code = $3, delivery_code_created_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = $${params.length + 1} AND rider_id IS NULL AND status = 'ready'`;
       }
       params.push(orderId);
       q += ' RETURNING *';
@@ -6376,7 +6573,8 @@ app.patch('/api/orders/:id', authenticateToken, async (req: any, res) => {
 
       updateQuery += `, updated_at = CURRENT_TIMESTAMP WHERE id = $${params.length + 1}`;
       if (riderId) {
-        updateQuery += ' AND rider_id IS NULL';
+        // Only claim open ready offers — blocks accept-after-cancel races.
+        updateQuery += ` AND rider_id IS NULL AND status = 'ready'`;
       }
       updateQuery += ' RETURNING *';
       params.push(orderId);
@@ -6386,16 +6584,20 @@ app.patch('/api/orders/:id', authenticateToken, async (req: any, res) => {
     const order = result.rows[0];
 
     if (!order && riderId) {
-      return res.status(409).json({ message: 'This ride was already taken by another rider.' });
+      return res.status(409).json({ message: 'This ride was already taken or cancelled.' });
     }
     
     if (order) {
       res.json(await sanitizeOrderForRole(order, req.user.role, req.user.id));
-      broadcastOrderUpdated(order);
-      if (riderId && order.rider_id) {
-        await notifyRideTaken(order.id, order.rider_id);
-      } else if (isOfferableOrder(order)) {
-        broadcastRideOfferToRiders(order);
+      if (status === 'cancelled') {
+        await finalizeOrderCancellation(order, { prevRiderId });
+      } else {
+        broadcastOrderUpdated(order);
+        if (riderId && order.rider_id) {
+          await notifyRideTaken(order.id, order.rider_id);
+        } else if (isOfferableOrder(order)) {
+          await broadcastRideOfferToRiders(order);
+        }
       }
       if (status === 'delivered' && req.user.role === 'admin') {
         await settleOrderPayment(order);
@@ -6759,13 +6961,15 @@ app.post('/api/admin/orders/:id/cancel', authenticateToken, async (req: any, res
   if (req.user.role !== 'admin') return res.sendStatus(403);
   const orderId = req.params.id;
   try {
+    const prev = await pool.query('SELECT rider_id FROM orders WHERE id = $1', [orderId]);
+    const prevRiderId = prev.rows[0]?.rider_id ?? null;
     const result = await pool.query(
       `UPDATE orders SET status = 'cancelled', rider_id = NULL, updated_at = CURRENT_TIMESTAMP
        WHERE id = $1 AND status NOT IN ('delivered', 'cancelled') RETURNING *`,
       [orderId]
     );
     if (!result.rows[0]) return res.status(404).json({ message: 'Order not found or already closed' });
-    broadcastOrderUpdated(result.rows[0]);
+    await finalizeOrderCancellation(result.rows[0], { prevRiderId });
     res.json(result.rows[0]);
   } catch (err) {
     console.error('Admin cancel order error:', err);
@@ -6900,18 +7104,8 @@ app.post('/api/orders/:id/cancel', authenticateToken, async (req: any, res) => {
       io.to(req.user.id).emit('wallet:updated', { balance: walletBalance });
     }
 
-    if (prevRiderId) {
-      await notifyRideTaken(orderId, prevRiderId);
-    } else {
-      await notifyRideCancelled(orderId);
-    }
-
-    clearDispatchTimer(orderId);
-    await pool.query(
-      `UPDATE order_dispatch_offers SET status = 'expired'
-       WHERE order_id = $1 AND status = 'offered'`,
-      [orderId]
-    );
+    // Expire offers + notify offered/assigned riders (never use notifyRideTaken on cancel).
+    await finalizeOrderCancellation(cancelled, { prevRiderId });
 
     const payload = await sanitizeOrderForRole(cancelled, req.user.role, req.user.id);
     res.json({
@@ -6925,7 +7119,6 @@ app.post('/api/orders/:id/cancel', authenticateToken, async (req: any, res) => {
           ? 'No payment was taken — nothing to refund'
           : 'Order cancelled (no prepaid amount to refund)',
     });
-    broadcastOrderUpdated(cancelled);
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     client.release();
@@ -8032,15 +8225,19 @@ app.post('/api/delivery-zones/calculate', async (req, res) => {
     }
     const globalRate = Math.max(0.01, parseFloat((await getSetting('delivery_price_per_km')) || '4') || 4);
     const globalBounds = await getGlobalDeliveryBounds();
+    const packageMin = await getRideServiceMinFee('package');
     const km = distance_km || 0;
     const feeFromDistance = Math.round(km * globalRate * 100) / 100;
-    const price = applyDeliveryFeeCaps(feeFromDistance, zone, globalBounds);
+    const price = applyDeliveryFeeCaps(feeFromDistance, zone, globalBounds, packageMin);
 
     res.json({
       price,
       zone: zone?.name ?? null,
       fallback: !zone,
       price_per_km: globalRate,
+      min_fee: [positiveAmount(packageMin), positiveAmount(globalBounds.min), zone ? positiveAmount(zone.min_price) : null]
+        .filter((n): n is number => n != null)
+        .reduce((a, b) => Math.max(a, b), 0) || null,
     });
   } catch (err) {
     console.error('Price calculation error:', err);

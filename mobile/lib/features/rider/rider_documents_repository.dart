@@ -24,8 +24,7 @@ class RiderDocumentsRepository {
     final formData = FormData.fromMap({
       'image': await MultipartFile.fromFile(
         filePath,
-        filename: filePath.split(RegExp(r'[/\\]')).last,
-        contentType: DioMediaType.parse('image/jpeg'),
+        filename: _uploadFileName(filePath),
       ),
     });
     final res = await _api.dio.post<Map<String, dynamic>>(
@@ -34,6 +33,13 @@ class RiderDocumentsRepository {
       options: Options(contentType: 'multipart/form-data'),
     );
     return _parseUploadResponse(res.data);
+  }
+
+  static String _uploadFileName(String filePath) {
+    final name = filePath.split(RegExp(r'[/\\]')).last.trim();
+    if (name.isEmpty) return 'photo.jpg';
+    if (!name.contains('.')) return '$name.jpg';
+    return name;
   }
 
   Future<AuthResult> submitForReview() async {

@@ -587,10 +587,12 @@ class OnlineToggle extends StatelessWidget {
     super.key,
     required this.isOnline,
     required this.onChanged,
+    this.enabled = true,
   });
 
   final bool isOnline;
   final ValueChanged<bool> onChanged;
+  final bool enabled;
 
   @override
   Widget build(BuildContext context) {
@@ -599,23 +601,32 @@ class OnlineToggle extends StatelessWidget {
       elevation: 4,
       shadowColor: Colors.black26,
       borderRadius: BorderRadius.circular(32),
-      child: Padding(
-        padding: const EdgeInsets.all(4),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _pill('Offline', !isOnline, () => onChanged(false)),
-            _pill('Go online', isOnline, () {
-              HapticFeedback.mediumImpact();
-              onChanged(true);
-            }),
-          ],
+      child: Opacity(
+        opacity: enabled ? 1 : 0.45,
+        child: Padding(
+          padding: const EdgeInsets.all(4),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _pill('Offline', !isOnline, enabled ? () => onChanged(false) : null),
+              _pill(
+                'Go online',
+                isOnline,
+                enabled
+                    ? () {
+                        HapticFeedback.mediumImpact();
+                        onChanged(true);
+                      }
+                    : null,
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 
-  Widget _pill(String label, bool selected, VoidCallback onTap) {
+  Widget _pill(String label, bool selected, VoidCallback? onTap) {
     return GestureDetector(
       onTap: onTap,
       child: AnimatedContainer(

@@ -83,8 +83,8 @@ class RideServiceOption {
   factory RideServiceOption.fromJson(Map<String, dynamic> json) {
     return RideServiceOption(
       type: RideServiceType.fromString(json['id']?.toString()),
-      pricePerKm: (json['price_per_km'] as num?)?.toDouble() ?? 4,
-      minFee: (json['min_fee'] as num?)?.toDouble() ?? 5,
+      pricePerKm: double.tryParse(json['price_per_km']?.toString() ?? '') ?? 4,
+      minFee: double.tryParse(json['min_fee']?.toString() ?? '') ?? 5,
     );
   }
 }

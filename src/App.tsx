@@ -309,9 +309,11 @@ function MainApp() {
   const [adminPendingRiderCount, setAdminPendingRiderCount] = useState(0);
   const userRef = useRef(user);
   const ordersRef = useRef(orders);
+  const incomingRideOfferRef = useRef<Order | null>(null);
   const riderTrackingNotifiedRef = useRef(new Set<string>());
   useEffect(() => { userRef.current = user; }, [user]);
   useEffect(() => { ordersRef.current = orders; }, [orders]);
+  useEffect(() => { incomingRideOfferRef.current = incomingRideOffer; }, [incomingRideOffer]);
 
   const pickBestRideOffer = useCallback((list: Order[]) => {
     return list
@@ -649,19 +651,34 @@ function MainApp() {
 
     socket.on('ride:taken', ({ orderId, reason }: { orderId: string; reason?: string }) => {
       const u = userRef.current;
-      const wasIncoming = ordersRef.current.some(
-        (o) => o.id === orderId && isOfferableToRider(o)
-      );
-      setIncomingRideOffer(prev => (prev?.id === orderId ? null : prev));
-      setOrders(prev =>
-        prev.filter(o => {
+      const cancelled = reason === 'cancelled';
+      const local = ordersRef.current.find((o) => o.id === orderId);
+      const wasIncoming =
+        incomingRideOffer?.id === orderId ||
+        (!!local && isOfferableToRider(local));
+      const wasMine =
+        !!u &&
+        u.role === 'rider' &&
+        !!local &&
+        (local.rider_id === u.id ||
+          (local as Order & { riderId?: string }).riderId === u.id);
+      setIncomingRideOffer((prev) => (prev?.id === orderId ? null : prev));
+      closeIncomingRideAudio();
+      setOrders((prev) =>
+        prev.filter((o) => {
           if (o.id !== orderId) return true;
-          return u?.role === 'rider' && (o.rider_id === u.id || (o as Order & { riderId?: string }).riderId === u.id);
+          // Cancel always drops the trip; "taken" keeps only if this rider owns it.
+          if (cancelled) return false;
+          return (
+            u?.role === 'rider' &&
+            (o.rider_id === u.id ||
+              (o as Order & { riderId?: string }).riderId === u.id)
+          );
         })
       );
-      if (u?.role === 'rider' && u.status === 'active' && wasIncoming) {
+      if (u?.role === 'rider' && (wasIncoming || (cancelled && wasMine))) {
         addNotification(
-          reason === 'cancelled'
+          cancelled
             ? 'Customer cancelled this request'
             : 'Another driver took this ride',
           'info'
@@ -730,9 +747,21 @@ function MainApp() {
           addNotification('Rider assigned to your package', 'success');
         }
       }
-      setIncomingRideOffer(prev =>
-        prev?.id === updatedOrder.id && updatedOrder.rider_id ? null : prev
-      );
+      setIncomingRideOffer((prev) => {
+        if (prev?.id !== updatedOrder.id) return prev;
+        if (
+          updatedOrder.status === 'cancelled' ||
+          updatedOrder.rider_id ||
+          !isOfferableToRider(updatedOrder)
+        ) {
+          closeIncomingRideAudio();
+          return null;
+        }
+        return prev;
+      });
+      if (u?.role === 'rider' && updatedOrder.status === 'cancelled') {
+        setOrders((prev) => prev.filter((o) => o.id !== updatedOrder.id));
+      }
     });
 
     socket.on('location:updated', ({ riderId, lat, lng }) => {

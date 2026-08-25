@@ -23,6 +23,9 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
   final type = message.data['type']?.toString() ?? '';
   final isRide = type == 'incoming-ride';
+  final isCancelled = type == 'trip-cancelled' ||
+      (type == 'trip-update' &&
+          message.data['status']?.toString() == 'cancelled');
   if (isRide) {
     final audience = message.data['audience']?.toString();
     // Backend already filters to online riders; keychain read often fails in background isolates.
@@ -34,6 +37,18 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   final payload = {
     for (final e in message.data.entries) e.key: e.value?.toString() ?? '',
   };
+
+  if (isCancelled) {
+    final orderId = payload['orderId'] ?? '';
+    if (orderId.isNotEmpty) {
+      await IncomingRideCallKit.endCall(orderId);
+      final pending = await PendingIncomingRideStore.load();
+      if (pending?['orderId'] == orderId) {
+        await PendingIncomingRideStore.clear();
+      }
+    }
+    // Fall through to show a normal "trip cancelled" local notification.
+  }
 
   if (isRide) {
     await PendingIncomingRideStore.save(payload);

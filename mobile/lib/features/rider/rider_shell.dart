@@ -148,8 +148,14 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
     return _orders.where(isOfferableOrder).toList();
   }
 
-  List<Order> get _activeOrders =>
-      _orders.where((o) => o.riderId == _user.id && o.status != 'delivered').toList();
+  List<Order> get _activeOrders => _orders
+      .where(
+        (o) =>
+            o.riderId == _user.id &&
+            o.status != 'delivered' &&
+            o.status != 'cancelled',
+      )
+      .toList();
 
   List<Order> get _completedTrips =>
       _orders.where((o) => o.riderId == _user.id && o.status == 'delivered').toList();
@@ -425,40 +431,70 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
     _socket.onRideTaken = (orderId, {String? reason}) {
       if (!mounted) return;
       final wasIncoming = _incoming?.id == orderId;
-      if (wasIncoming) unawaited(IncomingRideAlert.dismiss(orderId: orderId));
+      final wasFocused = _focusedOrderId == orderId;
+      final wasMine = _orders.any((o) => o.id == orderId && o.riderId == _user.id);
+      final cancelled = reason == 'cancelled';
+      if (wasIncoming || cancelled) {
+        unawaited(IncomingRideAlert.dismiss(orderId: orderId));
+      }
       setState(() {
         if (wasIncoming) _incoming = null;
-        _orders = _orders
-            .where((o) => o.id != orderId || o.riderId == _user.id)
-            .toList();
+        if (cancelled) {
+          _orders = _orders.where((o) => o.id != orderId).toList();
+          _alertedOfferIds.remove(orderId);
+          if (_focusedOrderId == orderId) _focusedOrderId = null;
+        } else {
+          _orders = _orders
+              .where((o) => o.id != orderId || o.riderId == _user.id)
+              .toList();
+          if (wasFocused && !_orders.any((o) => o.id == orderId && o.riderId == _user.id)) {
+            _focusedOrderId = null;
+          }
+        }
       });
-      if (wasIncoming) {
-        final msg = reason == 'cancelled'
-            ? 'Customer cancelled this request'
-            : 'Another rider took this job';
-        _snack(msg);
+      if (wasIncoming || (cancelled && wasMine)) {
+        _snack(
+          cancelled
+              ? 'Customer cancelled this request'
+              : 'Another rider took this job',
+        );
       }
+      _syncNavPoll();
     };
     _socket.onOrderUpdated = (order) {
       if (!mounted) return;
       final prev = _orders.where((o) => o.id == order.id).firstOrNull;
-      setState(() {
-        _orders = [
-          for (final o in _orders)
-            if (o.id != order.id) o,
-          order,
-        ];
-        if (_incoming?.id == order.id && !isOfferableOrder(order)) {
+      final cancelled = order.status == 'cancelled';
+      final wasIncoming = _incoming?.id == order.id;
+      if (cancelled || !isOfferableOrder(order)) {
+        if (wasIncoming) {
           unawaited(IncomingRideAlert.dismiss(orderId: order.id));
-          _incoming = null;
         }
-        if (order.riderId == _user.id && order.status != 'delivered') {
-          _focusedOrderId = order.id;
-          _driveSheet = _DriveSheet.active;
-          _tab = _RiderTab.drive;
+      }
+      setState(() {
+        if (cancelled) {
+          _orders = _orders.where((o) => o.id != order.id).toList();
+          _alertedOfferIds.remove(order.id);
+          if (wasIncoming) _incoming = null;
+          if (_focusedOrderId == order.id) _focusedOrderId = null;
+        } else {
+          _orders = [
+            for (final o in _orders)
+              if (o.id != order.id) o,
+            order,
+          ];
+          if (wasIncoming && !isOfferableOrder(order)) {
+            _incoming = null;
+          }
+          if (order.riderId == _user.id && order.status != 'delivered') {
+            _focusedOrderId = order.id;
+            _driveSheet = _DriveSheet.active;
+            _tab = _RiderTab.drive;
+          }
         }
       });
-      if (prev != null && prev.status != order.status) {
+      // Cancel snack comes from ride:taken (finalizeOrderCancellation).
+      if (prev != null && prev.status != order.status && !cancelled) {
         _lastNavFetch = null;
         _lastNavOrigin = null;
         unawaited(_refreshNav(order));
@@ -1054,7 +1090,11 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
               else
-                OnlineToggle(isOnline: _isOnline, onChanged: _setOnline),
+                OnlineToggle(
+                  isOnline: _isOnline,
+                  enabled: !_pendingApproval,
+                  onChanged: _setOnline,
+                ),
               const SizedBox(width: 8),
               IconButton(
                 onPressed: _confirmLogout,

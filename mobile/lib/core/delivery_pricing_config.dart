@@ -3,6 +3,7 @@ import 'dart:async' show Timer, unawaited;
 import 'package:flutter/widgets.dart';
 
 import '../models/delivery_zone.dart';
+import '../models/ride_service.dart';
 import '../shared/delivery_pricing.dart';
 import 'api_client.dart';
 import 'config_repository.dart';
@@ -25,6 +26,7 @@ class DeliveryPricingConfig extends ChangeNotifier with WidgetsBindingObserver {
   double? _globalMinFee;
   double? _globalMaxFee;
   List<DeliveryZone> _zones = [];
+  final Map<RideServiceType, RideServiceOption> _rideServices = {};
   bool _surgeActive = false;
   double _surgeMultiplier = 1.5;
 
@@ -33,21 +35,45 @@ class DeliveryPricingConfig extends ChangeNotifier with WidgetsBindingObserver {
   double? get globalMinFee => _globalMinFee;
   double? get globalMaxFee => _globalMaxFee;
   List<DeliveryZone> get zones => List.unmodifiable(_zones);
+  Map<RideServiceType, RideServiceOption> get rideServices =>
+      Map.unmodifiable(_rideServices);
   bool get surgeActive => _surgeActive;
+
+  RideServiceOption? optionFor(RideServiceType type) => _rideServices[type];
+
+  double? minFeeFor(RideServiceType type, {String? region}) {
+    final serviceMin = _rideServices[type]?.minFee;
+    final bounds = boundsForRegion(region);
+    final mins = [
+      if (serviceMin != null && serviceMin > 0) serviceMin,
+      if (bounds.min != null && bounds.min! > 0) bounds.min!,
+      if (_globalMinFee != null && _globalMinFee! > 0) _globalMinFee!,
+    ];
+    if (mins.isEmpty) return null;
+    return mins.reduce((a, b) => a > b ? a : b);
+  }
   double get surgeMultiplier => _surgeMultiplier;
 
   ({double? min, double? max}) boundsForRegion(String? region) {
+    double? zoneMin;
+    double? zoneMax;
     if (region != null && region.isNotEmpty) {
       for (final z in _zones) {
         if (z.isActive && z.region == region) {
-          return (
-            min: z.minPrice > 0 ? z.minPrice : _globalMinFee,
-            max: z.maxPrice ?? _globalMaxFee,
-          );
+          zoneMin = z.minPrice > 0 ? z.minPrice : null;
+          zoneMax = z.maxPrice;
+          break;
         }
       }
     }
-    return (min: _globalMinFee, max: _globalMaxFee);
+    final mins = [
+      if (zoneMin != null) zoneMin,
+      if (_globalMinFee != null && _globalMinFee! > 0) _globalMinFee!,
+    ];
+    return (
+      min: mins.isEmpty ? null : mins.reduce((a, b) => a > b ? a : b),
+      max: zoneMax ?? _globalMaxFee,
+    );
   }
 
   Future<void> start() async {
@@ -113,6 +139,14 @@ class DeliveryPricingConfig extends ChangeNotifier with WidgetsBindingObserver {
             .map((e) => DeliveryZone.fromJson(Map<String, dynamic>.from(e)))
             .toList()
         : <DeliveryZone>[];
+    final servicesRaw = data['ride_services'];
+    final nextServices = <RideServiceType, RideServiceOption>{};
+    if (servicesRaw is List) {
+      for (final row in servicesRaw.whereType<Map>()) {
+        final option = RideServiceOption.fromJson(Map<String, dynamic>.from(row));
+        nextServices[option.type] = option;
+      }
+    }
 
     final nextRate = rate > 0 ? rate : defaultDeliveryPricePerKm;
     final nextBase = base > 0 ? base : nextRate;
@@ -122,13 +156,17 @@ class DeliveryPricingConfig extends ChangeNotifier with WidgetsBindingObserver {
         nextMax != _globalMaxFee ||
         surge != _surgeActive ||
         mult != _surgeMultiplier ||
-        !_sameZones(nextZones);
+        !_sameZones(nextZones) ||
+        nextServices.length != _rideServices.length;
 
     _pricePerKm = nextRate;
     _basePricePerKm = nextBase;
     _globalMinFee = nextMin != null && nextMin > 0 ? nextMin : null;
     _globalMaxFee = nextMax != null && nextMax > 0 ? nextMax : null;
     _zones = nextZones;
+    _rideServices
+      ..clear()
+      ..addAll(nextServices);
     _surgeActive = surge;
     _surgeMultiplier = mult > 0 ? mult : 1.5;
 

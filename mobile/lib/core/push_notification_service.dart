@@ -330,6 +330,16 @@ class PushNotificationService {
   void _onForegroundMessage(RemoteMessage message) {
     final data = message.data;
     final type = data['type']?.toString() ?? '';
+    if (type == 'trip-cancelled' ||
+        (type == 'trip-update' && data['status']?.toString() == 'cancelled')) {
+      final orderId = data['orderId']?.toString() ?? '';
+      if (orderId.isNotEmpty) {
+        unawaited(cancelIncomingRide(orderId));
+      }
+      // Rider shell clears UI via socket; still surface a quiet local alert.
+      unawaited(_showLocal(message, type: type));
+      return;
+    }
     if (type == 'incoming-ride') {
       if (!acceptsIncomingRideJobs) return;
       final payload = {

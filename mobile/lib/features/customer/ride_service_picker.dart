@@ -10,11 +10,13 @@ class RideServicePicker extends StatelessWidget {
     required this.selected,
     required this.onSelected,
     this.compact = false,
+    this.minFees = const {},
   });
 
   final RideServiceType selected;
   final ValueChanged<RideServiceType> onSelected;
   final bool compact;
+  final Map<RideServiceType, double> minFees;
 
   static const _cards = [
     _RideCardSpec(
@@ -70,6 +72,7 @@ class RideServicePicker extends StatelessWidget {
                   spec: spec,
                   active: active,
                   compact: compact,
+                  minFee: minFees[spec.type],
                   onTap: () => onSelected(spec.type),
                 ),
               ),
@@ -105,12 +108,14 @@ class _RideServiceCard extends StatelessWidget {
     required this.active,
     required this.compact,
     required this.onTap,
+    this.minFee,
   });
 
   final _RideCardSpec spec;
   final bool active;
   final bool compact;
   final VoidCallback onTap;
+  final double? minFee;
 
   @override
   Widget build(BuildContext context) {
@@ -190,6 +195,17 @@ class _RideServiceCard extends StatelessWidget {
                         : spec.accent,
                   ),
                 ),
+                if (minFee != null && minFee! > 0) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    'from ₵${minFee! % 1 == 0 ? minFee!.toStringAsFixed(0) : minFee!.toStringAsFixed(2)}',
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w900,
+                      color: active ? Colors.white : spec.accent,
+                    ),
+                  ),
+                ],
                 if (!compact) ...[
                   const SizedBox(height: 6),
                   Text(

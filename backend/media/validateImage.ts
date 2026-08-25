@@ -34,7 +34,10 @@ function detectImageMime(buffer: Buffer): string | null {
 
 export function assertAllowedMime(declaredMime?: string): void {
   const m = (declaredMime || '').toLowerCase().split(';')[0].trim();
-  if (!m || !ALLOWED_UPLOAD_MIME.has(m)) {
+  if (!m || m === 'application/octet-stream' || m === 'binary/octet-stream') {
+    return;
+  }
+  if (!ALLOWED_UPLOAD_MIME.has(m)) {
     throw new MediaError(
       'Only JPEG, PNG, or WebP images are allowed.',
       415,

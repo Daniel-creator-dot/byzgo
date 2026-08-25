@@ -263,6 +263,7 @@ class Order {
     if (prev.id != id) return normalizedForCustomerTrip();
     var next = normalizedForCustomerTrip();
     if (next.isCancelled) return next;
+    if (next.status == 'delivered') return next;
     if (prev.status == 'cancelled' && next.status != 'cancelled') return prev;
 
     final prevHasRider = _hasAssignedRiderId(prev.riderId);

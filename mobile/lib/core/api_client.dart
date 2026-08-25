@@ -21,34 +21,46 @@ class ApiClient {
     _dio.interceptors.add(
       InterceptorsWrapper(
         onError: (err, handler) async {
+          final opts = err.requestOptions;
+          final retries = (opts.extra['retry_count'] as int?) ?? 0;
+          final isTransient = err.type == DioExceptionType.connectionTimeout ||
+              err.type == DioExceptionType.connectionError ||
+              err.type == DioExceptionType.receiveTimeout;
+          if (isTransient && retries < 2 && opts.extra['auth_retry'] != true) {
+            opts.extra['retry_count'] = retries + 1;
+            await Future<void>.delayed(Duration(milliseconds: 300 * (retries + 1)));
+            try {
+              final response = await _dio.fetch<dynamic>(opts);
+              handler.resolve(response);
+              return;
+            } catch (_) {}
+          }
           final status = err.response?.statusCode;
           if (status == 431 || isHeaderTooLargeError(err)) {
             onUnauthorized?.call();
             handler.next(err);
             return;
           }
-          // Only true auth failures log the user out.
-          // Business 403s (pending approval, commission overdue, go-online blocked)
-          // must NOT clear the session — that was logging approved riders out.
-          if (status == 401) {
-            final opts = err.requestOptions;
-            if (opts.extra['auth_retry'] != true && onRefreshToken != null) {
-              opts.extra['auth_retry'] = true;
+          // Only dead JWTs / disabled accounts log the user out.
+          // Business 403s (pending rider without photos, commission overdue)
+          // must not clear the session.
+          if (shouldForceLogout(err)) {
+            final reqOpts = err.requestOptions;
+            if (reqOpts.extra['auth_retry'] != true && onRefreshToken != null) {
+              reqOpts.extra['auth_retry'] = true;
               try {
                 final refreshed = await onRefreshToken!();
                 if (refreshed) {
                   final auth = _dio.options.headers['Authorization'];
                   if (auth != null) {
-                    opts.headers['Authorization'] = auth;
+                    reqOpts.headers['Authorization'] = auth;
                   }
-                  final response = await _dio.fetch<dynamic>(opts);
+                  final response = await _dio.fetch<dynamic>(reqOpts);
                   handler.resolve(response);
                   return;
                 }
               } catch (_) {}
             }
-            onUnauthorized?.call();
-          } else if (status == 403 && _isAuthSessionForbidden(err)) {
             onUnauthorized?.call();
           }
           handler.next(err);
@@ -86,18 +98,44 @@ class ApiClient {
         msg.contains('header fields too large');
   }
 
-  /// 403 responses that mean the JWT/session itself is invalid (not business rules).
-  static bool _isAuthSessionForbidden(DioException err) {
+  static bool isAuthAttemptPath(String path) {
+    return path.contains('/api/auth/login') ||
+        path.contains('/api/auth/register') ||
+        path.contains('/api/auth/google') ||
+        path.contains('/api/auth/apple') ||
+        path.contains('/api/auth/supabase') ||
+        path.contains('/api/auth/send-') ||
+        path.contains('/api/auth/verify-otp') ||
+        path.contains('/api/auth/resend-otp') ||
+        path.contains('/api/auth/reset-password');
+  }
+
+  static String _responseMessage(DioException err) {
     final data = err.response?.data;
-    final msg = data is Map
-        ? (data['message'] ?? data['error'])?.toString().toLowerCase() ?? ''
-        : '';
-    return msg.contains('token') ||
-        msg.contains('jwt') ||
-        msg.contains('unauthorized') ||
-        msg.contains('session') ||
-        msg.contains('sign in') ||
-        msg.contains('disabled');
+    if (data is Map) {
+      return '${data['message'] ?? ''} ${data['error'] ?? ''}'.toLowerCase();
+    }
+    return '';
+  }
+
+  /// True only when the JWT is dead or the account is disabled — not for
+  /// pending riders who skipped a profile photo or failed a business check.
+  static bool shouldForceLogout(DioException err) {
+    final path = err.requestOptions.uri.path.isNotEmpty
+        ? err.requestOptions.uri.path
+        : err.requestOptions.path;
+    if (isAuthAttemptPath(path)) return false;
+    if (isHeaderTooLargeError(err) || err.response?.statusCode == 431) {
+      return true;
+    }
+    final status = err.response?.statusCode;
+    if (status == 401) return true;
+    if (status != 403) return false;
+    final msg = _responseMessage(err);
+    return msg.contains('session expired') ||
+        msg.contains('sign in required') ||
+        msg.contains('invalid token') ||
+        msg.contains('account disabled');
   }
 
   static String messageFromDio(DioException err, [String fallback = 'Something went wrong']) {
@@ -118,6 +156,9 @@ class ApiClient {
     }
     if (status == 401) {
       return 'Your session expired. Please sign in again.';
+    }
+    if (status == 403 && shouldForceLogout(err)) {
+      return 'Your session is no longer valid. Please sign in again.';
     }
     if (status == 403) {
       return 'You do not have permission for this action.';

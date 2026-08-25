@@ -7,6 +7,7 @@ import '../../core/places_service.dart';
 import '../../core/session.dart';
 import '../../models/delivery_quote.dart';
 import '../../models/location_point.dart';
+import '../../models/ride_service.dart';
 import '../../models/order.dart';
 import '../../models/product.dart';
 import '../../models/vendor.dart';
@@ -102,8 +103,25 @@ class _CustomerShopCheckoutScreenState extends State<CustomerShopCheckoutScreen>
             destinationRegion: region,
           );
       if (!mounted) return;
+      final pricing = context.read<DeliveryPricingConfig>();
+      final localMin = pricing.minFeeFor(
+        RideServiceType.package,
+        region: region,
+      );
+      final minFee = [
+        if (localMin != null && localMin > 0) localMin,
+        if (quote.minFee != null && quote.minFee! > 0) quote.minFee!,
+      ].fold<double?>(null, (best, n) => best == null || n > best ? n : best);
+      final fee = minFee != null && quote.deliveryFee + 0.009 < minFee
+          ? minFee
+          : quote.deliveryFee;
       setState(() {
-        _quote = quote;
+        _quote = quote.copyWith(
+          deliveryFee: fee,
+          minFee: minFee,
+          minApplied: quote.minApplied ||
+              (minFee != null && fee <= minFee + 0.009),
+        );
         _quoting = false;
       });
     } catch (e) {
@@ -260,6 +278,8 @@ class _CustomerShopCheckoutScreenState extends State<CustomerShopCheckoutScreen>
               itemCount: _itemCount,
               distanceKm: _quote!.distanceKm,
               deliveryFee: deliveryFee,
+              minFee: _quote!.minFee,
+              minApplied: _quote!.minApplied,
               total: total,
             ),
           ],
@@ -414,6 +434,8 @@ class _FeeBreakdown extends StatelessWidget {
     required this.distanceKm,
     required this.deliveryFee,
     required this.total,
+    this.minFee,
+    this.minApplied = false,
   });
 
   final double itemsSubtotal;
@@ -421,6 +443,8 @@ class _FeeBreakdown extends StatelessWidget {
   final double distanceKm;
   final double deliveryFee;
   final double total;
+  final double? minFee;
+  final bool minApplied;
 
   @override
   Widget build(BuildContext context) {
@@ -432,7 +456,14 @@ class _FeeBreakdown extends StatelessWidget {
         child: Column(
           children: [
             _row('Items ($itemCount)', formatCedis(itemsSubtotal)),
-            _row('Delivery (${distanceKm.toStringAsFixed(1)} km, shop → you)', formatCedis(deliveryFee)),
+            _row(
+              minFee != null && minFee! > 0
+                  ? minApplied
+                      ? 'Delivery (${distanceKm.toStringAsFixed(1)} km · min ${formatCedis(minFee!)})'
+                      : 'Delivery (${distanceKm.toStringAsFixed(1)} km, min ${formatCedis(minFee!)})'
+                  : 'Delivery (${distanceKm.toStringAsFixed(1)} km, shop → you)',
+              formatCedis(deliveryFee),
+            ),
             const Divider(height: 20),
             _row('Total', formatCedis(total), bold: true),
           ],

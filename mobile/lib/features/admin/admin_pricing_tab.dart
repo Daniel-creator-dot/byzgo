@@ -344,7 +344,7 @@ class _AdminPricingTabState extends State<AdminPricingTab>
           ],
         ),
         Text(
-          'Used when no regional zone matches, or as fallback. Leave empty for no cap.',
+          'Applies to every quote. A regional zone can only raise this floor, not lower it. Leave empty for no global minimum.',
           style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 11),
         ),
         const SizedBox(height: 20),

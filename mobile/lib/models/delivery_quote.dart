@@ -12,6 +12,8 @@ class DeliveryQuote {
     this.promotionDiscount = 0,
     this.promotionName,
     this.riderBonusAmount = 0,
+    this.minFee,
+    this.minApplied = false,
   });
 
   final double distanceKm;
@@ -24,8 +26,31 @@ class DeliveryQuote {
   final double promotionDiscount;
   final String? promotionName;
   final double riderBonusAmount;
+  final double? minFee;
+  final bool minApplied;
 
   double get feeBeforePromotion => deliveryFee + promotionDiscount;
+
+  DeliveryQuote copyWith({
+    double? deliveryFee,
+    double? minFee,
+    bool? minApplied,
+  }) {
+    return DeliveryQuote(
+      distanceKm: distanceKm,
+      deliveryFee: deliveryFee ?? this.deliveryFee,
+      pricePerKm: pricePerKm,
+      zone: zone,
+      baseDeliveryFee: baseDeliveryFee,
+      surgeActive: surgeActive,
+      surgeMultiplier: surgeMultiplier,
+      promotionDiscount: promotionDiscount,
+      promotionName: promotionName,
+      riderBonusAmount: riderBonusAmount,
+      minFee: minFee ?? this.minFee,
+      minApplied: minApplied ?? this.minApplied,
+    );
+  }
 
   factory DeliveryQuote.fromJson(Map<String, dynamic> json) {
     final promo = json['promotion'];
@@ -46,6 +71,8 @@ class DeliveryQuote {
       promotionDiscount: parseJsonDouble(json['promotion_discount']) ?? 0,
       promotionName: promoName,
       riderBonusAmount: parseJsonDouble(json['rider_bonus_amount']) ?? 0,
+      minFee: parseJsonDouble(json['min_fee'] ?? json['zone_min_price']),
+      minApplied: json['min_applied'] == true,
     );
   }
 }
