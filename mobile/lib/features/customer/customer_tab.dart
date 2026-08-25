@@ -8,7 +8,7 @@ enum CustomerTab {
   String get label {
     switch (this) {
       case CustomerTab.courier:
-        return 'Ride';
+        return 'Delivery';
       case CustomerTab.shops:
         return 'Pharmacy';
       case CustomerTab.activity:

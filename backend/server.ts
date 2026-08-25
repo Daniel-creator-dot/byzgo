@@ -524,6 +524,14 @@ function normalizeRideServiceKind(raw?: string | null): RideServiceKind {
   return 'package';
 }
 
+/** Persist courier vehicle so quotes stay package vs Okada vs Keke. */
+function persistOrderVehicleType(raw?: string | null): 'package' | 'bike' | 'tricycle' {
+  const kind = normalizeRideServiceKind(raw);
+  if (kind === 'keke') return 'tricycle';
+  if (kind === 'okada') return 'bike';
+  return 'package';
+}
+
 async function getRideServiceConfig(kind: RideServiceKind): Promise<{ rate: number; min: number | null }> {
   const globalRate = Math.max(
     0.01,
@@ -6435,9 +6443,7 @@ app.post('/api/orders', authenticateToken, async (req: any, res) => {
     }
 
     let finalDeliveryFee = Number(delivery_fee) || 0;
-    const orderVehicleType = String(vehicle_type || vehicleType || 'bike').trim().toLowerCase();
-    const normalizedOrderVehicle =
-      orderVehicleType === 'tricycle' ? 'tricycle' : 'bike';
+    const persistedVehicle = persistOrderVehicleType(vehicle_type || vehicleType || 'package');
     if (
       pickupLat != null &&
       pickupLng != null &&
@@ -6467,7 +6473,7 @@ app.post('/api/orders', authenticateToken, async (req: any, res) => {
         Number(lng),
         finalRegion,
         finalRegion,
-        normalizedOrderVehicle
+        persistedVehicle
       );
       finalDeliveryFee = quote.delivery_fee;
       const itemsSubtotal = Array.isArray(items)
@@ -6508,7 +6514,7 @@ app.post('/api/orders', authenticateToken, async (req: any, res) => {
 
     const result = await pool.query(
       'INSERT INTO orders (customer_id, vendor_id, items, total, status, address, pickup_address, order_type, scheduled_time, lat, lng, pickup_lat, pickup_lng, region, payment_status, payment_method, delivery_fee, vehicle_type) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) RETURNING *',
-      [req.user.id, vendorId, JSON.stringify(items), total, initialStatus, address || 'Customer Address', finalPickup || 'Pickup', finalOrderType, scheduled, lat, lng, pickupLat, pickupLng, finalRegion, paymentStatus, finalPaymentMethod, finalDeliveryFee, normalizedOrderVehicle]
+      [req.user.id, vendorId, JSON.stringify(items), total, initialStatus, address || 'Customer Address', finalPickup || 'Pickup', finalOrderType, scheduled, lat, lng, pickupLat, pickupLng, finalRegion, paymentStatus, finalPaymentMethod, finalDeliveryFee, persistedVehicle]
     );
     const order = result.rows[0];
     res.json(order);

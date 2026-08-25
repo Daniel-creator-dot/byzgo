@@ -1,6 +1,6 @@
 {
-  "version": "1.0.64+89",
-  "updated_at": "2026-08-25T04:18:15.353Z",
-  "size_bytes": 70769783,
-  "install_note": "Uninstall the old BytzGo first. 1.0.64 applies admin base/min fares to Okada and Keke quotes."
+  "version": "1.0.65+90",
+  "updated_at": "2026-08-25T04:47:17.268Z",
+  "size_bytes": 70769939,
+  "install_note": "Uninstall the old BytzGo first. This build restores Delivery + gold booking UI (Package, Okada, Keke)."
 }

@@ -4,7 +4,7 @@ import '../../models/ride_service.dart';
 import '../format.dart';
 import '../theme.dart';
 
-/// Premium ride hub header — Package, Okada, Keke (Pragia).
+/// Gold-plated ride hub — Delivery, Okada, Keke (Pragia).
 class RideHubWelcome extends StatelessWidget {
   const RideHubWelcome({
     super.key,
@@ -12,6 +12,8 @@ class RideHubWelcome extends StatelessWidget {
     required this.balance,
     required this.selectedService,
     this.vendorMode = false,
+    this.recommendedService,
+    this.popularHere = false,
     this.onWallet,
   });
 
@@ -19,6 +21,8 @@ class RideHubWelcome extends StatelessWidget {
   final double balance;
   final RideServiceType selectedService;
   final bool vendorMode;
+  final RideServiceType? recommendedService;
+  final bool popularHere;
   final VoidCallback? onWallet;
 
   @override
@@ -33,15 +37,16 @@ class RideHubWelcome extends StatelessWidget {
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
               colors: [
-                Color(0xFF0F172A),
-                Color(0xFF1E3A5F),
-                Color(0xFF0C4A6E),
+                Color(0xFF0B0A07),
+                Color(0xFF1A1408),
+                Color(0xFF2A210C),
               ],
             ),
+            border: Border.all(color: BytzGoTheme.gold.withValues(alpha: 0.55), width: 1.4),
             boxShadow: [
               BoxShadow(
-                color: BytzGoTheme.brandBlue.withValues(alpha: 0.22),
-                blurRadius: 24,
+                color: BytzGoTheme.gold.withValues(alpha: 0.28),
+                blurRadius: 22,
                 offset: const Offset(0, 10),
               ),
             ],
@@ -50,16 +55,28 @@ class RideHubWelcome extends StatelessWidget {
           child: Stack(
             children: [
               Positioned(
-                right: -24,
-                top: -20,
+                right: -18,
+                top: -28,
                 child: Icon(
                   selectedService.icon,
-                  size: 140,
-                  color: Colors.white.withValues(alpha: 0.06),
+                  size: 150,
+                  color: BytzGoTheme.gold.withValues(alpha: 0.12),
+                ),
+              ),
+              Positioned(
+                left: -40,
+                bottom: -50,
+                child: Container(
+                  width: 140,
+                  height: 140,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: BytzGoTheme.gold.withValues(alpha: 0.08),
+                  ),
                 ),
               ),
               Padding(
-                padding: const EdgeInsets.fromLTRB(20, 20, 20, 18),
+                padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -71,19 +88,19 @@ class RideHubWelcome extends StatelessWidget {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                vendorMode ? 'STORE DISPATCH' : 'BYTZGO RIDE',
-                                style: TextStyle(
-                                  color: BytzGoTheme.accent.withValues(alpha: 0.95),
+                                vendorMode ? 'STORE DISPATCH' : 'BYTZGO DELIVERY',
+                                style: const TextStyle(
+                                  color: BytzGoTheme.goldBright,
                                   fontSize: 10,
                                   fontWeight: FontWeight.w900,
-                                  letterSpacing: 1.6,
+                                  letterSpacing: 1.8,
                                 ),
                               ),
                               const SizedBox(height: 6),
                               Text(
                                 vendorMode
                                     ? 'Send packages\nfrom your shop'
-                                    : 'Move smarter,\n${firstName.trim().isEmpty ? 'rider' : firstName}',
+                                    : 'Gold service,\n${firstName.trim().isEmpty ? 'welcome' : firstName}',
                                 style: const TextStyle(
                                   color: Colors.white,
                                   fontSize: 26,
@@ -97,7 +114,7 @@ class RideHubWelcome extends StatelessWidget {
                         ),
                         if (onWallet != null)
                           Material(
-                            color: BytzGoTheme.accent,
+                            color: BytzGoTheme.gold,
                             borderRadius: BorderRadius.circular(14),
                             child: InkWell(
                               onTap: onWallet,
@@ -116,7 +133,7 @@ class RideHubWelcome extends StatelessWidget {
                                         fontSize: 8,
                                         fontWeight: FontWeight.w900,
                                         letterSpacing: 0.8,
-                                        color: BytzGoTheme.sheetText.withValues(alpha: 0.7),
+                                        color: Colors.black.withValues(alpha: 0.7),
                                       ),
                                     ),
                                     Text(
@@ -124,7 +141,7 @@ class RideHubWelcome extends StatelessWidget {
                                       style: const TextStyle(
                                         fontSize: 14,
                                         fontWeight: FontWeight.w900,
-                                        color: BytzGoTheme.sheetText,
+                                        color: Colors.black,
                                       ),
                                     ),
                                   ],
@@ -134,13 +151,13 @@ class RideHubWelcome extends StatelessWidget {
                           ),
                       ],
                     ),
-                    const SizedBox(height: 14),
+                    const SizedBox(height: 12),
                     Text(
                       vendorMode
                           ? 'Book a bike courier for shop-to-door deliveries.'
                           : selectedService.subtitle,
                       style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.78),
+                        color: BytzGoTheme.goldBright.withValues(alpha: 0.88),
                         fontSize: 13,
                         height: 1.4,
                       ),
@@ -152,39 +169,54 @@ class RideHubWelcome extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 12),
-        const _RideModeStrip(),
+        _RideModeStrip(
+          recommended: recommendedService ?? RideServiceType.package,
+          popularHere: popularHere && !vendorMode,
+        ),
       ],
     );
   }
 }
 
 class _RideModeStrip extends StatelessWidget {
-  const _RideModeStrip();
+  const _RideModeStrip({
+    required this.recommended,
+    required this.popularHere,
+  });
+
+  final RideServiceType recommended;
+  final bool popularHere;
 
   @override
   Widget build(BuildContext context) {
+    final order = [
+      recommended,
+      ...RideServiceType.values.where((t) => t != recommended),
+    ];
     return Row(
       children: [
-        _ModeChip(
-          icon: RideServiceType.package.icon,
-          label: 'Package',
-          sub: 'Courier',
-          color: const Color(0xFF38BDF8),
-        ),
-        const SizedBox(width: 8),
-        _ModeChip(
-          icon: RideServiceType.okada.icon,
-          label: 'Okada',
-          sub: 'Quick ride',
-          color: const Color(0xFF22C55E),
-        ),
-        const SizedBox(width: 8),
-        _ModeChip(
-          icon: RideServiceType.keke.icon,
-          label: 'Keke',
-          sub: 'Pragia',
-          color: const Color(0xFFF59E0B),
-        ),
+        for (var i = 0; i < order.length; i++) ...[
+          if (i > 0) const SizedBox(width: 8),
+          _ModeChip(
+            icon: order[i].icon,
+            label: order[i] == RideServiceType.package
+                ? 'Delivery'
+                : order[i] == RideServiceType.okada
+                    ? 'Okada'
+                    : 'Keke',
+            sub: order[i] == RideServiceType.package
+                ? 'Packages'
+                : order[i] == RideServiceType.okada
+                    ? 'Quick ride'
+                    : 'Pragia',
+            color: order[i] == RideServiceType.package
+                ? BytzGoTheme.gold
+                : order[i] == RideServiceType.okada
+                    ? const Color(0xFF22C55E)
+                    : const Color(0xFFF59E0B),
+            popularHere: popularHere && order[i] == recommended,
+          ),
+        ],
       ],
     );
   }
@@ -196,12 +228,14 @@ class _ModeChip extends StatelessWidget {
     required this.label,
     required this.sub,
     required this.color,
+    this.popularHere = false,
   });
 
   final IconData icon;
   final String label;
   final String sub;
   final Color color;
+  final bool popularHere;
 
   @override
   Widget build(BuildContext context) {
@@ -209,9 +243,9 @@ class _ModeChip extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
         decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.08),
+          color: color.withValues(alpha: 0.1),
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: color.withValues(alpha: 0.2)),
+          border: Border.all(color: color.withValues(alpha: 0.35)),
         ),
         child: Row(
           children: [
@@ -223,18 +257,18 @@ class _ModeChip extends StatelessWidget {
                 children: [
                   Text(
                     label,
-                    style: TextStyle(
+                    style: const TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.w900,
                       color: BytzGoTheme.sheetText,
                     ),
                   ),
                   Text(
-                    sub,
+                    popularHere ? 'Popular here' : sub,
                     style: TextStyle(
                       fontSize: 9,
                       fontWeight: FontWeight.w600,
-                      color: BytzGoTheme.sheetMuted,
+                      color: popularHere ? color : BytzGoTheme.sheetMuted,
                     ),
                   ),
                 ],

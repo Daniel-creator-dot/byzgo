@@ -9,10 +9,22 @@ enum RideServiceType {
 
   String get id => name;
 
+  /// Value sent to `/api/orders` and `/api/delivery/calculate`.
+  String get apiVehicleType {
+    switch (this) {
+      case RideServiceType.package:
+        return 'package';
+      case RideServiceType.okada:
+        return 'bike';
+      case RideServiceType.keke:
+        return 'tricycle';
+    }
+  }
+
   String get label {
     switch (this) {
       case RideServiceType.package:
-        return 'Package';
+        return 'Delivery';
       case RideServiceType.okada:
         return 'Okada';
       case RideServiceType.keke:
@@ -107,6 +119,6 @@ String rideServiceRequestLabel(RideServiceType type) {
     case RideServiceType.keke:
       return 'Request Keke (Pragia)';
     case RideServiceType.package:
-      return 'Request bike';
+      return 'Request delivery';
   }
 }

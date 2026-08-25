@@ -11,21 +11,25 @@ class RideServicePicker extends StatelessWidget {
     required this.onSelected,
     this.compact = false,
     this.minFees = const {},
+    this.recommended,
+    this.popularHere = false,
   });
 
   final RideServiceType selected;
   final ValueChanged<RideServiceType> onSelected;
   final bool compact;
   final Map<RideServiceType, double> minFees;
+  final RideServiceType? recommended;
+  final bool popularHere;
 
   static const _cards = [
     _RideCardSpec(
       type: RideServiceType.package,
-      title: 'Package',
-      subtitle: 'Bike courier',
-      detail: 'Documents · parcels · shop items',
-      accent: Color(0xFF0EA5E9),
-      gradient: [Color(0xFF0C4A6E), Color(0xFF0369A1)],
+      title: 'Delivery',
+      subtitle: 'Packages',
+      detail: 'Documents · parcels · shops',
+      accent: BytzGoTheme.gold,
+      gradient: [Color(0xFF1A1408), Color(0xFF8C6B12)],
     ),
     _RideCardSpec(
       type: RideServiceType.okada,
@@ -61,18 +65,20 @@ class RideServicePicker extends StatelessWidget {
         ),
         SizedBox(height: compact ? 8 : 10),
         Row(
-          children: _cards.map((spec) {
+          children: _orderedCards().asMap().entries.map((entry) {
+            final spec = entry.value;
             final active = spec.type == selected;
             return Expanded(
               child: Padding(
                 padding: EdgeInsets.only(
-                  right: spec.type != RideServiceType.keke ? 8 : 0,
+                  right: entry.key < RideServiceType.values.length - 1 ? 8 : 0,
                 ),
                 child: _RideServiceCard(
                   spec: spec,
                   active: active,
                   compact: compact,
                   minFee: minFees[spec.type],
+                  popularHere: popularHere && spec.type == (recommended ?? RideServiceType.package),
                   onTap: () => onSelected(spec.type),
                 ),
               ),
@@ -81,6 +87,15 @@ class RideServicePicker extends StatelessWidget {
         ),
       ],
     );
+  }
+
+  List<_RideCardSpec> _orderedCards() {
+    final rec = recommended ?? RideServiceType.package;
+    final byType = {for (final c in _cards) c.type: c};
+    return [
+      byType[rec]!,
+      ..._cards.where((c) => c.type != rec),
+    ];
   }
 }
 
@@ -109,6 +124,7 @@ class _RideServiceCard extends StatelessWidget {
     required this.compact,
     required this.onTap,
     this.minFee,
+    this.popularHere = false,
   });
 
   final _RideCardSpec spec;
@@ -116,6 +132,7 @@ class _RideServiceCard extends StatelessWidget {
   final bool compact;
   final VoidCallback onTap;
   final double? minFee;
+  final bool popularHere;
 
   @override
   Widget build(BuildContext context) {
@@ -186,7 +203,7 @@ class _RideServiceCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  spec.subtitle,
+                  popularHere ? 'Popular here' : spec.subtitle,
                   style: TextStyle(
                     fontSize: 10,
                     fontWeight: FontWeight.w800,

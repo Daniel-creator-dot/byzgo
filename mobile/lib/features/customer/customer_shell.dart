@@ -221,14 +221,14 @@ class _CustomerShellState extends State<CustomerShell> {
           margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           decoration: BoxDecoration(
-            color: BytzGoTheme.accent.withValues(alpha: 0.12),
+            color: BytzGoTheme.gold.withValues(alpha: 0.12),
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: BytzGoTheme.accent.withValues(alpha: 0.35)),
+            border: Border.all(color: BytzGoTheme.gold.withValues(alpha: 0.4)),
           ),
           child: Row(
             children: [
               const Icon(Icons.account_balance_wallet_outlined,
-                  color: BytzGoTheme.accentDark, size: 20),
+                  color: BytzGoTheme.goldDeep, size: 20),
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
@@ -236,12 +236,12 @@ class _CustomerShellState extends State<CustomerShell> {
                   style: const TextStyle(
                     fontWeight: FontWeight.w700,
                     fontSize: 12,
-                    color: BytzGoTheme.accentDark,
+                    color: BytzGoTheme.goldDeep,
                   ),
                 ),
               ),
               const Icon(Icons.add_circle_outline,
-                  color: BytzGoTheme.accentDark, size: 20),
+                  color: BytzGoTheme.goldDeep, size: 20),
             ],
           ),
         ),
@@ -494,7 +494,7 @@ class _NavItem extends StatelessWidget {
   IconData get _icon {
     switch (tab) {
       case CustomerTab.courier:
-        return Icons.bolt;
+        return Icons.local_shipping_outlined;
       case CustomerTab.shops:
         return Icons.local_pharmacy_outlined;
       case CustomerTab.activity:
@@ -519,11 +519,11 @@ class _NavItem extends StatelessWidget {
         padding: const EdgeInsets.symmetric(vertical: 10),
         decoration: BoxDecoration(
           color: selected
-              ? BytzGoTheme.accent.withValues(alpha: 0.22)
+              ? BytzGoTheme.gold.withValues(alpha: 0.18)
               : Colors.transparent,
           borderRadius: BorderRadius.circular(14),
           border: selected
-              ? Border.all(color: BytzGoTheme.accent.withValues(alpha: 0.45))
+              ? Border.all(color: BytzGoTheme.gold.withValues(alpha: 0.5))
               : null,
         ),
         child: Column(
@@ -536,7 +536,7 @@ class _NavItem extends StatelessWidget {
               child: Icon(
                 _icon,
                 size: 22,
-                color: selected ? BytzGoTheme.accentDark : BytzGoTheme.sheetMuted,
+                color: selected ? BytzGoTheme.goldDeep : BytzGoTheme.sheetMuted,
               ),
             ),
             const SizedBox(height: 4),
@@ -546,7 +546,7 @@ class _NavItem extends StatelessWidget {
                 fontSize: 10,
                 fontWeight: FontWeight.w800,
                 letterSpacing: 0.3,
-                color: selected ? BytzGoTheme.accentDark : BytzGoTheme.sheetMuted,
+                color: selected ? BytzGoTheme.goldDeep : BytzGoTheme.sheetMuted,
               ),
             ),
           ],

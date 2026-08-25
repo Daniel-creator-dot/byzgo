@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../models/ride_service.dart';
 import '../../shared/format.dart';
 import '../../shared/theme.dart';
 import '../../shared/vehicle_type.dart';
@@ -510,7 +511,7 @@ class DeliveryQuoteCard extends StatelessWidget {
     required this.distanceKm,
     this.surgeActive = false,
     this.loading = false,
-    this.vehicleType = VehicleType.bike,
+    this.vehicleType = 'package',
     this.minFee,
     this.minApplied = false,
   });
@@ -530,11 +531,11 @@ class DeliveryQuoteCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(18),
         gradient: LinearGradient(
           colors: [
-            BytzGoTheme.accent.withValues(alpha: 0.22),
+            BytzGoTheme.gold.withValues(alpha: 0.22),
             BytzGoTheme.brandBlue.withValues(alpha: 0.08),
           ],
         ),
-        border: Border.all(color: BytzGoTheme.accent.withValues(alpha: 0.45)),
+        border: Border.all(color: BytzGoTheme.gold.withValues(alpha: 0.5)),
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(18),
@@ -583,9 +584,9 @@ class DeliveryQuoteCard extends StatelessWidget {
                       color: BytzGoTheme.sheetText,
                       borderRadius: BorderRadius.circular(14),
                     ),
-                    child: const Icon(
-                      Icons.two_wheeler,
-                      color: BytzGoTheme.accent,
+                    child: Icon(
+                      RideServiceType.fromString(vehicleType).icon,
+                      color: BytzGoTheme.gold,
                       size: 28,
                     ),
                   ),
@@ -597,7 +598,7 @@ class DeliveryQuoteCard extends StatelessWidget {
                         Row(
                           children: [
                             Text(
-                              '${VehicleType.label(vehicleType)} courier',
+                              RideServiceType.fromString(vehicleType).label,
                               style: const TextStyle(
                                 fontWeight: FontWeight.w900,
                                 fontSize: 16,
@@ -647,7 +648,7 @@ class DeliveryQuoteCard extends StatelessWidget {
                     style: const TextStyle(
                       fontWeight: FontWeight.w900,
                       fontSize: 20,
-                      color: BytzGoTheme.accentDark,
+                      color: BytzGoTheme.goldDeep,
                     ),
                   ),
                 ],

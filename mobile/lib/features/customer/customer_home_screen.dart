@@ -28,17 +28,18 @@ import '../../shared/ghana_location.dart';
 import '../../shared/rider_trip.dart';
 import '../../shared/customer_trip.dart';
 import '../../shared/theme.dart';
-import '../../shared/vehicle_type.dart';
 import '../../models/ride_service.dart';
 import '../../shared/widgets/live_trip_map_overlay.dart';
 import '../../shared/widgets/ride_google_map.dart';
 import '../../shared/widgets/bytz_scaffold.dart';
 import '../../shared/widgets/ride_ui.dart';
+import '../../shared/widgets/ride_hub_welcome.dart';
 import '../orders/orders_repository.dart';
 import '../riders/riders_repository.dart';
 import '../../shared/widgets/location_autocomplete_field.dart';
 import 'customer_delivery_ui.dart';
 import 'customer_trip_tracking.dart';
+import 'ride_service_picker.dart';
 
 /// Customer home — map + book bike delivery + track active trips.
 class CustomerHomeScreen extends StatefulWidget {
@@ -113,7 +114,9 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen>
   DateTime? _searchPickupExpiresAt;
   String? _trackingPickupLabel;
   String? _trackingDropoffLabel;
-  String _vehicleType = VehicleType.bike;
+  RideServiceType _rideService = RideServiceType.package;
+  int _passengers = 1;
+  bool _userPickedRideService = false;
   Timer? _nearbyPoll;
   Timer? _etaPoll;
   Timer? _riderLocationPoll;
@@ -201,19 +204,54 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen>
 
   bool get _quoteReady => _quotedFee != null && _quotedFee! > 0 && !_quoteLoading;
 
-  RideServiceType get _activeRideService =>
-      _vehicleType == VehicleType.tricycle
-          ? RideServiceType.keke
-          : RideServiceType.okada;
+  RideServiceType get _activeRideService => _rideService;
 
-  Map<String, double> get _rideMinFees {
+  AccraRideZone? get _accraRideZone {
+    final user = _session.user;
+    final pickup = _pickup;
+    return resolveAccraRideZone(
+      pickupAddress: pickup?.address,
+      userRegion: user?.region,
+      userAddress: user?.address,
+      lat: pickup != null && pickup.hasCoords ? pickup.lat : user?.lat,
+      lng: pickup != null && pickup.hasCoords ? pickup.lng : user?.lng,
+    );
+  }
+
+  RideServiceType get _geoRecommendedRideService {
+    if (widget.vendorMode) return RideServiceType.package;
+    final emphasis = _accraRideZone?.emphasis;
+    if (emphasis == AccraRideEmphasis.okada) return RideServiceType.okada;
+    return RideServiceType.package;
+  }
+
+  bool get _showPopularHereHint =>
+      !widget.vendorMode && _accraRideZone != null;
+
+  void _applyGeoRideDefault() {
+    if (widget.vendorMode || _userPickedRideService) return;
+    final next = _geoRecommendedRideService;
+    if (_rideService == next) return;
+    _rideService = next;
+    if (next.isPassengerRide) {
+      _passengers = _passengers.clamp(1, next.maxPassengers);
+      _itemCtrl.text = rideServiceItemLabel(next, passengers: _passengers);
+    } else if (_itemCtrl.text.startsWith('Okada') ||
+        _itemCtrl.text.startsWith('Keke')) {
+      _itemCtrl.text = 'Package';
+    }
+  }
+
+  String get _apiVehicleType => _rideService.apiVehicleType;
+
+  Map<RideServiceType, double> get _rideMinFees {
     final region = _session.user?.region;
-    final okada = _pricingConfig?.minFeeFor(RideServiceType.okada, region: region);
-    final keke = _pricingConfig?.minFeeFor(RideServiceType.keke, region: region);
-    return {
-      if (okada != null && okada > 0) VehicleType.bike: okada,
-      if (keke != null && keke > 0) VehicleType.tricycle: keke,
-    };
+    final out = <RideServiceType, double>{};
+    for (final type in RideServiceType.values) {
+      final min = _pricingConfig?.minFeeFor(type, region: region);
+      if (min != null && min > 0) out[type] = min;
+    }
+    return out;
   }
 
   void _applyQuoteToState(DeliveryQuote q, {String? region}) {
@@ -413,6 +451,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen>
       _pickup = pickup.copyWith(address: label);
       _pickupCtrl.text = label;
       _pickMode = MapPickMode.pickup;
+      _applyGeoRideDefault();
     });
   }
 
@@ -425,6 +464,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen>
       _pickup = seed.copyWith(address: label);
       _pickupCtrl.text = label;
       _pickMode = MapPickMode.pickup;
+      _applyGeoRideDefault();
     }
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -458,6 +498,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen>
     }
     await _detectPickup();
     if (!mounted) return;
+    setState(_applyGeoRideDefault);
     final p = _pickup;
     if (p != null &&
         p.hasCoords &&
@@ -728,7 +769,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen>
         destLng: _destination!.lng,
         pickupRegion: region,
         destinationRegion: region,
-        vehicleType: _vehicleType,
+        vehicleType: _apiVehicleType,
       );
       if (!mounted) return;
       setState(() => _applyQuoteToState(q, region: region));
@@ -1459,7 +1500,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen>
       destLng: _destination!.lng,
       pickupRegion: region,
       destinationRegion: region,
-      vehicleType: _vehicleType,
+      vehicleType: _apiVehicleType,
     );
     if (!mounted) return null;
     setState(() => _applyQuoteToState(q, region: region));
@@ -1532,9 +1573,9 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen>
             ? _destination!.address
             : _dropoffCtrl.text.trim(),
       );
-      final itemDescription = _itemCtrl.text.trim().isEmpty
-          ? 'Package'
-          : _itemCtrl.text.trim();
+      final itemDescription = _rideService.isPassengerRide
+          ? rideServiceItemLabel(_rideService, passengers: _passengers)
+          : (_itemCtrl.text.trim().isEmpty ? 'Package' : _itemCtrl.text.trim());
       String? scheduledTime;
       if (_scheduleLater) {
         scheduledTime = _scheduledAt.toUtc().toIso8601String();
@@ -1548,7 +1589,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen>
           region: _session.user?.region,
           itemDescription: itemDescription,
           scheduledTime: scheduledTime,
-          vehicleType: _vehicleType,
+          vehicleType: _apiVehicleType,
         );
         if (!mounted) return;
         setState(() {
@@ -1558,7 +1599,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen>
         _snack(
           order.status == 'scheduled'
               ? 'Delivery scheduled — we will find a rider at the chosen time'
-              : '${VehicleType.label(_vehicleType)} requested — matching nearest rider',
+              : '${_rideService.label} requested — matching nearest rider',
           success: true,
         );
       } catch (e) {
@@ -1688,12 +1729,12 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen>
               child: Padding(
                 padding: const EdgeInsets.only(bottom: 10),
                 child: DeliveryQuoteCard(
-                  key: ValueKey('fee-$fee-$_surgeActive-$_vehicleType-$_quoteLoading'),
+                  key: ValueKey('fee-$fee-$_surgeActive-$_apiVehicleType-$_quoteLoading'),
                   fee: fee,
                   distanceKm: _routeDistanceKm,
                   surgeActive: _surgeActive,
                   loading: _quoteLoading || !_quoteReady,
-                  vehicleType: _vehicleType,
+                  vehicleType: _apiVehicleType,
                   minFee: _quotedMinFee,
                   minApplied: _minApplied,
                 ),
@@ -1704,12 +1745,12 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen>
                   ? 'Calculating fare…'
                   : fee > 0
                       ? (_scheduleLater
-                          ? 'Schedule ${VehicleType.label(_vehicleType)} · ${formatCedis(fee)}'
-                          : 'Request ${VehicleType.label(_vehicleType)} · ${formatCedis(fee)}')
+                          ? 'Schedule ${_rideService.label} · ${formatCedis(fee)}'
+                          : '${rideServiceRequestLabel(_rideService)} · ${formatCedis(fee)}')
                       : (_scheduleLater
-                          ? 'Schedule ${VehicleType.label(_vehicleType)}'
-                          : 'Request ${VehicleType.label(_vehicleType)}'),
-              icon: Icons.two_wheeler,
+                          ? 'Schedule ${_rideService.label}'
+                          : rideServiceRequestLabel(_rideService)),
+              icon: _rideService.icon,
               loading: _booking || _quoteLoading,
               onPressed: (_quoteLoading || !_quoteReady) ? null : _requestDelivery,
             ),
@@ -1720,16 +1761,14 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen>
           mainAxisSize: MainAxisSize.min,
           children: [
             if (!tracking && widget.embedded) ...[
-              DeliveryBookingHeader(
+              RideHubWelcome(
                 firstName: _session.user != null
                     ? userFirstName(_session.user!)
                     : 'there',
                 balance: _session.user?.balance ?? 0,
+                selectedService: _rideService,
                 vendorMode: widget.vendorMode,
-                onShops: widget.vendorMode ? null : widget.onOpenShops,
                 onWallet: widget.onOpenWallet,
-                onTrips: widget.onOpenActivity,
-                onProfile: widget.onOpenProfile,
               ),
               const SizedBox(height: 14),
             ],
@@ -1774,12 +1813,16 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen>
                 const SizedBox(height: 12),
               ],
               Text(
-                'Plan your trip',
+                _rideService.isPassengerRide
+                    ? 'Plan your ride'
+                    : 'Plan your delivery',
                 style: BytzGoTheme.sheetTitle(18),
               ),
               const SizedBox(height: 4),
               Text(
-                'Search and pick a suggestion, or tap the map to pin pickup & drop-off',
+                _rideService.isPassengerRide
+                    ? 'Search pickup & drop-off, then choose Okada or Keke'
+                    : 'Search pickup & drop-off, or tap the map to pin both',
                 style: BytzGoTheme.sheetBody(13),
               ),
               if ((_pickup != null && !_pickup!.hasCoords) ||
@@ -1841,23 +1884,53 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen>
                 ),
               ),
               const SizedBox(height: 14),
-              VehicleTypeSelector(
-                selected: _vehicleType,
+              RideServicePicker(
+                selected: widget.vendorMode
+                    ? RideServiceType.package
+                    : _rideService,
                 minFees: _rideMinFees,
                 onSelected: (v) {
+                  if (widget.vendorMode) return;
                   setState(() {
-                    _vehicleType = v;
+                    _rideService = v;
+                    if (v.isPassengerRide) {
+                      _passengers = _passengers.clamp(1, v.maxPassengers);
+                      _itemCtrl.text = rideServiceItemLabel(
+                        v,
+                        passengers: _passengers,
+                      );
+                    } else if (_itemCtrl.text.startsWith('Okada') ||
+                        _itemCtrl.text.startsWith('Keke')) {
+                      _itemCtrl.text = 'Package';
+                    }
                     _quotedFee = null;
                     _quoteLoading = true;
                   });
                   _scheduleDeliveryQuote();
                 },
               ),
-              const SizedBox(height: 12),
-              PackageTypeSelector(
-                selected: _packageType,
-                onSelected: (v) => setState(() => _itemCtrl.text = v),
-              ),
+              if (_rideService.isPassengerRide) ...[
+                const SizedBox(height: 12),
+                PassengerCountStepper(
+                  count: _passengers,
+                  max: _rideService.maxPassengers,
+                  onChanged: (n) {
+                    setState(() {
+                      _passengers = n;
+                      _itemCtrl.text = rideServiceItemLabel(
+                        _rideService,
+                        passengers: n,
+                      );
+                    });
+                  },
+                ),
+              ] else ...[
+                const SizedBox(height: 12),
+                PackageTypeSelector(
+                  selected: _packageType,
+                  onSelected: (v) => setState(() => _itemCtrl.text = v),
+                ),
+              ],
               const SizedBox(height: 12),
               SegmentedButton<bool>(
                 segments: const [

@@ -26,6 +26,11 @@ class BytzGoTheme {
   static const Color accentDark = Color(0xFF82D91E);
   static const Color accentOn = Color(0xFF0A0A0A);
 
+  /// Gold-plated customer chrome (Kesbridge / premium ride hub).
+  static const Color gold = Color(0xFFD4AF37);
+  static const Color goldBright = Color(0xFFF5D76E);
+  static const Color goldDeep = Color(0xFF8C6B12);
+
   static const Color danger = Color(0xFFEF4444);
   static const Color warning = Color(0xFFF59E0B);
 
