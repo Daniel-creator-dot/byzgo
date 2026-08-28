@@ -1,0 +1,5 @@
+• Fewer false “cannot reach server” errors — smarter retries when the API wakes up
+• All approved shops show in the marketplace (food, fashion, groceries, and more)
+• Accra neighborhood ride suggestions and gold booking UI
+• Admin Okada/Keke fares display correctly in quotes
+• Bug fixes and stability improvements

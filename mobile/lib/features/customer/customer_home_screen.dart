@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/api_client.dart';
 import '../../core/config_repository.dart';
 import '../../core/delivery_pricing_config.dart';
 import '../../core/directions_service.dart';
@@ -170,15 +171,9 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen>
     }
   }
 
-  bool _isAuthErrorMessage(String? message) {
-    if (message == null || message.isEmpty) return false;
-    final lower = message.toLowerCase();
-    return lower.contains('sign in') ||
-        lower.contains('session') ||
-        lower.contains('unauthorized') ||
-        lower.contains('401') ||
-        lower.contains('403');
-  }
+  bool _isAuthErrorMessage(String? message) => ApiClient.isAuthErrorMessage(message);
+
+  bool _isOfflineError(String message) => ApiClient.isOfflineError(message);
 
   void _onLivePricingUpdated() {
     if (!mounted) return;
@@ -1388,6 +1383,13 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen>
     } catch (e) {
       if (!mounted) return;
       final msg = OrdersRepository.errorMessage(e);
+      if (!silent && _isOfflineError(msg)) {
+        await Future<void>.delayed(const Duration(seconds: 2));
+        if (mounted) {
+          await _loadOrders(silent: true);
+          return;
+        }
+      }
       final offline = _isOfflineError(msg);
       setState(() {
         _loading = false;
@@ -1398,14 +1400,6 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen>
         }
       });
     }
-  }
-
-  bool _isOfflineError(String message) {
-    final lower = message.toLowerCase();
-    return lower.contains('cannot reach') ||
-        lower.contains('connection') ||
-        lower.contains('internet') ||
-        lower.contains('network');
   }
 
   void _onMapTap(double lat, double lng) {
@@ -2002,9 +1996,7 @@ class CustomerHomeScreenState extends State<CustomerHomeScreen>
               Padding(
                 padding: const EdgeInsets.only(top: 8),
                 child: BytzErrorPanel(
-                  title: _isAuthErrorMessage(_error)
-                      ? 'Sign in required'
-                      : 'Could not reach server',
+                  title: ApiClient.errorTitleForMessage(_error),
                   message: _error!,
                   onRetry: _isAuthErrorMessage(_error)
                       ? () => context.push('/login')

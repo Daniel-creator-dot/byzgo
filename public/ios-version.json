@@ -1,9 +1,9 @@
 {
-  "version": "1.0.67+92",
-  "marketing_version": "1.0.67",
-  "build_number": "92",
-  "updated_at": "2026-08-25T05:08:02.000Z",
+  "version": "1.0.68+93",
+  "marketing_version": "1.0.68",
+  "build_number": "93",
+  "updated_at": "2026-08-28T02:05:40.000Z",
   "platform": "ios",
-  "release_notes": "Delivery mode restored, Accra neighborhood ride suggestions, admin Okada/Keke fares, rider session fix.",
+  "release_notes": "Server reach fixes, all-shop marketplace, Accra ride defaults, gold booking UI.",
   "install_note": "Install from the App Store or TestFlight."
 }

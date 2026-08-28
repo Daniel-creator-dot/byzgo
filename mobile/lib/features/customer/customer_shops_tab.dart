@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/api_client.dart';
 import '../../core/session.dart';
 import '../../core/shop_chat_unread.dart';
 import '../../core/socket_service.dart';
@@ -14,6 +15,7 @@ import '../../models/product.dart';
 import '../../models/vendor.dart';
 import '../../shared/format.dart';
 import '../../shared/shop_categories.dart';
+import '../../shared/widgets/bytz_state_panels.dart';
 import '../../shared/theme.dart';
 import '../../shared/external_navigation.dart';
 import '../../shared/shop_chat_sheet.dart';
@@ -501,10 +503,11 @@ class _CustomerShopsTabState extends State<CustomerShopsTab> {
               child: Center(
                 child: Padding(
                   padding: const EdgeInsets.all(24),
-                  child: Text(
-                    _error!,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(color: BytzGoTheme.danger),
+                  child: BytzErrorPanel(
+                    title: ApiClient.errorTitleForMessage(_error),
+                    message: _error!,
+                    onRetry: _load,
+                    light: true,
                   ),
                 ),
               ),

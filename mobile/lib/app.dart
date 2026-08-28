@@ -1,3 +1,5 @@
+import 'dart:async' show Timer, unawaited;
+
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
@@ -85,22 +87,26 @@ class _BytzGoAppState extends State<BytzGoApp> {
     final started = DateTime.now();
 
     Future<void> loadHealth() async {
-      for (var attempt = 0; attempt < 3; attempt++) {
+      const timeouts = [8, 12, 16, 20, 25];
+      for (var attempt = 0; attempt < timeouts.length; attempt++) {
         try {
+          final seconds = timeouts[attempt];
           final health = await _api.dio.get<Map<String, dynamic>>(
             '/api/health',
             options: Options(
-              sendTimeout: const Duration(seconds: 5),
-              receiveTimeout: const Duration(seconds: 5),
+              sendTimeout: Duration(seconds: seconds),
+              receiveTimeout: Duration(seconds: seconds),
             ),
           );
           await ClientImageUrl.loadFromHealth(health.data);
           return;
         } catch (_) {
-          if (attempt == 2) {
+          if (attempt == timeouts.length - 1) {
             ClientImageUrl.setPublicBase(ClientImageUrl.defaultPublicBase);
           } else {
-            await Future<void>.delayed(Duration(milliseconds: 250 * (attempt + 1)));
+            await Future<void>.delayed(
+              Duration(milliseconds: 600 * (attempt + 1)),
+            );
           }
         }
       }
@@ -111,13 +117,13 @@ class _BytzGoAppState extends State<BytzGoApp> {
       _session.restore(),
     ]);
 
-    final postAuth = <Future<void>>[];
     if (_session.isAuthenticated) {
-      postAuth.add(_session.refreshAuthFromServer());
+      unawaited(_session.refreshAuthFromServer());
     }
-    postAuth.add(_deliveryPricing.start());
-    postAuth.add(_mapsRuntime.ensureLoaded());
-    await Future.wait(postAuth);
+    await Future.wait([
+      _deliveryPricing.start(),
+      _mapsRuntime.ensureLoaded(),
+    ]);
 
     await PushNotificationService.instance.syncActiveRole(
       api: _api,

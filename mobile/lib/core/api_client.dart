@@ -23,19 +23,25 @@ class ApiClient {
         onError: (err, handler) async {
           final opts = err.requestOptions;
           final retries = (opts.extra['retry_count'] as int?) ?? 0;
+          final status = err.response?.statusCode;
           final isTransient = err.type == DioExceptionType.connectionTimeout ||
               err.type == DioExceptionType.connectionError ||
-              err.type == DioExceptionType.receiveTimeout;
-          if (isTransient && retries < 2 && opts.extra['auth_retry'] != true) {
+              err.type == DioExceptionType.receiveTimeout ||
+              err.type == DioExceptionType.sendTimeout ||
+              status == 502 ||
+              status == 503 ||
+              status == 504;
+          if (isTransient && retries < 4 && opts.extra['auth_retry'] != true) {
             opts.extra['retry_count'] = retries + 1;
-            await Future<void>.delayed(Duration(milliseconds: 300 * (retries + 1)));
+            await Future<void>.delayed(
+              Duration(milliseconds: 500 * (1 << retries)),
+            );
             try {
               final response = await _dio.fetch<dynamic>(opts);
               handler.resolve(response);
               return;
             } catch (_) {}
           }
-          final status = err.response?.statusCode;
           if (status == 431 || isHeaderTooLargeError(err)) {
             onUnauthorized?.call();
             handler.next(err);
@@ -163,11 +169,55 @@ class ApiClient {
     if (status == 403) {
       return 'You do not have permission for this action.';
     }
+    if (status == 502 || status == 503 || status == 504) {
+      return 'Server is waking up — wait a moment and try again.';
+    }
+    if (status != null && status >= 500) {
+      return 'Server error — pull to refresh or try again.';
+    }
     if (err.type == DioExceptionType.connectionError ||
         err.type == DioExceptionType.connectionTimeout ||
         err.type == DioExceptionType.receiveTimeout) {
       return 'Cannot reach the server. Check your internet connection and try again.';
     }
     return err.message ?? fallback;
+  }
+
+  /// True when the device cannot reach the API (not a server-side 500).
+  static bool isOfflineError(String message) {
+    final lower = message.toLowerCase();
+    return lower.contains('cannot reach') ||
+        lower.contains('connection') ||
+        lower.contains('internet') ||
+        lower.contains('network') ||
+        lower.contains('timeout') ||
+        lower.contains('waking up');
+  }
+
+  static bool isAuthErrorMessage(String? message) {
+    if (message == null || message.isEmpty) return false;
+    final lower = message.toLowerCase();
+    return lower.contains('sign in') ||
+        lower.contains('session') ||
+        lower.contains('unauthorized') ||
+        lower.contains('401') ||
+        (lower.contains('403') && lower.contains('valid'));
+  }
+
+  /// Short title for error panels — avoids labelling every failure as offline.
+  static String errorTitleForMessage(String? message) {
+    if (isAuthErrorMessage(message)) return 'Sign in required';
+    if (message != null && isOfflineError(message)) {
+      return 'Connection problem';
+    }
+    if (message != null) {
+      final lower = message.toLowerCase();
+      if (lower.contains('server error') ||
+          lower.contains('server busy') ||
+          lower.contains('could not load')) {
+        return 'Server busy';
+      }
+    }
+    return 'Something went wrong';
   }
 }
