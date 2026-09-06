@@ -140,8 +140,8 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
   LocationService get _location => context.read<LocationService>();
 
   AuthUser get _user => _session.user!;
-  bool get _pendingApproval =>
-      _user.status == 'pending' || _user.status == 'rejected';
+  /// Only disabled/rejected with no heal yet — pending is auto-cleared by the API.
+  bool get _pendingApproval => _user.status == 'disabled';
 
   List<Order> get _availableOrders {
     _offerTick;
@@ -220,6 +220,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _wireSocket();
+      unawaited(_syncApprovedSession());
       _refreshAll();
       unawaited(_loadCommission());
       _startLocationStream();
@@ -231,6 +232,19 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
         ));
       }
     });
+  }
+
+  /// Pull latest status from the server so stale "pending" sessions unlock.
+  Future<void> _syncApprovedSession() async {
+    try {
+      final ok = await _session.refreshAuthFromServer();
+      if (!mounted || !ok) return;
+      setState(() {
+        _isOnline = _user.isOnline == true;
+      });
+    } catch (_) {
+      /* non-blocking */
+    }
   }
 
   @override
@@ -615,10 +629,8 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
   }
 
   Future<void> _setOnline(bool online) async {
-    if (_pendingApproval && online) {
-      _snack(_user.status == 'rejected'
-          ? 'Application rejected — update documents in Account and resubmit.'
-          : 'Finish account setup in Account, then try going online again.');
+    if (_user.status == 'disabled' && online) {
+      _snack('Account disabled — contact support.');
       return;
     }
     if (online && _commission?.hasOverdue == true) {
@@ -631,6 +643,8 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
     }
     setState(() => _statusLoading = true);
     try {
+      // Heal stale pending status before toggling online.
+      await _session.refreshAuthFromServer();
       final result = await _auth.updateStatus(online ? 'active' : 'offline');
       await _session.applyAuthResult(token: result.token, user: result.user);
       if (!mounted) return;
@@ -1092,7 +1106,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
               else
                 OnlineToggle(
                   isOnline: _isOnline,
-                  enabled: !_pendingApproval,
+                  enabled: true,
                   onChanged: _setOnline,
                 ),
               const SizedBox(width: 8),
@@ -1102,7 +1116,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
               ),
             ],
           ),
-          if (_pendingApproval)
+          if (_user.status == 'disabled')
             Container(
               width: double.infinity,
               margin: const EdgeInsets.only(top: 8),
@@ -1112,11 +1126,9 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(color: BytzGoTheme.warning.withValues(alpha: 0.35)),
               ),
-              child: Text(
-                _user.status == 'rejected'
-                    ? 'Application rejected — update documents in Account and resubmit.'
-                    : 'Finish account setup in Account, then go online.',
-                style: const TextStyle(
+              child: const Text(
+                'Account disabled — contact support.',
+                style: TextStyle(
                   color: BytzGoTheme.warning,
                   fontSize: 12,
                   fontWeight: FontWeight.w700,
@@ -1244,7 +1256,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
                   RidePrimaryButton(
                     label: 'Go online',
                     icon: Icons.power_settings_new,
-                    onPressed: _pendingApproval ? null : () => _setOnline(true),
+                    onPressed: _user.status == 'disabled' ? null : () => _setOnline(true),
                   ),
                 ],
               ),

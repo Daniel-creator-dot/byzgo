@@ -435,6 +435,38 @@ async function riderHasAllDocuments(userId: string): Promise<boolean> {
   return (result.rows[0]?.n ?? 0) >= RIDER_DOC_TYPES.length;
 }
 
+/** Riders are auto-approved — heal any leftover pending/rejected account. */
+async function ensureRiderAutoApproved(userId: string): Promise<Record<string, unknown> | null> {
+  const result = await pool.query(
+    `UPDATE users
+     SET status = 'active',
+         is_online = CASE WHEN status IN ('pending', 'rejected') THEN false ELSE is_online END
+     WHERE id = $1 AND role = 'rider' AND status IN ('pending', 'rejected', 'offline')
+     RETURNING ${USER_PUBLIC_FIELDS}`,
+    [userId]
+  );
+  await pool.query(
+    `UPDATE rider_documents
+     SET review_status = 'approved',
+         rejection_reason = NULL,
+         reviewed_at = COALESCE(reviewed_at, CURRENT_TIMESTAMP)
+     WHERE user_id = $1 AND review_status IN ('pending', 'rejected')`,
+    [userId]
+  );
+  if (result.rows[0]) {
+    io.to(String(userId)).emit('status:updated', {
+      status: 'active',
+      is_online: result.rows[0].is_online === true,
+    });
+    return result.rows[0] as Record<string, unknown>;
+  }
+  const current = await pool.query(
+    `SELECT ${USER_PUBLIC_FIELDS} FROM users WHERE id = $1 AND role = 'rider'`,
+    [userId]
+  );
+  return (current.rows[0] as Record<string, unknown>) || null;
+}
+
 // Helper to get system settings from DB
 async function getSetting(key: string) {
   try {
@@ -3587,6 +3619,10 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(401).json({ message: 'Invalid phone/email or password' });
     }
     if (await bcrypt.compare(password, user.password)) {
+      if (user.role === 'rider') {
+        const healed = await ensureRiderAutoApproved(user.id);
+        if (healed) Object.assign(user, healed);
+      }
       const { password: _pw, ...userWithoutPassword } = user;
       const token = signAuthToken(userWithoutPassword);
       res.json({ user: await userForAuthResponse(userWithoutPassword), token });
@@ -3867,6 +3903,9 @@ app.delete('/api/auth/account', authenticateToken, async (req: any, res) => {
 // Refresh session (slim JWT + profile without re-login)
 app.get('/api/auth/me', authenticateToken, async (req: any, res) => {
   try {
+    if (req.user.role === 'rider') {
+      await ensureRiderAutoApproved(req.user.id);
+    }
     const result = await pool.query(`SELECT ${USER_PUBLIC_FIELDS} FROM users WHERE id = $1`, [
       req.user.id,
     ]);
@@ -3955,13 +3994,16 @@ app.patch('/api/auth/status', authenticateToken, async (req: any, res) => {
     if (!row) return res.status(404).json({ message: 'User not found' });
 
     if (row.role === 'rider') {
-      if (row.status === 'pending') {
-        return res.status(403).json({ message: 'Your account is pending admin approval. Upload your documents first.' });
+      // Auto-approve leftover pending/rejected accounts so riders can go online.
+      let riderRow = row;
+      if (row.status === 'pending' || row.status === 'rejected' || row.status === 'offline') {
+        const healed = await ensureRiderAutoApproved(req.user.id);
+        if (healed) riderRow = healed;
       }
-      if (row.status === 'rejected') {
-        return res.status(403).json({ message: 'Your application was rejected. Update your documents and contact support.' });
+      if (riderRow.status === 'disabled') {
+        return res.status(403).json({ message: 'Your account is disabled. Contact support.' });
       }
-      if (row.status !== 'active') {
+      if (riderRow.status !== 'active') {
         return res.status(403).json({ message: 'Your account is not active.' });
       }
       if (status !== 'active' && status !== 'offline') {
@@ -4298,14 +4340,14 @@ app.post(
       const imageRef = imageResult.url;
       await pool.query(
         `INSERT INTO rider_documents (user_id, doc_type, image_url, mime_type, review_status, rejection_reason, reviewed_by, reviewed_at)
-         VALUES ($1, $2, $3, $4, 'pending', NULL, NULL, NULL)
+         VALUES ($1, $2, $3, $4, 'approved', NULL, NULL, CURRENT_TIMESTAMP)
          ON CONFLICT (user_id, doc_type) DO UPDATE SET
            image_url = EXCLUDED.image_url,
            mime_type = EXCLUDED.mime_type,
-           review_status = 'pending',
+           review_status = 'approved',
            rejection_reason = NULL,
            reviewed_by = NULL,
-           reviewed_at = NULL,
+           reviewed_at = CURRENT_TIMESTAMP,
            uploaded_at = CURRENT_TIMESTAMP`,
         [req.user.id, docType, imageRef, imageResult.contentType]
       );
@@ -4332,20 +4374,8 @@ app.post(
         }
       }
 
-      // Riders are auto-approved — keep/activate account when KYC photos are complete.
-      if (await riderHasAllDocuments(req.user.id)) {
-        await pool.query(
-          `UPDATE users SET status = 'active'
-           WHERE id = $1 AND role = 'rider' AND status IN ('pending', 'rejected')`,
-          [req.user.id]
-        );
-        await pool.query(
-          `UPDATE rider_documents SET review_status = 'approved', rejection_reason = NULL,
-            reviewed_at = CURRENT_TIMESTAMP
-           WHERE user_id = $1 AND review_status <> 'approved'`,
-          [req.user.id]
-        );
-      }
+      // Always keep the rider account active after any KYC upload.
+      await ensureRiderAutoApproved(req.user.id);
 
       const documents = await fetchRiderDocuments(req.user.id);
       const userRes = await pool.query(`SELECT ${USER_PUBLIC_FIELDS} FROM users WHERE id = $1`, [req.user.id]);
@@ -4378,17 +4408,7 @@ app.post('/api/rider/documents/submit', authenticateToken, async (req: any, res)
     if (!(await riderHasAllDocuments(req.user.id))) {
       return res.status(400).json({ message: 'Upload licence, Ghana card, and profile photo first.' });
     }
-    await pool.query(
-      `UPDATE users SET status = 'active'
-       WHERE id = $1 AND role = 'rider' AND status IN ('pending', 'rejected')`,
-      [req.user.id]
-    );
-    await pool.query(
-      `UPDATE rider_documents SET review_status = 'approved', rejection_reason = NULL,
-        reviewed_by = NULL, reviewed_at = CURRENT_TIMESTAMP
-       WHERE user_id = $1`,
-      [req.user.id]
-    );
+    await ensureRiderAutoApproved(req.user.id);
     const userRes = await pool.query(`SELECT ${USER_PUBLIC_FIELDS} FROM users WHERE id = $1`, [req.user.id]);
     const user = userRes.rows[0];
     const token = signAuthToken(user);
@@ -6283,6 +6303,7 @@ app.get('/api/orders', authenticateToken, async (req: any, res) => {
         ' WHERE o.vendor_id = $1 OR (o.customer_id = $1 AND o.order_type = \'courier\')';
       params.push(req.user.id);
     } else if (req.user.role === 'rider') {
+      await ensureRiderAutoApproved(req.user.id);
       const userRes = await pool.query('SELECT status, is_online FROM users WHERE id = $1', [req.user.id]);
       const rider = userRes.rows[0];
       if (rider?.status !== 'active') {
