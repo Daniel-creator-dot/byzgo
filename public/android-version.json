@@ -1,6 +1,6 @@
 {
-  "version": "1.0.67+92",
-  "updated_at": "2026-08-25T05:15:23.924Z",
-  "size_bytes": 70852215,
-  "install_note": "Uninstall the old BytzGo first. 1.0.67 lists all approved shops (not only pharmacy). Use Order, Send, or Maps."
+  "version": "1.0.69+94",
+  "updated_at": "2026-09-06T07:44:00.552Z",
+  "size_bytes": 71567174,
+  "install_note": "Uninstall old BytzGo first. 1.0.69 auto-approves riders — open the app and tap Go online."
 }
