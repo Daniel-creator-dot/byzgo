@@ -4358,6 +4358,12 @@ app.post(
         user: await userForAuthResponse(user),
         token,
       });
+      if (user?.status === 'active') {
+        io.to(String(req.user.id)).emit('status:updated', {
+          status: 'active',
+          is_online: user.is_online === true,
+        });
+      }
     } catch (err) {
       return handleMediaUploadError(res, err);
     }
