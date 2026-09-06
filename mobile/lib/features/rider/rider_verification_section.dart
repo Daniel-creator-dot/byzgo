@@ -193,7 +193,7 @@ class _RiderVerificationSectionState extends State<RiderVerificationSection> {
       await _load();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Submitted for admin review')),
+        const SnackBar(content: Text('Documents saved — you can go online')),
       );
     } catch (e) {
       if (!mounted) return;
@@ -274,7 +274,7 @@ class _RiderVerificationSectionState extends State<RiderVerificationSection> {
           ),
           const SizedBox(height: 6),
           Text(
-            'Upload clear photos of your licence, Ghana card, and your face. Tap a card to take a photo or pick from gallery. Admin must approve before you can go online.',
+            'Upload clear photos of your licence, Ghana card, and your face. Tap a card to take a photo or pick from gallery. New riders are approved automatically and can go online.',
             style: BytzGoTheme.sheetBody().copyWith(fontSize: 11),
           ),
           const SizedBox(height: 16),

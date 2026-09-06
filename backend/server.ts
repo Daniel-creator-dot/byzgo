@@ -1490,13 +1490,18 @@ const initDb = async () => {
     `);
 
     // Seed SMS gateway configurations
+    // Auto-approve every rider that is still pending/rejected so they can use the app.
     await pool.query(`
       UPDATE users SET status = 'active', is_online = false
+      WHERE role = 'rider' AND status IN ('pending', 'rejected');
+      UPDATE rider_documents SET review_status = 'approved', rejection_reason = NULL,
+        reviewed_at = COALESCE(reviewed_at, CURRENT_TIMESTAMP)
+      WHERE review_status IN ('pending', 'rejected')
+        AND user_id IN (SELECT id FROM users WHERE role = 'rider');
+      UPDATE users SET status = 'active', is_online = false
       WHERE role = 'rider' AND status = 'offline';
-      UPDATE users SET is_online = true
-      WHERE role = 'rider' AND status = 'active';
       UPDATE users SET is_online = false
-      WHERE role = 'rider' AND status IN ('pending', 'disabled', 'rejected');
+      WHERE role = 'rider' AND status IN ('disabled');
     `);
 
     await pool.query(`
@@ -3543,7 +3548,8 @@ app.post('/api/auth/register', async (req, res) => {
   }
   try {
     const hashedPassword = await bcrypt.hash(password, 10);
-    const userStatus = role === 'vendor' || role === 'rider' ? 'pending' : 'active';
+    // Riders are auto-approved so they can go online immediately. Vendors stay pending.
+    const userStatus = role === 'vendor' ? 'pending' : 'active';
     const storePhone = phone ? formatGhanaPhone(phone) : phone;
     const result = await pool.query(
       'INSERT INTO users (name, email, password, role, status, phone) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, name, email, role, balance, phone, status',
@@ -3652,7 +3658,7 @@ app.post('/api/auth/google', async (req, res) => {
       if (newRole === 'admin') {
         return res.status(403).json({ message: 'Admin accounts cannot be created via Google sign-in.' });
       }
-      const userStatus = (newRole === 'vendor' || newRole === 'rider') ? 'pending' : 'active';
+      const userStatus = newRole === 'vendor' ? 'pending' : 'active';
       result = await pool.query(
         'INSERT INTO users (name, email, google_id, role, status) VALUES ($1, $2, $3, $4, $5) RETURNING id, name, email, role, balance, phone, status',
         [displayName, payload.email, googleId, newRole, userStatus]
@@ -3716,7 +3722,7 @@ app.post('/api/auth/apple', async (req, res) => {
       if (newRole === 'admin') {
         return res.status(403).json({ message: 'Admin accounts cannot be created via Apple sign-in.' });
       }
-      const userStatus = (newRole === 'vendor' || newRole === 'rider') ? 'pending' : 'active';
+      const userStatus = newRole === 'vendor' ? 'pending' : 'active';
       const displayName = displayUserName(
         (typeof clientName === 'string' && clientName.trim()) ||
           email.split('@')[0],
@@ -3773,7 +3779,7 @@ app.post('/api/auth/supabase', async (req, res) => {
     let result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
     let user = result.rows[0];
     if (!user) {
-      const userStatus = role === 'vendor' || role === 'rider' ? 'pending' : 'active';
+      const userStatus = role === 'vendor' ? 'pending' : 'active';
       result = await pool.query(
         'INSERT INTO users (name, email, google_id, role, status) VALUES ($1, $2, $3, $4, $5) RETURNING id, name, email, role, balance, phone, status',
         [name, email, googleId, role || 'customer', userStatus]
@@ -3962,10 +3968,6 @@ app.patch('/api/auth/status', authenticateToken, async (req: any, res) => {
         return res.status(400).json({ message: 'Riders can only go online or offline.' });
       }
       const isOnline = status === 'active';
-      const hasDocs = await riderHasAllDocuments(req.user.id);
-      if (isOnline && !hasDocs) {
-        return res.status(403).json({ message: 'Upload your licence, Ghana card, and photo before going online.' });
-      }
       if (isOnline && (await riderHasOverdueCommission(req.user.id))) {
         const settings = await getCommissionSettings();
         return res.status(403).json({
@@ -4330,12 +4332,17 @@ app.post(
         }
       }
 
-      // Only send new / rejected riders back to review — never demote an
-      // already-approved (active) driver when they replace a photo.
+      // Riders are auto-approved — keep/activate account when KYC photos are complete.
       if (await riderHasAllDocuments(req.user.id)) {
         await pool.query(
-          `UPDATE users SET status = 'pending', is_online = false
+          `UPDATE users SET status = 'active'
            WHERE id = $1 AND role = 'rider' AND status IN ('pending', 'rejected')`,
+          [req.user.id]
+        );
+        await pool.query(
+          `UPDATE rider_documents SET review_status = 'approved', rejection_reason = NULL,
+            reviewed_at = CURRENT_TIMESTAMP
+           WHERE user_id = $1 AND review_status <> 'approved'`,
           [req.user.id]
         );
       }
@@ -4366,12 +4373,13 @@ app.post('/api/rider/documents/submit', authenticateToken, async (req: any, res)
       return res.status(400).json({ message: 'Upload licence, Ghana card, and profile photo first.' });
     }
     await pool.query(
-      `UPDATE users SET status = 'pending', is_online = false
+      `UPDATE users SET status = 'active'
        WHERE id = $1 AND role = 'rider' AND status IN ('pending', 'rejected')`,
       [req.user.id]
     );
     await pool.query(
-      `UPDATE rider_documents SET review_status = 'pending', rejection_reason = NULL, reviewed_by = NULL, reviewed_at = NULL
+      `UPDATE rider_documents SET review_status = 'approved', rejection_reason = NULL,
+        reviewed_by = NULL, reviewed_at = CURRENT_TIMESTAMP
        WHERE user_id = $1`,
       [req.user.id]
     );
@@ -4379,12 +4387,15 @@ app.post('/api/rider/documents/submit', authenticateToken, async (req: any, res)
     const user = userRes.rows[0];
     const token = signAuthToken(user);
     res.json({
-      message: 'Submitted for admin review',
+      message: 'Documents saved — you are approved and can go online',
       user: await userForAuthResponse(user),
       token,
       documents: await fetchRiderDocuments(req.user.id),
     });
-    io.to(String(req.user.id)).emit('status:updated', { status: 'pending', is_online: false });
+    io.to(String(req.user.id)).emit('status:updated', {
+      status: user?.status || 'active',
+      is_online: user?.is_online === true,
+    });
   } catch (err) {
     console.error('Rider document submit error:', err);
     res.status(500).json({ message: 'Submit failed' });

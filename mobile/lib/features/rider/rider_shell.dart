@@ -618,7 +618,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
     if (_pendingApproval && online) {
       _snack(_user.status == 'rejected'
           ? 'Application rejected — update documents in Account and resubmit.'
-          : 'Account pending approval — upload documents in Account first.');
+          : 'Finish account setup in Account, then try going online again.');
       return;
     }
     if (online && _commission?.hasOverdue == true) {
@@ -1115,7 +1115,7 @@ class _RiderShellState extends State<RiderShell> with WidgetsBindingObserver {
               child: Text(
                 _user.status == 'rejected'
                     ? 'Application rejected — update documents in Account and resubmit.'
-                    : 'Pending admin approval — upload documents in Account, then wait for review.',
+                    : 'Finish account setup in Account, then go online.',
                 style: const TextStyle(
                   color: BytzGoTheme.warning,
                   fontSize: 12,
